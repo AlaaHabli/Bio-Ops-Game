@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Represents a student score and battle accomplishment in Bio-Ops",
+      "type": "object",
+      "properties": {
+        "studentName": {
+          "type": "string",
+          "description": "Name or callsign of the student",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "className": {
+          "type": "string",
+          "description": "Class or grade section of the student",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "score": {
+          "type": "number",
+          "description": "Score achieved in the mission"
+        },
+        "kills": {
+          "type": "number",
+          "description": "Pathogens defeated"
+        },
+        "levelTitle": {
+          "type": "string",
+          "description": "Name of the science topic mission",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "stage": {
+          "type": "string",
+          "description": "Cambridge stage (Stage 7 or Stage 8)",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "date": {
+          "type": "string",
+          "description": "Formatted date string",
+          "maxLength": 32
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Client submission timestamp"
+        },
+        "isVictory": {
+          "type": "boolean",
+          "description": "Whether the operation was completed to level victory"
+        }
+      },
+      "required": ["studentName", "className", "score", "kills", "levelTitle", "stage", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/leaderboard/{entryId}": {
+      "schema": "LeaderboardEntry",
+      "description": "Classroom-wide shared real-time student leaderboard entries"
+    }
+  }
+}

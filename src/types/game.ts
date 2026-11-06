@@ -71,6 +71,25 @@ export interface KillfeedEntry {
   time: number;
 }
 
+export interface StudentProfile {
+  name: string;
+  className: string;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  studentName: string;
+  className: string;
+  score: number;
+  kills: number;
+  levelTitle: string;
+  stage: 'Stage 7' | 'Stage 8' | string;
+  date: string;
+  timestamp: number;
+  rankTitle?: string;
+  isVictory?: boolean;
+}
+
 export interface PlayerStats {
   unlockedLevelIndex: number;
   highScores: Record<string, number>;
@@ -81,6 +100,7 @@ export interface PlayerStats {
   selectedWeaponId: string;
   soundEnabled: boolean;
   rankXp: number;
+  studentProfile?: StudentProfile;
 }
 
 export interface RankInfo {
@@ -92,3 +112,4 @@ export interface RankInfo {
   color: string;
   stars: number;
 }
+

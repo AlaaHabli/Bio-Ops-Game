@@ -4,9 +4,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { LevelConfig, PlayerStats, Weapon } from './types/game';
+import { LevelConfig, PlayerStats, Weapon, StudentProfile, LeaderboardEntry } from './types/game';
 import { CURRICULUM_LEVELS, INITIAL_WEAPONS } from './data/curriculumData';
-import { loadPlayerStats, savePlayerStats } from './services/storage';
+import {
+  loadPlayerStats,
+  savePlayerStats,
+  loadStudentProfile,
+  saveStudentProfile,
+  loadLeaderboard,
+  subscribeToLeaderboard,
+  recordScoreToLeaderboard,
+  resetLeaderboardToDefaults,
+} from './services/storage';
 import { sounds } from './services/soundEffects';
 import { TitleScreen } from './components/TitleScreen';
 import { MissionBriefingModal } from './components/MissionBriefingModal';
@@ -16,11 +25,23 @@ import { VictoryModal } from './components/VictoryModal';
 import { DefeatModal } from './components/DefeatModal';
 import { ArmoryModal } from './components/ArmoryModal';
 import { IntelArchive } from './components/IntelArchive';
+import { StudentProfileModal } from './components/StudentProfileModal';
+import { LeaderboardModal } from './components/LeaderboardModal';
 
 type GameState = 'TITLE' | 'BRIEFING' | 'QUIZ' | 'COMBAT' | 'VICTORY' | 'DEFEAT';
 
 export default function App() {
-  const [playerStats, setPlayerStats] = useState<PlayerStats>(() => loadPlayerStats());
+  const [playerStats, setPlayerStats] = useState<PlayerStats>(() => {
+    const stats = loadPlayerStats();
+    const profile = loadStudentProfile();
+    return profile ? { ...stats, studentProfile: profile } : stats;
+  });
+  const [studentProfile, setStudentProfile] = useState<StudentProfile | null>(() => loadStudentProfile());
+  const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>(() => loadLeaderboard());
+  const [isCloudLive, setIsCloudLive] = useState<boolean>(true);
+  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState<boolean>(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+
   const [selectedLevel, setSelectedLevel] = useState<LevelConfig>(CURRICULUM_LEVELS[0]);
   const [activeWeapon, setActiveWeapon] = useState<Weapon>(() => {
     const stats = loadPlayerStats();
@@ -40,6 +61,31 @@ export default function App() {
   // Modals
   const [isArmoryOpen, setIsArmoryOpen] = useState<boolean>(false);
   const [isIntelOpen, setIsIntelOpen] = useState<boolean>(false);
+
+  // Real-time Cloud Leaderboard Subscription (Free Firebase Firestore)
+  useEffect(() => {
+    const unsubscribe = subscribeToLeaderboard((entries, live) => {
+      setLeaderboardEntries(entries);
+      setIsCloudLive(live);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Prompt student for Name & Class if not yet configured
+  useEffect(() => {
+    if (!studentProfile) {
+      setIsProfileModalOpen(true);
+    }
+  }, [studentProfile]);
+
+  const handleSaveProfile = (profile: StudentProfile) => {
+    saveStudentProfile(profile);
+    setStudentProfile(profile);
+    const updatedStats = { ...playerStats, studentProfile: profile };
+    setPlayerStats(updatedStats);
+    savePlayerStats(updatedStats);
+    setIsProfileModalOpen(false);
+  };
 
   // Sync sound settings
   useEffect(() => {
@@ -96,12 +142,25 @@ export default function App() {
     setGameState('COMBAT');
   };
 
-  // Called when 60-second combat phase ends with player surviving
+  // Called when 60-second combat phase ends with player surviving or boss defeated
   const handlePhaseComplete = (earnedScore: number, earnedKills: number) => {
     const newScore = accumulatedScore + earnedScore;
     const newKills = accumulatedKills + earnedKills;
     setAccumulatedScore(newScore);
     setAccumulatedKills(newKills);
+
+    // Save score to classroom leaderboard for the current student
+    const currentProf = studentProfile || loadStudentProfile() || { name: 'Field Operative', className: 'Science Unit' };
+    recordScoreToLeaderboard({
+      studentName: currentProf.name,
+      className: currentProf.className,
+      levelTitle: selectedLevel.title,
+      stage: selectedLevel.stage,
+      score: newScore,
+      kills: newKills,
+      isVictory: phaseNumber >= 3,
+    });
+    setLeaderboardEntries(loadLeaderboard());
 
     if (phaseNumber < 3) {
       // Advance to next quiz phase (e.g. Phase 2 or Phase 3)
@@ -174,6 +233,11 @@ export default function App() {
           onOpenIntelGuide={() => setIsIntelOpen(true)}
           onToggleSound={handleToggleSound}
           onToggleAutoAim={handleToggleAutoAim}
+          onOpenLeaderboard={() => {
+            setLeaderboardEntries(loadLeaderboard());
+            setIsLeaderboardOpen(true);
+          }}
+          onOpenProfile={() => setIsProfileModalOpen(true)}
         />
       )}
 
@@ -203,6 +267,7 @@ export default function App() {
       {/* 4. 60-SECOND THREE.JS FPS COMBAT PHASE */}
       {gameState === 'COMBAT' && (
         <CombatView
+          key={`${selectedLevel.id}-phase-${phaseNumber}`}
           level={selectedLevel}
           phaseNumber={phaseNumber}
           activeWeapon={activeWeapon}
@@ -223,6 +288,11 @@ export default function App() {
           score={accumulatedScore}
           kills={accumulatedKills}
           stars={accumulatedScore > 3500 ? 3 : accumulatedScore > 2000 ? 2 : 1}
+          studentProfile={studentProfile}
+          onOpenLeaderboard={() => {
+            setLeaderboardEntries(loadLeaderboard());
+            setIsLeaderboardOpen(true);
+          }}
           onNextLevel={handleNextLevel}
           onReplay={handleReplay}
           onMainMenu={handleMainMenu}
@@ -251,6 +321,27 @@ export default function App() {
       {isIntelOpen && (
         <IntelArchive onClose={() => setIsIntelOpen(false)} />
       )}
+
+      {/* STUDENT IDENTITY & CLASSROOM LEADERBOARD MODALS */}
+      <StudentProfileModal
+        isOpen={isProfileModalOpen}
+        currentProfile={studentProfile}
+        allowCancel={Boolean(studentProfile)}
+        onSave={handleSaveProfile}
+        onClose={() => setIsProfileModalOpen(false)}
+      />
+
+      <LeaderboardModal
+        isOpen={isLeaderboardOpen}
+        entries={leaderboardEntries}
+        currentStudentName={studentProfile?.name}
+        isCloudLive={isCloudLive}
+        onClose={() => setIsLeaderboardOpen(false)}
+        onResetToDefaults={() => {
+          resetLeaderboardToDefaults();
+          setLeaderboardEntries(loadLeaderboard());
+        }}
+      />
     </div>
   );
 }

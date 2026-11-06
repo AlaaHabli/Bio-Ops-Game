@@ -329,6 +329,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [grenadeCooldown, setGrenadeCooldown] = useState<number>(0);
   const [reinforceCooldown, setReinforceCooldown] = useState<number>(0);
   const [isAirdropActive, setIsAirdropActive] = useState<boolean>(false);
+  const stimCooldownRef = useRef<number>(0);
+  const grenadeCooldownRef = useRef<number>(0);
+  const reinforceCooldownRef = useRef<number>(0);
+  const isAirdropActiveRef = useRef<boolean>(false);
+  const phaseCompleteCalledRef = useRef<boolean>(false);
+  const handleStimpackRef = useRef<(() => void) | null>(null);
+  const handleThrowGrenadeRef = useRef<(() => void) | null>(null);
+  const handleAirdropReinforcementsRef = useRef<(() => void) | null>(null);
+  const handleSwapWeaponRef = useRef<(() => void) | null>(null);
   const [isPlayerInCover, setIsPlayerInCover] = useState<boolean>(false);
   const [barricadeHps, setBarricadeHps] = useState<number[]>([100, 100, 100]);
   const [activeCoverHp, setActiveCoverHp] = useState<number>(100);
@@ -726,47 +735,76 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
   // Timer complete -> VICTORY!
   useEffect(() => {
-    if (timeLeft === 0 && playerHpRef.current > 0) {
+    if (timeLeft === 0 && playerHpRef.current > 0 && !phaseCompleteCalledRef.current) {
+      phaseCompleteCalledRef.current = true;
       sounds.playVictory();
       onPhaseComplete(scoreRef.current + 1000, killsRef.current);
     }
   }, [timeLeft, onPhaseComplete]);
 
-  // Cooldown timers
+  // Cooldown timers (keep React state and synchronous refs strictly synchronized)
   useEffect(() => {
     if (stimCooldown > 0) {
-      const t = setTimeout(() => setStimCooldown((prev) => prev - 1), 1000);
+      stimCooldownRef.current = stimCooldown;
+      const t = setTimeout(() => {
+        setStimCooldown((prev) => {
+          const next = Math.max(0, prev - 1);
+          stimCooldownRef.current = next;
+          return next;
+        });
+      }, 1000);
       return () => clearTimeout(t);
+    } else {
+      stimCooldownRef.current = 0;
     }
   }, [stimCooldown]);
 
   useEffect(() => {
     if (grenadeCooldown > 0) {
-      const t = setTimeout(() => setGrenadeCooldown((prev) => prev - 1), 1000);
+      grenadeCooldownRef.current = grenadeCooldown;
+      const t = setTimeout(() => {
+        setGrenadeCooldown((prev) => {
+          const next = Math.max(0, prev - 1);
+          grenadeCooldownRef.current = next;
+          return next;
+        });
+      }, 1000);
       return () => clearTimeout(t);
+    } else {
+      grenadeCooldownRef.current = 0;
     }
   }, [grenadeCooldown]);
 
   useEffect(() => {
     if (reinforceCooldown > 0) {
-      const t = setTimeout(() => setReinforceCooldown((prev) => prev - 1), 1000);
+      reinforceCooldownRef.current = reinforceCooldown;
+      const t = setTimeout(() => {
+        setReinforceCooldown((prev) => {
+          const next = Math.max(0, prev - 1);
+          reinforceCooldownRef.current = next;
+          return next;
+        });
+      }, 1000);
       return () => clearTimeout(t);
+    } else {
+      reinforceCooldownRef.current = 0;
     }
   }, [reinforceCooldown]);
 
-  // Stimpack Heal
+  // Stimpack Heal (Synchronous ref-guarded cooldown check prevents keyboard bypass)
   const handleStimpack = () => {
-    if (stimCooldown === 0 && playerHpRef.current < 100) {
-      sounds.playStimInject();
-      const newHp = Math.min(100, playerHpRef.current + 40);
-      playerHpRef.current = newHp;
-      setPlayerHp(newHp);
-      setStimCooldown(12);
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([40, 60, 40]);
-      }
+    if (stimCooldownRef.current > 0 || playerHpRef.current >= 100) return;
+    stimCooldownRef.current = 12;
+    setStimCooldown(12);
+    sounds.playStimInject();
+    const newHp = Math.min(100, playerHpRef.current + 40);
+    playerHpRef.current = newHp;
+    setPlayerHp(newHp);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate([40, 60, 40]);
     }
   };
+  handleStimpackRef.current = handleStimpack;
 
   // Tactical Reload with 3D Weapon Animation, Multi-Stage Audio & Active Speed-Reload Sweet Spot!
   const finishReloadNow = (grantBonusBullets = false) => {
@@ -823,9 +861,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
   };
   handleReloadRef.current = handleReload;
 
-  // Throw Grenade
+  // Throw Grenade (Ref-guarded cooldown check blocks keyboard bypass)
   const handleThrowGrenade = () => {
-    if (grenadeCooldown > 0 || !sceneRef.current) return;
+    if (grenadeCooldownRef.current > 0 || !sceneRef.current) return;
+    grenadeCooldownRef.current = 10;
     setGrenadeCooldown(10);
     sounds.playGrenadeThrow();
 
@@ -846,14 +885,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
       life: 1.4, // explodes after 1.4s
     });
   };
+  handleThrowGrenadeRef.current = handleThrowGrenade;
 
   // Airdrop WBC Reinforcements Ability (C-130 plane drops 2 allied paratroopers for 10s flank support)
   const handleAirdropReinforcements = () => {
-    if (reinforceCooldown > 0 || !sceneRef.current) return;
+    if (reinforceCooldownRef.current > 0 || isAirdropActiveRef.current || !sceneRef.current) return;
+    reinforceCooldownRef.current = 25;
     setReinforceCooldown(25);
+    isAirdropActiveRef.current = true;
     setIsAirdropActive(true);
     sounds.playRadioChirp();
     sounds.playAirdropPlane();
+
+    // Clean up any lingering prior airdrop elements before spawning new flight
+    if (airdropRef.current) {
+      airdropRef.current.allies.forEach((a) => {
+        if (sceneRef.current) sceneRef.current.remove(a.group);
+      });
+      if (airdropRef.current.plane && sceneRef.current) {
+        sceneRef.current.remove(airdropRef.current.plane.group);
+      }
+    }
 
     // VOIP Manager: Bone Marrow immediately confirms reinforcements on the way!
     const boneMarrowClip = voipManager.triggerEventVoip('airdrop_inbound', organThemeRef.current.id);
@@ -881,6 +933,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       activeTimer: 10.0,
     };
   };
+  handleAirdropReinforcementsRef.current = handleAirdropReinforcements;
 
   // Quick Weapon Swap (SCAR, Pump Shotgun, Sniper, Drum Machine Gun)
   const handleSwapWeapon = () => {
@@ -2352,7 +2405,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const s = soldiers[i];
           if (s.mesh.position.z >= -2) continue;
           _v1.copy(s.mesh.position);
-          _v1.y += s.isRobot ? 1.2 : s.isTank ? 0.5 : 0.25;
+          _v1.y += s.isRobot ? 2.24 : s.isTank ? 0.5 : 0.25;
           _v1.project(camera);
           const d = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
           if (d < bestDist) {
@@ -2416,10 +2469,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         // Fast 2D NDC bounding check before running analytical 3D ray-sphere checks!
         _v1.copy(soldier.mesh.position);
-        _v1.y += soldier.isRobot ? 1.1 : soldier.isTank ? 0.45 : 0.25;
+        _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.45 : 0.25;
         _v1.project(camera);
         const ndcDist = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
-        if (ndcDist > 0.48) continue;
+        const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.48;
+        if (ndcDist > maxNdc) continue;
 
         // 1. Tank Turret / Commander WEAK POINT (3.2x Critical Damage!) via analytical 3D ray-sphere check
         if (soldier.isTank && soldier.turret) {
@@ -2442,8 +2496,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         // 2. Cyber-Robot Core / Boss / Amoeba Nucleus Critical Hit via analytical 3D ray-sphere check
         if (soldier.coreMesh || soldier.nucleusMesh || soldier.isBoss) {
           _v1.copy(soldier.mesh.position);
-          _v1.y += soldier.isRobot ? 1.15 : 0.52;
-          const critRadiusSq = soldier.isRobot ? 0.42 : 0.28;
+          _v1.y += soldier.isRobot ? 2.48 : 0.52;
+          const critRadiusSq = soldier.isRobot ? 0.95 : 0.28;
           if (raycaster.ray.distanceSqToPoint(_v1) <= critRadiusSq) {
             criticalHit = true;
             hitRegistered = true;
@@ -2457,11 +2511,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         // 3. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-sphere check (zero triangle traversal!)
         _v1.copy(soldier.mesh.position);
-        _v1.y += soldier.isRobot ? 1.05 : soldier.isTank ? 0.42 : 0.25;
-        const bodyRadiusSq = soldier.isTank
+        _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.42 : 0.25;
+        const bodyRadiusSq = soldier.isRobot
+          ? 4.8
+          : soldier.isTank
           ? 1.55
           : soldier.isBoss
-          ? 1.85
+          ? 2.2
           : 0.72;
         if (raycaster.ray.distanceSqToPoint(_v1) <= bodyRadiusSq) {
           hitRegistered = true;
@@ -2482,15 +2538,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const soldier = soldiers[i];
           if (soldier.mesh.position.z >= -2) continue;
           _v1.copy(soldier.mesh.position);
-          _v1.y += soldier.isRobot ? 1.1 : soldier.isTank ? 0.45 : 0.25;
+          _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.45 : 0.25;
           _v1.project(camera);
           const dist2D = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
           const assistRadius = autoAimEnabledRef.current
-            ? soldier.isTank
+            ? soldier.isRobot
+              ? 0.62
+              : soldier.isTank
               ? 0.44
               : soldier.isBoss
               ? 0.46
               : 0.28
+            : soldier.isRobot
+            ? 0.35
             : soldier.isTank
             ? 0.15
             : soldier.isBoss
@@ -2594,6 +2654,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
           if (eliminatedSoldier.isHelicopter || eliminatedSoldier.isRobot || eliminatedSoldier.isJet) {
             setBossInfo(null);
+            // Defeating the major phase boss grants immediate tactical triumph bonus!
+            if (!phaseCompleteCalledRef.current) {
+              phaseCompleteCalledRef.current = true;
+              setTimeout(() => {
+                if (playerHpRef.current > 0) {
+                  sounds.playVictory();
+                  onPhaseComplete(scoreRef.current + 2500, killsRef.current);
+                }
+              }, 1200);
+            }
           }
 
           // Top Center 2-Second Killstreak (Double, Triple, Quadra, Penta, Immunoful, Leukocytastic, Bloody Monster!)
@@ -2750,17 +2820,17 @@ export const CombatView: React.FC<CombatViewProps> = ({
       keysDownRef.current[e.key.toLowerCase()] = true;
 
       if (e.key === 'r' || e.key === 'R') {
-        handleReload();
+        handleReloadRef.current ? handleReloadRef.current() : handleReload();
       } else if (e.key === 'f' || e.key === 'F') {
         handleToggleScope();
       } else if (e.key === ' ' || e.key === 'e' || e.key === 'E') {
-        handleStimpack();
+        handleStimpackRef.current ? handleStimpackRef.current() : handleStimpack();
       } else if (e.key === 'g' || e.key === 'G') {
-        handleThrowGrenade();
+        handleThrowGrenadeRef.current ? handleThrowGrenadeRef.current() : handleThrowGrenade();
       } else if (e.key === 'q' || e.key === 'Q') {
-        handleSwapWeapon();
+        handleSwapWeaponRef.current ? handleSwapWeaponRef.current() : handleSwapWeapon();
       } else if (e.key === 't' || e.key === 'T') {
-        handleAirdropReinforcements();
+        handleAirdropReinforcementsRef.current ? handleAirdropReinforcementsRef.current() : handleAirdropReinforcements();
       } else if (e.key === 'n' || e.key === 'N' || e.key === 'v' || e.key === 'V') {
         handleToggleVisionMode();
       } else if (e.key === 'm' || e.key === 'M') {
@@ -4434,6 +4504,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             scene.remove(ad.plane.group);
           }
           airdropRef.current = null;
+          isAirdropActiveRef.current = false;
           setIsAirdropActive(false);
         }
       }
@@ -4718,6 +4789,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
       barricadesRef.current.forEach((b) => scene.remove(b.group));
       activeEnemyBulletsRef.current.forEach((b) => scene.remove(b.mesh));
       activeShellsRef.current.forEach((sh) => scene.remove(sh.mesh));
+      if (airdropRef.current) {
+        airdropRef.current.allies.forEach((a) => scene.remove(a.group));
+        if (airdropRef.current.plane) scene.remove(airdropRef.current.plane.group);
+        airdropRef.current = null;
+        isAirdropActiveRef.current = false;
+      }
       if (laserLineRef.current) scene.remove(laserLineRef.current);
       if (laserGlowLineRef.current) scene.remove(laserGlowLineRef.current);
       if (laserDotRef.current) scene.remove(laserDotRef.current);

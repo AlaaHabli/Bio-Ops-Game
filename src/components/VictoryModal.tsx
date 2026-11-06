@@ -2,13 +2,16 @@ import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { LevelConfig } from '../types/game';
 import { sounds } from '../services/soundEffects';
-import { Award, Star, CheckCircle, ChevronRight, RotateCcw } from 'lucide-react';
+import { Award, Star, CheckCircle, ChevronRight, RotateCcw, Trophy, UserCheck } from 'lucide-react';
+import { StudentProfile } from '../types/game';
 
 interface VictoryModalProps {
   level: LevelConfig;
   score: number;
   kills: number;
   stars: number;
+  studentProfile?: StudentProfile | null;
+  onOpenLeaderboard?: () => void;
   onNextLevel: () => void;
   onReplay: () => void;
   onMainMenu: () => void;
@@ -19,6 +22,8 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   score,
   kills,
   stars,
+  studentProfile,
+  onOpenLeaderboard,
   onNextLevel,
   onReplay,
   onMainMenu,
@@ -71,6 +76,14 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
           ))}
         </div>
 
+        {/* Student Callsign Tag */}
+        {studentProfile && (
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-400 text-xs font-mono text-cyan-300 mt-2">
+            <UserCheck className="w-3.5 h-3.5" />
+            <span>Operative: <strong className="text-white">{studentProfile.name}</strong> ({studentProfile.className || 'Science Unit'})</span>
+          </div>
+        )}
+
         {/* Stats Grid */}
         <div className="grid grid-cols-3 gap-2 my-5 text-left">
           <div className="p-3 rounded bg-slate-900 border border-slate-800">
@@ -93,8 +106,30 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
           </div>
         </div>
 
+        {/* Leaderboard Callout Notification */}
+        <div className="mb-4 p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/60 flex items-center justify-between gap-3 text-left">
+          <div className="flex items-center gap-2 text-xs font-mono text-amber-200">
+            <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Your score has been added to the Classroom Leaderboard!</span>
+          </div>
+          {onOpenLeaderboard && (
+            <button
+              onClick={onOpenLeaderboard}
+              className="px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-bold text-[11px] uppercase tracking-wider shrink-0 cursor-pointer shadow-xs"
+            >
+              View Ranks
+            </button>
+          )}
+        </div>
+
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <button
+            onClick={onMainMenu}
+            className="w-full sm:w-auto px-4 py-2.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-display text-slate-400 uppercase tracking-wider cursor-pointer"
+          >
+            War Room
+          </button>
           <button
             onClick={onReplay}
             className="w-full sm:w-auto px-4 py-2.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-display text-slate-300 uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"

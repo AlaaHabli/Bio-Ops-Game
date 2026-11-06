@@ -3,6 +3,7 @@ import { LevelConfig, PlayerStats, Weapon } from '../types/game';
 import { CURRICULUM_LEVELS } from '../data/curriculumData';
 import { sounds } from '../services/soundEffects';
 import { Zap, BookOpen, Volume2, VolumeX, Star, Play, Crosshair, CheckCircle2 } from 'lucide-react';
+import { Trophy, UserCheck, Shield } from 'lucide-react';
 import { RankBadge } from './RankBadge';
 
 interface TitleScreenProps {
@@ -18,6 +19,8 @@ interface TitleScreenProps {
   onOpenIntelGuide: () => void;
   onToggleSound: () => void;
   onToggleAutoAim: () => void;
+  onOpenLeaderboard: () => void;
+  onOpenProfile: () => void;
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
@@ -33,6 +36,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenIntelGuide,
   onToggleSound,
   onToggleAutoAim,
+  onOpenLeaderboard,
+  onOpenProfile,
 }) => {
   const [stageFilter, setStageFilter] = useState<'ALL' | 'Stage 7' | 'Stage 8'>('ALL');
 
@@ -69,7 +74,18 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           </span>
 
           {/* Zone 2: Clean single-line navigation links */}
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-300">
+          <nav className="hidden md:flex items-center gap-5 text-sm font-medium text-slate-300">
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.playRadioChirp();
+                onOpenLeaderboard();
+              }}
+              className="text-amber-400 hover:text-amber-300 flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer font-bold"
+            >
+              <Trophy className="w-4 h-4 text-amber-400" />
+              <span>Leaderboard</span>
+            </button>
             <button
               onClick={() => {
                 sounds.unlockAudio();
@@ -101,8 +117,44 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             </button>
           </nav>
 
-          {/* Zone 3: 1 primary action */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* Zone 3: Student Profile Callsign Badge & Primary Play Action */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            {playerStats.studentProfile ? (
+              <button
+                onClick={() => {
+                  sounds.unlockAudio();
+                  sounds.playRadioChirp();
+                  onOpenProfile();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-400/80 text-left transition-colors cursor-pointer flex items-center gap-2 shadow-xs"
+                title="Click to edit student name or class"
+              >
+                <div className="w-7 h-7 rounded-md bg-cyan-500/20 border border-cyan-400 flex items-center justify-center text-cyan-300 shrink-0">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div className="hidden sm:block leading-tight">
+                  <div className="text-xs font-display font-bold text-white truncate max-w-[130px]">
+                    {playerStats.studentProfile.name}
+                  </div>
+                  <div className="text-[10px] font-mono text-cyan-300 truncate max-w-[130px]">
+                    {playerStats.studentProfile.className || 'Science Unit'}
+                  </div>
+                </div>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  sounds.unlockAudio();
+                  sounds.playRadioChirp();
+                  onOpenProfile();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Enter Callsign</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 sounds.unlockAudio();
@@ -257,8 +309,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 )}
               </div>
 
-              {/* Quick Utility Buttons Row (Weapons, Study Guide, Sound) */}
-              <div className="grid grid-cols-3 gap-2.5 mt-1">
+              {/* Quick Utility Buttons Row (Leaderboard, Weapons, Study Guide, Sound) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-1">
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.playRadioChirp();
+                    onOpenLeaderboard();
+                  }}
+                  className="py-2.5 px-3 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/70 text-xs sm:text-sm font-display font-bold text-amber-300 flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shadow-xs"
+                >
+                  <Trophy className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Leaderboard</span>
+                </button>
+
                 <button
                   onClick={() => {
                     sounds.unlockAudio();

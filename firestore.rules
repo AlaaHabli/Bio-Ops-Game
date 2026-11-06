@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny all unmapped paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions for hardened Zero-Trust Validation
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Validates Leaderboard Entry Payload Structure, Data Types, and Boundaries
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll(['studentName', 'className', 'score', 'kills', 'levelTitle', 'stage', 'timestamp']) &&
+             data.keys().hasOnly(['studentName', 'className', 'score', 'kills', 'levelTitle', 'stage', 'timestamp', 'date', 'isVictory', 'rankTitle', 'id']) &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 64 &&
+             data.className is string && data.className.size() <= 64 &&
+             data.levelTitle is string && data.levelTitle.size() >= 1 && data.levelTitle.size() <= 128 &&
+             data.stage is string && data.stage.size() <= 32 &&
+             data.score is number && data.score >= 0 && data.score <= 1000000 &&
+             data.kills is number && data.kills >= 0 && data.kills <= 5000 &&
+             data.timestamp is number;
+    }
+
+    // Shared Classroom Leaderboard Collection
+    match /leaderboard/{entryId} {
+      // Any student in the classroom can read the shared leaderboard
+      allow read: if true;
+
+      // Students can record their verified combat scores
+      allow create: if isValidId(entryId) && isValidLeaderboardEntry(incoming());
+
+      // Scores are tamper-proof and immutable once submitted
+      allow update, delete: if false;
+    }
+  }
+}
