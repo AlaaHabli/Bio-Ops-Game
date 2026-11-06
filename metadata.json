@@ -1,0 +1,6 @@
+{
+  "name": "Bio-Ops: Cellular Warfare",
+  "description": "Tactical Black Ops-style cellular FPS combined with Cambridge Checkpoint Stage 7 & 8 Science curriculum training. Defend the host bloodstream as an elite white blood cell.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
