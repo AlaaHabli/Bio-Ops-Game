@@ -13,73 +13,85 @@ class SoundEffectsService {
   private masterGain: GainNode | null = null;
   private lastVoiceTime: number = 0;
   private lastWhizTime: number = 0;
+  private lastShootTime: number = 0;
+  private lastEnemyShootTime: number = 0;
+  private lastHitmarkerTime: number = 0;
+  private lastBarricadeHitTime: number = 0;
+  private lastHapticTime: number = 0;
   private whiteNoiseBuffer: AudioBuffer | null = null;
   private isUnlocked: boolean = false;
-  private voicesLoaded: boolean = false;
-  private preferredVoices: SpeechSynthesisVoice[] = [];
-  private isSpeakingPriorityVoip: boolean = false;
-  private speechResumeTimer: number | null = null;
+  private htmlAudioUnlocker: HTMLAudioElement | null = null;
+  private htmlAudioPrimed: boolean = false;
+  private audioSessionConfigured: boolean = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
-      this.initSpeechVoices();
+      this.forcePlaybackAudioSession();
 
-      // Auto-unlock and auto-resume audio + speech synthesis on every touch, pointerdown, click, or keydown
+      // Auto-unlock audio once on first user gesture, with passive listeners so touch/scroll/drag never lags
       const unlock = () => {
         this.unlockAudio();
       };
       window.addEventListener('pointerdown', unlock, { passive: true, capture: true });
-      window.addEventListener('touchstart', unlock, { passive: true, capture: true });
       window.addEventListener('touchend', unlock, { passive: true, capture: true });
       window.addEventListener('keydown', unlock, { passive: true, capture: true });
       window.addEventListener('click', unlock, { passive: true, capture: true });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
+          this.isUnlocked = false;
           this.unlockAudio();
         }
       });
     }
   }
 
-  private initSpeechVoices(): void {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  // Forces iOS 16.4+ / Safari / Mobile WebKit to route Web Audio through the media playback speaker even when the iPhone hardware Ring/Silent switch is on Silent!
+  private forcePlaybackAudioSession(): void {
+    if (this.audioSessionConfigured) return;
     try {
-      const loadVoices = () => {
-        const all = window.speechSynthesis.getVoices();
-        if (all && all.length > 0) {
-          this.preferredVoices = all.filter((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
-          if (this.preferredVoices.length === 0) {
-            this.preferredVoices = all;
-          }
-        }
-        this.voicesLoaded = true;
-      };
-      loadVoices();
-      window.speechSynthesis.onvoiceschanged = loadVoices;
+      const nav = navigator as unknown as { audioSession?: { type: string } };
+      if (nav.audioSession) {
+        nav.audioSession.type = 'playback';
+      }
+      this.audioSessionConfigured = true;
     } catch {
-      this.voicesLoaded = true;
+      this.audioSessionConfigured = true;
     }
   }
 
-  // Force-unlock and recover audio hardware + SpeechSynthesis on iOS Safari, Android Chrome, and Desktop
-  public unlockAudio(): void {
-    if (typeof window === 'undefined') return;
-    if (this.isUnlocked && this.ctx && (this.ctx.state as string) === 'running') {
-      return;
-    }
-    this.initContext();
-    if (!this.voicesLoaded) {
-      this.initSpeechVoices();
-    }
-
-    // Ensure SpeechSynthesis is not paused by browser tab policies
+  // Plays a tiny in-memory WAV via HTML5 <audio> once on first touch/click so older iOS & Android WebViews switch out of ringer mode into media speaker output
+  private primeHtmlAudioChannel(): void {
+    if (this.htmlAudioPrimed || typeof window === 'undefined') return;
+    this.htmlAudioPrimed = true;
     try {
-      if ('speechSynthesis' in window && window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
+      if (!this.htmlAudioUnlocker) {
+        const audio = new Audio(
+          'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+        );
+        audio.setAttribute('playsinline', 'true');
+        audio.volume = 0.01;
+        this.htmlAudioUnlocker = audio;
+      }
+      const p = this.htmlAudioUnlocker.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          this.htmlAudioPrimed = false;
+        });
       }
     } catch {
       // ignore
     }
+  }
+
+  // Force-unlock and recover audio hardware on iOS Safari, Android Chrome, and Desktop (O(1) no-op once running!)
+  public unlockAudio(): void {
+    if (typeof window === 'undefined') return;
+    if (this.isUnlocked && this.htmlAudioPrimed && this.ctx && (this.ctx.state as string) === 'running') {
+      return;
+    }
+    this.forcePlaybackAudioSession();
+    this.primeHtmlAudioChannel();
+    this.initContext();
 
     if (!this.ctx) return;
 
@@ -120,6 +132,7 @@ class SoundEffectsService {
 
   private initContext(): void {
     if (typeof window === 'undefined') return;
+    this.forcePlaybackAudioSession();
 
     if (this.ctx && (this.ctx.state as string) === 'closed') {
       this.ctx = null;
@@ -137,17 +150,25 @@ class SoundEffectsService {
 
       // Master hardware limiter compressor so overlapping explosions, gunshots, VOIP & bullet races never clip or mute
       const compressor = this.ctx.createDynamicsCompressor();
-      compressor.threshold.value = -6;
-      compressor.knee.value = 12;
-      compressor.ratio.value = 4;
-      compressor.attack.value = 0.003;
-      compressor.release.value = 0.15;
+      compressor.threshold.value = -5;
+      compressor.knee.value = 10;
+      compressor.ratio.value = 3.5;
+      compressor.attack.value = 0.002;
+      compressor.release.value = 0.12;
       compressor.connect(this.ctx.destination);
 
-      // Master gain node
+      // Phone Speaker Mid-Presence Boost (1.3kHz peaking boost so small phone speakers project gunshots & SFX loudly)
+      const phonePresenceBoost = this.ctx.createBiquadFilter();
+      phonePresenceBoost.type = 'peaking';
+      phonePresenceBoost.frequency.value = 1350;
+      phonePresenceBoost.Q.value = 0.9;
+      phonePresenceBoost.gain.value = 5.5;
+      phonePresenceBoost.connect(compressor);
+
+      // Master gain node (boosted for phone speaker clarity)
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 0.95;
-      this.masterGain.connect(compressor);
+      this.masterGain.gain.value = 1.45;
+      this.masterGain.connect(phonePresenceBoost);
 
       // Waveshaper curve for punchy weapon saturation
       this.distortionNode = this.ctx.createWaveShaper();
@@ -202,6 +223,68 @@ class SoundEffectsService {
     }
   }
 
+  /**
+   * Cross-platform Tactical Haptic Feedback:
+   * 1. Triggers hardware vibration motor via navigator.vibrate(pattern) on Android / supported browsers.
+   * 2. Synthesizes a 48Hz sub-bass tactile speaker thump on iOS / Safari where navigator.vibrate is blocked,
+   *    so players physically feel recoil, hits, kills, and explosions in their hands.
+   */
+  public triggerHaptic(
+    pattern: number | number[] = 18,
+    intensity: 'light' | 'medium' | 'heavy' | number = 'medium'
+  ): void {
+    const nowMs = performance.now();
+    if (nowMs - this.lastHapticTime < 28) return;
+    this.lastHapticTime = nowMs;
+
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(pattern);
+      }
+    } catch {
+      // ignore if blocked
+    }
+
+    if (!this.enabled || !this.ctx || !this.masterGain) return;
+    if ((this.ctx.state as string) !== 'running') return;
+
+    const level: 'light' | 'medium' | 'heavy' =
+      typeof intensity === 'number'
+        ? intensity >= 0.65
+          ? 'heavy'
+          : intensity >= 0.38
+          ? 'medium'
+          : 'light'
+        : intensity;
+
+    try {
+      const t = this.ctx.currentTime + 0.001;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      const dur = level === 'heavy' ? 0.065 : level === 'medium' ? 0.038 : 0.022;
+      const peak = level === 'heavy' ? 0.55 : level === 'medium' ? 0.32 : 0.18;
+      osc.frequency.setValueAtTime(level === 'heavy' ? 58 : 48, t);
+      osc.frequency.exponentialRampToValueAtTime(26, t + dur);
+      gain.gain.setValueAtTime(peak, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
+      osc.start(t);
+      osc.stop(t + dur + 0.005);
+    } catch {
+      // ignore
+    }
+  }
+
   // Play a filtered burst of noise (gunpowder crack, sand impact, wind roar)
   private playNoiseBurst(duration: number, volume: number, centerFreq: number, q: number = 1.0, type: BiquadFilterType = 'bandpass'): void {
     if (!this.ctx || !this.masterGain) return;
@@ -242,7 +325,15 @@ class SoundEffectsService {
 
   // 1. TACTICAL WEAPON FIRING (SCAR, Pump Shotgun, Sniper, Drum MG, Heavy)
   public playShoot(category: 'ASSAULT' | 'SHOTGUN' | 'SNIPER' | 'MACHINE_GUN' | 'HEAVY'): void {
+    this.triggerHaptic(
+      category === 'SNIPER' || category === 'SHOTGUN' || category === 'HEAVY' ? [28, 20, 35] : 16,
+      category === 'SNIPER' || category === 'SHOTGUN' || category === 'HEAVY' ? 'heavy' : 'medium'
+    );
     if (!this.enabled) return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastShootTime < 48) return;
+    this.lastShootTime = nowMs;
+
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
@@ -473,6 +564,7 @@ class SoundEffectsService {
 
   // 2. KILL CONFIRMATION: Authentic Call of Duty elimination double-chime + tactile thud
   public playKillConfirm(): void {
+    this.triggerHaptic([24, 30, 42], 'heavy');
     if (!this.enabled) return;
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
@@ -594,6 +686,10 @@ class SoundEffectsService {
   // 5. ENEMY BACTERIA TACTICAL SHOOTING (Aggressive bio-toxin plasma darts)
   public playEnemyShoot(): void {
     if (!this.enabled) return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastEnemyShootTime < 95) return;
+    this.lastEnemyShootTime = nowMs;
+
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
@@ -661,6 +757,10 @@ class SoundEffectsService {
   // 7. BULLET IMPACT ON SANDBAG BARRICADE (Heavy sand thwump + sand scatter + ricochet whistle)
   public playBarricadeHit(): void {
     if (!this.enabled) return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastBarricadeHitTime < 85) return;
+    this.lastBarricadeHitTime = nowMs;
+
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
@@ -741,7 +841,12 @@ class SoundEffectsService {
 
   // 8. CALL OF DUTY / BLACK OPS HITMARKER
   public playHitmarker(isCritical: boolean = false): void {
+    this.triggerHaptic(isCritical ? [18, 22, 32] : 14, isCritical ? 'heavy' : 'light');
     if (!this.enabled) return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastHitmarkerTime < 36) return;
+    this.lastHitmarkerTime = nowMs;
+
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
@@ -783,6 +888,7 @@ class SoundEffectsService {
 
   // Massive explosion shockwave
   public playExplosion(): void {
+    this.triggerHaptic([55, 25, 75], 'heavy');
     if (!this.enabled) return;
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
@@ -1459,79 +1565,15 @@ class SoundEffectsService {
       .trim();
   }
 
-  // Real Spoken Voice Synthesizer (Non-blocking: NEVER calls synth.cancel() which deadlocks mobile/desktop browsers!)
+  // Non-blocking voice handler: relies on procedural Web Audio API radio synthesis (playTroopVoip)
+  // and avoids window.speechSynthesis which can lock up the main UI thread during 60fps WebGL rendering.
   public speakVoiceLine(
-    text: string,
-    role: 'enemy_troop' | 'allied_troop' | 'tank_cmd' | 'bacillus_boss' | 'cell_help' | 'organ_hq',
-    isPriority: boolean = false
+    _text: string,
+    _role: 'enemy_troop' | 'allied_troop' | 'tank_cmd' | 'bacillus_boss' | 'cell_help' | 'organ_hq',
+    _isPriority: boolean = false
   ): void {
-    if (!this.enabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
-    const spoken = this.cleanSpokenText(text);
-    if (!spoken) return;
-
-    try {
-      const synth = window.speechSynthesis;
-      if (!this.voicesLoaded) {
-        this.initSpeechVoices();
-      }
-
-      // CRITICAL: Never call synth.cancel() during active WebGL gameplay — if already speaking or pending, let current utterance finish naturally!
-      if (synth.speaking || synth.pending) {
-        return;
-      }
-
-      const utter = new SpeechSynthesisUtterance(spoken);
-      utter.lang = 'en-US';
-      utter.volume = 0.95;
-
-      if (role === 'cell_help') {
-        utter.pitch = 1.45;
-        utter.rate = 1.16;
-      } else if (role === 'bacillus_boss') {
-        utter.pitch = 0.65;
-        utter.rate = 0.98;
-      } else if (role === 'tank_cmd') {
-        utter.pitch = 0.76;
-        utter.rate = 1.04;
-      } else if (role === 'enemy_troop') {
-        utter.pitch = 0.85;
-        utter.rate = 1.1;
-      } else if (role === 'allied_troop') {
-        utter.pitch = 1.05;
-        utter.rate = 1.1;
-      } else {
-        utter.pitch = 0.95;
-        utter.rate = 1.06;
-      }
-
-      if (this.preferredVoices.length > 0) {
-        const voiceIdx =
-          role === 'cell_help'
-            ? this.preferredVoices.length - 1
-            : role === 'organ_hq'
-            ? 0
-            : role === 'enemy_troop' || role === 'tank_cmd'
-            ? Math.min(1, this.preferredVoices.length - 1)
-            : Math.min(2, this.preferredVoices.length - 1);
-        utter.voice = this.preferredVoices[voiceIdx];
-      }
-
-      if (isPriority) {
-        this.isSpeakingPriorityVoip = true;
-      }
-
-      utter.onend = () => {
-        this.isSpeakingPriorityVoip = false;
-      };
-      utter.onerror = () => {
-        this.isSpeakingPriorityVoip = false;
-      };
-
-      synth.speak(utter);
-    } catch {
-      this.isSpeakingPriorityVoip = false;
-    }
+    // Intentionally handled via Web Audio API formant synthesis in playTroopVoip()
+    // to guarantee zero main-thread stalls or browser speech-queue deadlocks.
   }
 
   // Procedural Web Audio character vocalization + Spoken Voice Fallback
@@ -1892,6 +1934,230 @@ class SoundEffectsService {
   public playOrganRadioComm(spokenText?: string): void {
     if (!this.enabled) return;
     this.playOrganVoipClip('heart', spokenText);
+  }
+
+  public playHazardAlert(type: 'HIGH_BLOOD_PRESSURE' | 'ANTIBIOTIC_WAVE' | 'HISTAMINE_VASODILATION' | 'GASTRIC_ACID_SURGE'): void {
+    if (!this.enabled) return;
+    this.unlockAudio();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    try {
+      if (type === 'HIGH_BLOOD_PRESSURE') {
+        // Double heavy arterial thump with low-frequency rumble
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(65, now);
+        osc.frequency.exponentialRampToValueAtTime(32, now + 0.35);
+        gain.gain.setValueAtTime(0.7, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.38);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.4);
+
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = 'sine';
+        osc2.frequency.setValueAtTime(55, now + 0.18);
+        osc2.frequency.exponentialRampToValueAtTime(28, now + 0.52);
+        gain2.gain.setValueAtTime(0.65, now + 0.18);
+        gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.55);
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.start(now + 0.18);
+        osc2.stop(now + 0.56);
+      } else if (type === 'ANTIBIOTIC_WAVE') {
+        // High-energy ascending pharmaceutical shimmer chime
+        const freqs = [380, 520, 680, 880, 1150];
+        freqs.forEach((f, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f, now + idx * 0.05);
+          gain.gain.setValueAtTime(0.25, now + idx * 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.005, now + idx * 0.05 + 0.3);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.05);
+          osc.stop(now + idx * 0.05 + 0.32);
+        });
+      } else if (type === 'HISTAMINE_VASODILATION') {
+        // Warm resonant cellular harmony chord
+        [220, 330, 440, 554].forEach((f) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f, now);
+          gain.gain.setValueAtTime(0.18, now);
+          gain.gain.exponentialRampToValueAtTime(0.01, now + 0.65);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.7);
+        });
+      } else if (type === 'GASTRIC_ACID_SURGE') {
+        // Corrosive acid hiss and sizzle
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(240, now);
+        osc.frequency.exponentialRampToValueAtTime(80, now + 0.45);
+        gain.gain.setValueAtTime(0.35, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.48);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.5);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Tactical C4 Complement Cascade Arming Sound
+  public playC4Arming(): void {
+    if (!this.enabled) return;
+    this.unlockAudio();
+    if (!this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      // High-tech ascending tactical arming beep: 900Hz -> 1400Hz
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(900, now);
+      osc.frequency.setValueAtTime(1400, now + 0.08);
+      osc.frequency.setValueAtTime(1800, now + 0.16);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.setValueAtTime(0.4, now + 0.08);
+      gain.gain.setValueAtTime(0.5, now + 0.16);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.36);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Urgent C4 Countdown Tick
+  public playC4CountdownTick(isFinal: boolean = false): void {
+    if (!this.enabled) return;
+    this.unlockAudio();
+    if (!this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = isFinal ? 'sawtooth' : 'sine';
+      osc.frequency.setValueAtTime(isFinal ? 2200 : 1200, now);
+      gain.gain.setValueAtTime(isFinal ? 0.5 : 0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + (isFinal ? 0.15 : 0.06));
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + (isFinal ? 0.16 : 0.07));
+    } catch {
+      // ignore
+    }
+  }
+
+  // Parked Tank Sabotage Zap & Breakdown
+  public playTankSabotage(): void {
+    if (!this.enabled) return;
+    this.unlockAudio();
+    if (!this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+      // Metallic power-down grind + spark burst
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(450, now);
+      osc.frequency.exponentialRampToValueAtTime(35, now + 0.6);
+      gain.gain.setValueAtTime(0.5, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.65);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.66);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Complement Cascade Massive Cellular Osmotic Shockwave Explosion
+  public playCascadeShockwave(): void {
+    if (!this.enabled) return;
+    this.unlockAudio();
+    if (!this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      const now = ctx.currentTime;
+
+      // Heavy Sub-bass boom (40Hz)
+      const sub = ctx.createOscillator();
+      const subGain = ctx.createGain();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(95, now);
+      sub.frequency.exponentialRampToValueAtTime(20, now + 1.2);
+      subGain.gain.setValueAtTime(0.85, now);
+      subGain.gain.exponentialRampToValueAtTime(0.01, now + 1.5);
+      sub.connect(subGain);
+      subGain.connect(ctx.destination);
+      sub.start(now);
+      sub.stop(now + 1.55);
+
+      // Resonant membrane rupture crack
+      const noise = ctx.createOscillator();
+      const noiseGain = ctx.createGain();
+      noise.type = 'triangle';
+      noise.frequency.setValueAtTime(320, now);
+      noise.frequency.exponentialRampToValueAtTime(40, now + 0.4);
+      noiseGain.gain.setValueAtTime(0.6, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+      noise.connect(noiseGain);
+      noiseGain.connect(ctx.destination);
+      noise.start(now);
+      noise.stop(now + 0.46);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Covert Silenced Pistol Subsonic "Ptew!" + Slide Click for Secret Spy Attack Mode
+  public playSilencedPistol(): void {
+    this.triggerHaptic(14, 'light');
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    try {
+      const t = this.ctx.currentTime + 0.002;
+      // 1. Acoustic baffle "ptew" pitch drop
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(980, t);
+      osc.frequency.exponentialRampToValueAtTime(145, t + 0.075);
+      gain.gain.setValueAtTime(0.55, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.085);
+
+      // 2. Muffled gas expansion whisper through suppressor baffles
+      this.playNoiseBurst(0.065, 0.35, 2200, 1.8, 'bandpass');
+    } catch {
+      // ignore
+    }
   }
 }
 

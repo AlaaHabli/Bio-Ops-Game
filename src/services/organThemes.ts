@@ -67,6 +67,7 @@ function createBrainTexture(): THREE.CanvasTexture {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(2, 6);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData = { isCached: true };
   _wallTexCache.set('brain', texture);
   return texture;
 }
@@ -108,6 +109,7 @@ function createStomachTexture(): THREE.CanvasTexture {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(2, 6);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData = { isCached: true };
   _wallTexCache.set('stomach', texture);
   return texture;
 }
@@ -156,6 +158,7 @@ function createIntestinesTexture(): THREE.CanvasTexture {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(3, 8);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData = { isCached: true };
   _wallTexCache.set('intestine', texture);
   return texture;
 }
@@ -212,6 +215,7 @@ function createAlveoliTexture(): THREE.CanvasTexture {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(2, 6);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData = { isCached: true };
   _wallTexCache.set('alveoli', texture);
   return texture;
 }
@@ -243,6 +247,7 @@ function createBloodstreamTexture(): THREE.CanvasTexture {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(2, 6);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData = { isCached: true };
   _wallTexCache.set('capillary', texture);
   return texture;
 }
@@ -373,6 +378,13 @@ export function getOrganThemeForLevel(levelId: string, phaseNumber: number): Org
       : phaseNumber === 2
       ? getOrganThemeById('alveoli')
       : getOrganThemeById('intestine');
+  }
+  if (levelId === 'level_secret_omega') {
+    return phaseNumber === 1
+      ? getOrganThemeById('stomach')
+      : phaseNumber === 2
+      ? getOrganThemeById('alveoli')
+      : getOrganThemeById('brain');
   }
   return ORGAN_THEMES[(phaseNumber - 1) % ORGAN_THEMES.length];
 }

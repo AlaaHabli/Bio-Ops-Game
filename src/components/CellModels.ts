@@ -1,5 +1,30 @@
 import * as THREE from 'three';
 
+/**
+ * Recursively disposes GPU BufferGeometries, Materials, and Textures inside a Three.js Object3D tree,
+ * skipping any shared singleton resources marked with `userData.isCached = true`.
+ * Eliminates VRAM accumulation and WebGL context crashes across phase transitions!
+ */
+export function disposeSceneGraph(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry && !mesh.geometry.userData?.isCached) {
+      mesh.geometry.dispose();
+    }
+    if (mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        if (!m || m.userData?.isCached) continue;
+        const stdMat = m as THREE.MeshBasicMaterial & { map?: THREE.Texture | null };
+        if (stdMat.map && !stdMat.map.userData?.isCached) {
+          stdMat.map.dispose();
+        }
+        m.dispose();
+      }
+    }
+  });
+}
+
 // Fast vertex-lit Lambert material wrapper that ignores PBR roughness/metalness so WebGL compiles a single lightweight shader program with zero mid-combat shader compilation stalls on mobile!
 function createFastLitMaterial(params: THREE.MeshStandardMaterialParameters): THREE.MeshLambertMaterial {
   const { roughness: _r, metalness: _m, ...lambertParams } = params;
@@ -3158,6 +3183,9 @@ const _sharedRocket = {
   nozzleGeo: new THREE.CapsuleGeometry(0.036, 0.14, 4, 6),
   flameGeo: new THREE.ConeGeometry(0.13, 0.72, 8),
 };
+Object.values(_sharedRocket).forEach((item) => {
+  item.userData = { isCached: true };
+});
 
 export function createBossRocketMesh(): { group: THREE.Group; flame: THREE.Mesh } {
   const group = new THREE.Group();
@@ -3221,7 +3249,10 @@ export function createBossRocketMesh(): { group: THREE.Group; flame: THREE.Mesh 
 
 // Helper: Create a 3D Floating Distress Speech Bubble ("HELP! CLOT NEEDED!", "SAVE US WBC!") above Panicking Cells & Platelets!
 const _speechBadgeGeo = new THREE.PlaneGeometry(0.95, 0.32);
+_speechBadgeGeo.userData = { isCached: true };
 const _speechBadgeMatCache = new Map<string, THREE.MeshBasicMaterial>();
+const _roadSignMatCache = new Map<string, THREE.MeshBasicMaterial>();
+const _landmarkPlaqueMatCache = new Map<string, THREE.MeshBasicMaterial>();
 
 function createDistressSpeechBadge(text: string, bgHex = '#fef08a', borderHex = '#ef4444'): THREE.Mesh {
   const cacheKey = `${text}|${bgHex}|${borderHex}`;
@@ -3248,7 +3279,9 @@ function createDistressSpeechBadge(text: string, bgHex = '#fef08a', borderHex = 
     }
     const tex = new THREE.CanvasTexture(canvas);
     tex.needsUpdate = true;
+    tex.userData = { isCached: true };
     mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    mat.userData = { isCached: true };
     _speechBadgeMatCache.set(cacheKey, mat);
   }
   return new THREE.Mesh(_speechBadgeGeo, mat);
@@ -4009,17 +4042,16 @@ export function createOrganEnvironmentProps(themeId: string): {
     const ciliumGeo = new THREE.CapsuleGeometry(0.025, 0.85, 4, 6);
     ciliumGeo.translate(0, 0.45, 0);
 
-    // 3 hair offsets per epithelial cell tuft
+    // 2 hair offsets per epithelial cell tuft (lightweight draw-call count)
     const hairOffsets = [
-      { dx: 0, dz: 0, tiltX: 0.18, tiltZ: 0, hScale: 1.05, mat: ciliaTipMat },
-      { dx: -0.15, dz: -0.08, tiltX: 0.22, tiltZ: 0.12, hScale: 0.95, mat: ciliaShaftMat },
-      { dx: 0.15, dz: 0.08, tiltX: 0.22, tiltZ: -0.12, hScale: 0.96, mat: ciliaShaftMat },
+      { dx: -0.1, dz: 0, tiltX: 0.18, tiltZ: 0.08, hScale: 1.05, mat: ciliaTipMat },
+      { dx: 0.1, dz: 0, tiltX: 0.22, tiltZ: -0.08, hScale: 0.96, mat: ciliaShaftMat },
     ];
 
-    // 8 circumferential angles around the entire 360° canal (UP, DOWN, LEFT, RIGHT, and 4 diagonals)
-    const numWallSectors = 8;
-    for (let z = -3.0; z >= -56.0; z -= 5.6) {
-      const zRowIdx = Math.round(Math.abs(z) / 5.6);
+    // 4 circumferential angles around the canal spaced every 9.5 units (24 tufts total instead of 80 -> 75% fewer draw calls!)
+    const numWallSectors = 4;
+    for (let z = -4.0; z >= -52.0; z -= 9.5) {
+      const zRowIdx = Math.round(Math.abs(z) / 9.5);
       for (let s = 0; s < numWallSectors; s++) {
         const angle = (s / numWallSectors) * Math.PI * 2 + (zRowIdx % 2) * (Math.PI / numWallSectors);
         const wx = Math.cos(angle) * wallRadiusX * 0.98;
@@ -4171,18 +4203,18 @@ export function createOrganEnvironmentProps(themeId: string): {
       muscleRings.push(ring);
     }
 
-    // Finger-like Villi & Microvilli projections waving around all walls (Up, Down, Left, Right)
+    // Finger-like Villi & Microvilli projections waving around walls (lightweight 28 meshes instead of 160!)
     const villiMat = createFastLitMaterial({
       color: 0xfbbf24,
       emissive: 0xd97706,
       emissiveIntensity: 0.55,
       roughness: 0.35,
     });
-    const villusGeo = new THREE.CapsuleGeometry(0.14, 0.95, 6, 8);
+    const villusGeo = new THREE.CapsuleGeometry(0.14, 0.95, 5, 6);
     villusGeo.translate(0, 0.48, 0);
-    for (let z = -4; z >= -58; z -= 3.5) {
-      for (let s = 0; s < 10; s++) {
-        const angle = (s / 10) * Math.PI * 2;
+    for (let z = -5; z >= -53; z -= 8.0) {
+      for (let s = 0; s < 4; s++) {
+        const angle = (s / 4) * Math.PI * 2 + (Math.round(Math.abs(z)) % 2) * 0.4;
         const vx = Math.cos(angle) * wallRadiusX;
         const vy = Math.sin(angle) * wallRadiusY;
         const baseRotZ = Math.atan2(-vy, -vx) - Math.PI / 2;
@@ -4488,93 +4520,101 @@ export function createOrganEnvironmentProps(themeId: string): {
     const signGroup = new THREE.Group();
     const side = idx % 2 === 0 ? -1 : 1;
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const bgColors =
-        signDef.style === 'roundabout'
-          ? ['#0369a1', '#0c4a6e']
-          : signDef.style === 'warning'
-          ? ['#d97706', '#78350f']
-          : signDef.style === 'landmark'
-          ? ['#4f46e5', '#312e81']
-          : ['#047857', '#064e3b'];
+    const signCacheKey = `${signDef.code}|${signDef.title}`;
+    let signMat = _roadSignMatCache.get(signCacheKey);
+    if (!signMat) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const bgColors =
+          signDef.style === 'roundabout'
+            ? ['#0369a1', '#0c4a6e']
+            : signDef.style === 'warning'
+            ? ['#d97706', '#78350f']
+            : signDef.style === 'landmark'
+            ? ['#4f46e5', '#312e81']
+            : ['#047857', '#064e3b'];
 
-      const borderColor =
-        signDef.style === 'warning'
-          ? '#fef08a'
-          : signDef.style === 'landmark'
-          ? '#fde047'
-          : '#f8fafc';
+        const borderColor =
+          signDef.style === 'warning'
+            ? '#fef08a'
+            : signDef.style === 'landmark'
+            ? '#fde047'
+            : '#f8fafc';
 
-      const grad = ctx.createLinearGradient(0, 0, 0, 256);
-      grad.addColorStop(0, bgColors[0]);
-      grad.addColorStop(1, bgColors[1]);
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.roundRect(6, 6, 500, 244, 22);
-      ctx.fill();
+        const grad = ctx.createLinearGradient(0, 0, 0, 256);
+        grad.addColorStop(0, bgColors[0]);
+        grad.addColorStop(1, bgColors[1]);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.roundRect(6, 6, 500, 244, 22);
+        ctx.fill();
 
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.roundRect(14, 14, 484, 228, 16);
-      ctx.stroke();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.roundRect(14, 14, 484, 228, 16);
+        ctx.stroke();
 
-      ctx.fillStyle = borderColor;
-      ctx.beginPath();
-      ctx.roundRect(28, 28, 108, 42, 8);
-      ctx.fill();
+        ctx.fillStyle = borderColor;
+        ctx.beginPath();
+        ctx.roundRect(28, 28, 108, 42, 8);
+        ctx.fill();
 
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'bold 24px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(signDef.code, 82, 57);
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 24px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(signDef.code, 82, 57);
 
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
-      ctx.beginPath();
-      ctx.roundRect(330, 28, 152, 42, 8);
-      ctx.fill();
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+        ctx.beginPath();
+        ctx.roundRect(330, 28, 152, 42, 8);
+        ctx.fill();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 21px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(signDef.distance, 406, 56);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 21px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(signDef.distance, 406, 56);
 
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
-      ctx.shadowBlur = 6;
-      ctx.font = '900 33px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(signDef.title, 256, 134, 456);
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+        ctx.shadowBlur = 6;
+        ctx.font = '900 33px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(signDef.title, 256, 134, 456);
 
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(36, 158);
-      ctx.lineTo(476, 158);
-      ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(36, 158);
+        ctx.lineTo(476, 158);
+        ctx.stroke();
 
-      ctx.fillStyle = signDef.style === 'warning' ? '#fef08a' : '#e2e8f0';
-      ctx.font = 'bold 20px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(signDef.subtitle, 256, 198, 452);
+        ctx.fillStyle = signDef.style === 'warning' ? '#fef08a' : '#e2e8f0';
+        ctx.font = 'bold 20px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(signDef.subtitle, 256, 198, 452);
+      }
+
+      const signTex = new THREE.CanvasTexture(canvas);
+      signTex.needsUpdate = true;
+      signTex.userData = { isCached: true };
+      signMat = new THREE.MeshBasicMaterial({ map: signTex });
+      signMat.userData = { isCached: true };
+      _roadSignMatCache.set(signCacheKey, signMat);
     }
-
-    const signTex = new THREE.CanvasTexture(canvas);
-    signTex.needsUpdate = true;
 
     const boardW = 2.15;
     const boardH = 1.08;
     const faceMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(boardW, boardH),
-      new THREE.MeshBasicMaterial({ map: signTex })
+      signMat
     );
     faceMesh.position.z = 0.045;
     signGroup.add(faceMesh);
@@ -4623,33 +4663,41 @@ export function createOrganEnvironmentProps(themeId: string): {
   }> = [];
 
   const createLandmarkPlaque = (title: string, sub: string, borderHex: string) => {
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 140;
-    const cx = c.getContext('2d');
-    if (cx) {
-      cx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-      cx.beginPath();
-      cx.roundRect(6, 6, 500, 128, 18);
-      cx.fill();
-      cx.strokeStyle = borderHex;
-      cx.lineWidth = 6;
-      cx.stroke();
+    const plaqueKey = `${title}|${sub}|${borderHex}`;
+    let plaqueMat = _landmarkPlaqueMatCache.get(plaqueKey);
+    if (!plaqueMat) {
+      const c = document.createElement('canvas');
+      c.width = 512;
+      c.height = 140;
+      const cx = c.getContext('2d');
+      if (cx) {
+        cx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        cx.beginPath();
+        cx.roundRect(6, 6, 500, 128, 18);
+        cx.fill();
+        cx.strokeStyle = borderHex;
+        cx.lineWidth = 6;
+        cx.stroke();
 
-      cx.fillStyle = '#ffffff';
-      cx.font = '900 30px sans-serif';
-      cx.textAlign = 'center';
-      cx.fillText(title, 256, 62, 470);
+        cx.fillStyle = '#ffffff';
+        cx.font = '900 30px sans-serif';
+        cx.textAlign = 'center';
+        cx.fillText(title, 256, 62, 470);
 
-      cx.fillStyle = borderHex;
-      cx.font = 'bold 20px monospace';
-      cx.fillText(sub, 256, 104, 470);
+        cx.fillStyle = borderHex;
+        cx.font = 'bold 20px monospace';
+        cx.fillText(sub, 256, 104, 470);
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.needsUpdate = true;
+      t.userData = { isCached: true };
+      plaqueMat = new THREE.MeshBasicMaterial({ map: t, transparent: true, side: THREE.DoubleSide });
+      plaqueMat.userData = { isCached: true };
+      _landmarkPlaqueMatCache.set(plaqueKey, plaqueMat);
     }
-    const t = new THREE.CanvasTexture(c);
-    t.needsUpdate = true;
     return new THREE.Mesh(
       new THREE.PlaneGeometry(2.3, 0.64),
-      new THREE.MeshBasicMaterial({ map: t, transparent: true, side: THREE.DoubleSide })
+      plaqueMat
     );
   };
 
@@ -4805,5 +4853,483 @@ export function createOrganEnvironmentProps(themeId: string): {
   return { group, ciliaList, flowingBlobs, muscleRings, floorLiquid, roadSigns, landmarks };
 }
 
+// ============================================================================
+// 25. SECRET SPY MISSION MODELS: SILENCED PISTOL, PATHOGEN GENERAL & BIO-BASE
+// ============================================================================
 
+export function createSilencedPistolModel(): {
+  group: THREE.Group;
+  slideMesh: THREE.Mesh;
+} {
+  const group = new THREE.Group();
 
+  const matteBlackMat = createFastLitMaterial({
+    color: 0x0f172a,
+    roughness: 0.32,
+    metalness: 0.85,
+  });
+  const gunmetalSlideMat = createFastLitMaterial({
+    color: 0x1e293b,
+    roughness: 0.25,
+    metalness: 0.92,
+  });
+  const suppressorMat = createFastLitMaterial({
+    color: 0x111827,
+    roughness: 0.28,
+    metalness: 0.88,
+  });
+  const tritiumMat = new THREE.MeshBasicMaterial({ color: 0x10b981 });
+  const laserAccentMat = new THREE.MeshBasicMaterial({ color: 0x06b6d4 });
+
+  // Ergonomic Polymer Grip
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.28, 0.12), matteBlackMat);
+  grip.position.set(0, -0.16, 0.14);
+  grip.rotation.x = 0.24;
+  group.add(grip);
+
+  // Trigger Guard
+  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.08, 0.12), matteBlackMat);
+  guard.position.set(0, -0.07, 0.02);
+  group.add(guard);
+
+  // Lower Receiver Frame & Picatinny Rail
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.075, 0.42), matteBlackMat);
+  frame.position.set(0, -0.01, -0.04);
+  group.add(frame);
+
+  // Under-barrel Stealth Laser Module
+  const laserBox = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.055, 0.16), gunmetalSlideMat);
+  laserBox.position.set(0, -0.06, -0.14);
+  group.add(laserBox);
+
+  const laserLens = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), laserAccentMat);
+  laserLens.position.set(0, -0.06, -0.225);
+  group.add(laserLens);
+
+  // Reciprocating Top Slide
+  const slideMesh = new THREE.Mesh(new THREE.BoxGeometry(0.096, 0.085, 0.44), gunmetalSlideMat);
+  slideMesh.position.set(0, 0.055, -0.03);
+  group.add(slideMesh);
+
+  // Glowing Green Tritium Night Sights (Rear & Front)
+  [-0.025, 0.025].forEach((sx) => {
+    const rearDot = new THREE.Mesh(new THREE.SphereGeometry(0.011, 6, 6), tritiumMat);
+    rearDot.position.set(sx, 0.105, 0.17);
+    group.add(rearDot);
+  });
+  const frontDot = new THREE.Mesh(new THREE.SphereGeometry(0.013, 6, 6), tritiumMat);
+  frontDot.position.set(0, 0.105, -0.22);
+  group.add(frontDot);
+
+  // Extended Cylindrical Acoustic Silencer / Suppressor Tube
+  const suppressor = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.048, 0.048, 0.48, 14),
+    suppressorMat
+  );
+  suppressor.rotateX(Math.PI / 2);
+  suppressor.position.set(0, 0.052, -0.48);
+  group.add(suppressor);
+
+  // Suppressor Cooling Baffle Rings
+  [-0.36, -0.48, -0.60].forEach((bz) => {
+    const baffleRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.052, 0.052, 0.025, 12),
+      laserAccentMat
+    );
+    baffleRing.rotateX(Math.PI / 2);
+    baffleRing.position.set(0, 0.052, bz);
+    group.add(baffleRing);
+  });
+
+  return { group, slideMesh };
+}
+
+export function createPathogenGeneralModel(): {
+  group: THREE.Group;
+  leftLeg: THREE.Group;
+  rightLeg: THREE.Group;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  headGroup: THREE.Group;
+} {
+  const base = createBacillusSoldier();
+  const group = base.group;
+
+  // Upgrade with High-Ranking Pathogen General Regalia: Crimson Commander Beret, Gold Epaulets & Tactical Monocle!
+  const crimsonMat = createFastLitMaterial({
+    color: 0xdc2626,
+    emissive: 0x7f1d1d,
+    emissiveIntensity: 0.45,
+    roughness: 0.35,
+  });
+  const goldMat = createFastLitMaterial({
+    color: 0xfacc15,
+    emissive: 0xca8a04,
+    emissiveIntensity: 0.5,
+    metalness: 0.85,
+    roughness: 0.2,
+  });
+
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 1.05, 0);
+
+  // Crimson Officer Beret Cap
+  const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.32, 0.16, 14), crimsonMat);
+  beret.position.set(0.04, 0.22, 0);
+  beret.rotation.z = -0.18;
+  headGroup.add(beret);
+
+  // Gold Officer Crest on Beret
+  const crest = new THREE.Mesh(new THREE.OctahedronGeometry(0.09, 0), goldMat);
+  crest.position.set(0, 0.24, 0.31);
+  headGroup.add(crest);
+
+  group.add(headGroup);
+
+  // Golden Commander Epaulets on Both Shoulders
+  [-0.48, 0.48].forEach((sx) => {
+    const epaulet = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.32), goldMat);
+    epaulet.position.set(sx, 0.68, 0);
+    group.add(epaulet);
+  });
+
+  // Crimson Commander Chest Sash
+  const sash = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.12, 0.52), crimsonMat);
+  sash.position.set(0, 0.32, 0.02);
+  sash.rotation.z = 0.55;
+  group.add(sash);
+
+  return {
+    group,
+    leftLeg: base.leftLeg,
+    rightLeg: base.rightLeg,
+    leftArm: base.leftArm,
+    rightArm: base.rightArm,
+    headGroup,
+  };
+}
+
+export function createEnemyBioBaseModel(): {
+  group: THREE.Group;
+  coreMesh: THREE.Mesh;
+  radarDish: THREE.Group;
+} {
+  const group = new THREE.Group();
+
+  const bunkerArmorMat = createFastLitMaterial({
+    color: 0x1e293b,
+    roughness: 0.4,
+    metalness: 0.78,
+  });
+  const darkSteelMat = createFastLitMaterial({
+    color: 0x0f172a,
+    roughness: 0.3,
+    metalness: 0.9,
+  });
+  const coreBioMat = createFastLitMaterial({
+    color: 0xa855f7,
+    emissive: 0x9333ea,
+    emissiveIntensity: 1.8,
+    roughness: 0.15,
+  });
+  const hazardStripeMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+
+  // Heavy Hexagonal / Octagonal Command Base Foundation
+  const foundation = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.65, 1.95, 0.95, 8),
+    bunkerArmorMat
+  );
+  foundation.position.set(0, 0.48, 0);
+  group.add(foundation);
+
+  // Armored Upper Command Dome
+  const upperBastion = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.15, 1.45, 0.85, 8),
+    darkSteelMat
+  );
+  upperBastion.position.set(0, 1.25, 0);
+  group.add(upperBastion);
+
+  // Glowing Volatile Bio-Reactor Core in the Front Center (Critical Sabotage Weak Point!)
+  const coreMesh = new THREE.Mesh(new THREE.SphereGeometry(0.52, 14, 14), coreBioMat);
+  coreMesh.position.set(0, 1.15, 1.05);
+  group.add(coreMesh);
+
+  const coreRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.62, 0.06, 8, 18),
+    hazardStripeMat
+  );
+  coreRing.position.set(0, 1.15, 1.08);
+  group.add(coreRing);
+
+  // Twin Toxin Spore Silo Tanks on Left & Right Flanks
+  [-1.35, 1.35].forEach((sx) => {
+    const silo = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.36, 0.36, 1.65, 12),
+      bunkerArmorMat
+    );
+    silo.position.set(sx, 0.85, -0.2);
+    group.add(silo);
+
+    const siloCap = new THREE.Mesh(
+      new THREE.SphereGeometry(0.36, 10, 8),
+      coreBioMat
+    );
+    siloCap.position.set(sx, 1.68, -0.2);
+    group.add(siloCap);
+  });
+
+  // Rotating Pathogen Comms Radar Dish on Roof
+  const radarDish = new THREE.Group();
+  radarDish.position.set(0, 1.85, -0.15);
+
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 0.45, 8), darkSteelMat);
+  radarDish.add(mast);
+
+  const dish = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.65, 0.15, 0.28, 14),
+    bunkerArmorMat
+  );
+  dish.rotation.x = 0.65;
+  dish.position.set(0, 0.32, 0.1);
+  radarDish.add(dish);
+
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xef4444 })
+  );
+  beacon.position.set(0, 0.48, 0.28);
+  radarDish.add(beacon);
+
+  group.add(radarDish);
+
+  return { group, coreMesh, radarDish };
+}
+
+// ============================================================================
+// 26. ANATOMICAL STEALTH ENVIRONMENT & PATHOGEN ARTILLERY MODELS
+// Trachea Setting: Cilia Trees, Vesicular Crates, Cartilage Barricades & Bio-Artillery
+// ============================================================================
+
+export function createBacterialArtilleryModel(): {
+  group: THREE.Group;
+  barrel: THREE.Mesh;
+  sporeCore: THREE.Mesh;
+} {
+  const group = new THREE.Group();
+
+  const chitinMat = createFastLitMaterial({
+    color: 0x334155,
+    roughness: 0.45,
+    metalness: 0.65,
+  });
+  const darkSteelMat = createFastLitMaterial({
+    color: 0x1e293b,
+    roughness: 0.35,
+    metalness: 0.85,
+  });
+  const sporeGlowMat = createFastLitMaterial({
+    color: 0x10b981,
+    emissive: 0x059669,
+    emissiveIntensity: 0.85,
+    roughness: 0.2,
+  });
+  const hazardMat = createFastLitMaterial({
+    color: 0xf59e0b,
+    emissive: 0xb45309,
+    emissiveIntensity: 0.35,
+  });
+
+  // Heavy Armored Chitinous Base with Spiked Stabilization Outriggers
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.65, 2.6), chitinMat);
+  chassis.position.y = 0.35;
+  group.add(chassis);
+
+  [-1.25, 1.25].forEach((sx) => {
+    const outrigger = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.5, 2.4), darkSteelMat);
+    outrigger.position.set(sx, 0.3, 0);
+    group.add(outrigger);
+
+    // Hazard Stripes
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.1, 2.1), hazardMat);
+    stripe.position.set(sx, 0.48, 0);
+    group.add(stripe);
+  });
+
+  // Swivel Turret Ring
+  const turretBase = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.1, 0.45, 12), darkSteelMat);
+  turretBase.position.y = 0.85;
+  group.add(turretBase);
+
+  // Angled Spore Cannon Mortar Barrel (pointed ~48° upward toward distal bronchi)
+  const barrelGroup = new THREE.Group();
+  barrelGroup.position.set(0, 1.05, 0);
+  barrelGroup.rotation.x = -0.75; // Upward angle
+
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.46, 2.6, 12),
+    darkSteelMat
+  );
+  barrel.position.set(0, 1.1, 0);
+  barrelGroup.add(barrel);
+
+  // Muzzle Brake Ring
+  const muzzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.44, 0.38, 0.32, 12),
+    chitinMat
+  );
+  muzzle.position.set(0, 2.35, 0);
+  barrelGroup.add(muzzle);
+
+  // Coiled Bioluminescent Spore Reactor Chamber
+  const sporeCore = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 10), sporeGlowMat);
+  sporeCore.position.set(0, 0.2, -0.35);
+  barrelGroup.add(sporeCore);
+
+  group.add(barrelGroup);
+
+  return { group, barrel, sporeCore };
+}
+
+export function createCiliaTreeModel(): {
+  group: THREE.Group;
+} {
+  const group = new THREE.Group();
+
+  const trunkMat = createFastLitMaterial({
+    color: 0xf472b6,
+    emissive: 0xdb2777,
+    emissiveIntensity: 0.25,
+    roughness: 0.5,
+  });
+  const ciliaMat = createFastLitMaterial({
+    color: 0xfda4af,
+    emissive: 0xf43f5e,
+    emissiveIntensity: 0.35,
+    roughness: 0.3,
+  });
+  const mucusDropletMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xd97706,
+    emissiveIntensity: 0.3,
+    roughness: 0.1,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.8,
+  });
+
+  // Cellular Trunk (Epithelial Arbor Stem)
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.38, 3.8, 8), trunkMat);
+  trunk.position.y = 1.9;
+  group.add(trunk);
+
+  // Crown of Radiating Cilia Fronds (Microscopic Palm / Sea Anemone Foliage)
+  const crownGroup = new THREE.Group();
+  crownGroup.position.set(0, 3.6, 0);
+
+  const numCilia = 14;
+  for (let i = 0; i < numCilia; i++) {
+    const angle = (i / numCilia) * Math.PI * 2;
+    const cilia = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.09, 1.8, 6), ciliaMat);
+    cilia.position.set(Math.cos(angle) * 0.45, 0.65, Math.sin(angle) * 0.45);
+    cilia.rotation.z = Math.cos(angle) * 0.75;
+    cilia.rotation.x = Math.sin(angle) * 0.75;
+    crownGroup.add(cilia);
+  }
+
+  // Golden Mucus Droplet Hanging from Cilia Crown (Matches user reference image!)
+  const droplet = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), mucusDropletMat);
+  droplet.scale.set(1.0, 1.55, 1.0);
+  droplet.position.set(0, -0.15, 0);
+  crownGroup.add(droplet);
+
+  group.add(crownGroup);
+
+  return { group };
+}
+
+export function createVesicularCrateModel(): {
+  group: THREE.Group;
+} {
+  const group = new THREE.Group();
+
+  const crateFrameMat = createFastLitMaterial({
+    color: 0x334155,
+    roughness: 0.4,
+    metalness: 0.6,
+  });
+  const membraneMat = createFastLitMaterial({
+    color: 0x0284c7,
+    emissive: 0x0369a1,
+    emissiveIntensity: 0.4,
+    roughness: 0.25,
+  });
+  const latchMat = createFastLitMaterial({
+    color: 0xf59e0b,
+    emissive: 0xb45309,
+    emissiveIntensity: 0.35,
+  });
+
+  // Outer Hexagonal / Chamfered Storage Crate
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.5, 1.8), crateFrameMat);
+  box.position.y = 0.75;
+  group.add(box);
+
+  // Bioluminescent Nutrient Window Panels on 4 Sides
+  [
+    { pos: [0, 0.75, 0.91], rot: [0, 0, 0] },
+    { pos: [0, 0.75, -0.91], rot: [0, Math.PI, 0] },
+    { pos: [0.91, 0.75, 0], rot: [0, Math.PI / 2, 0] },
+    { pos: [-0.91, 0.75, 0], rot: [0, -Math.PI / 2, 0] },
+  ].forEach((side) => {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.9), membraneMat);
+    panel.position.set(side.pos[0], side.pos[1], side.pos[2]);
+    panel.rotation.set(side.rot[0], side.rot[1], side.rot[2]);
+    group.add(panel);
+  });
+
+  // Ribosomal Security Latch
+  const latch = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.14, 0.12), latchMat);
+  latch.position.set(0, 1.15, 0.92);
+  group.add(latch);
+
+  return { group };
+}
+
+export function createTracheaCartilageBarricadeModel(): {
+  group: THREE.Group;
+} {
+  const group = new THREE.Group();
+
+  const cartilageMat = createFastLitMaterial({
+    color: 0xfecdd3,
+    emissive: 0xf43f5e,
+    emissiveIntensity: 0.15,
+    roughness: 0.35,
+    metalness: 0.1,
+  });
+  const mucusCushionMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xd97706,
+    emissiveIntensity: 0.25,
+    roughness: 0.15,
+    transparent: true,
+    opacity: 0.85,
+  });
+
+  // Heavy C-Shaped Tracheal Cartilage Slab (Chest-High Cover Wall)
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.0, 1.2), cartilageMat);
+  slab.position.y = 1.0;
+  group.add(slab);
+
+  // Top Mucus Cushion Barrier Trim
+  const topCushion = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.35, 0.35, 4.35, 10),
+    mucusCushionMat
+  );
+  topCushion.rotation.z = Math.PI / 2;
+  topCushion.position.set(0, 2.05, 0);
+  group.add(topCushion);
+
+  return { group };
+}

@@ -23,16 +23,15 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
 }) => {
   const [filterClass, setFilterClass] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'BEST_PER_STUDENT' | 'ALL_ENTRIES'>('BEST_PER_STUDENT');
 
   if (!isOpen) return null;
 
-  // Choose base list: personal best deduplicated vs all game sessions
-  const baseEntries = viewMode === 'BEST_PER_STUDENT' ? getBestScoresPerStudent(entries) : entries;
+  // Strictly deduplicate so every student appears only once with their highest Personal Best score
+  const baseEntries = getBestScoresPerStudent(entries);
 
   // Extract unique classes
   const classes = Array.from(
-    new Set(entries.map((e) => e.className).filter((c) => Boolean(c && c.trim())))
+    new Set(baseEntries.map((e) => e.className).filter((c) => Boolean(c && c.trim())))
   );
 
   const filtered = baseEntries.filter((entry) => {
@@ -93,45 +92,15 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
           </div>
         </div>
 
-        {/* View Mode Selector: Personal Best vs All Entries */}
-        <div className="px-4 py-2.5 bg-slate-900/50 border-b border-slate-800/80 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-lg">
-            <button
-              onClick={() => {
-                sounds.playRadioChirp();
-                setViewMode('BEST_PER_STUDENT');
-              }}
-              className={`px-3 py-1 rounded-md text-xs font-display font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                viewMode === 'BEST_PER_STUDENT'
-                  ? 'bg-amber-400 text-slate-950 shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Award className="w-3.5 h-3.5" />
-              <span>Personal Best (Top Scores)</span>
-            </button>
-            <button
-              onClick={() => {
-                sounds.playRadioChirp();
-                setViewMode('ALL_ENTRIES');
-              }}
-              className={`px-3 py-1 rounded-md text-xs font-display font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                viewMode === 'ALL_ENTRIES'
-                  ? 'bg-cyan-500 text-slate-950 shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>All Match Logs ({entries.length})</span>
-            </button>
+        {/* Status Bar: Strictly 1 Unique Record Per Student */}
+        <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800/80 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs font-display font-bold text-amber-300">
+            <Award className="w-4 h-4 text-amber-400" />
+            <span>Personal Best Mode Active (1 Unique Record Per Student)</span>
           </div>
-
-          <div className="text-[11px] font-mono text-slate-400">
-            {viewMode === 'BEST_PER_STUDENT' ? (
-              <span className="text-amber-300 font-medium">Showing highest score per student</span>
-            ) : (
-              <span>All chronological game submissions</span>
-            )}
+          <div className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
+            <Users className="w-3.5 h-3.5" />
+            <span>{baseEntries.length} Unique Students Ranked</span>
           </div>
         </div>
 
@@ -249,11 +218,9 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                             YOU
                           </span>
                         )}
-                        {viewMode === 'BEST_PER_STUDENT' && (
-                          <span className="px-1 py-0.2 rounded bg-amber-500/10 border border-amber-500/30 text-[8px] font-mono text-amber-400 uppercase">
-                            Personal Best
-                          </span>
-                        )}
+                        <span className="px-1 py-0.2 rounded bg-amber-500/10 border border-amber-500/30 text-[8px] font-mono text-amber-400 uppercase">
+                          Personal Best
+                        </span>
                       </div>
                       <div className="text-[11px] font-mono text-slate-400 mt-0.5 truncate">
                         <span>{item.levelTitle}</span>

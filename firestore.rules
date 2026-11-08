@@ -37,8 +37,10 @@ service cloud.firestore {
       // Students can record their verified combat scores
       allow create: if isValidId(entryId) && isValidLeaderboardEntry(incoming());
 
-      // Scores are tamper-proof and immutable once submitted
-      allow update, delete: if false;
+      // Allow updating personal best record only if the new score is higher or equal
+      allow update: if isValidId(entryId) && isValidLeaderboardEntry(incoming()) && incoming().score >= resource.data.score;
+
+      allow delete: if false;
     }
   }
 }

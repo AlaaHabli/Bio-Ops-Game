@@ -22,6 +22,17 @@ export interface LevelConfig {
   targetPathogen: string;
   questions: Question[]; // 9 questions (3 for phase 1, 3 for phase 2, 3 for phase 3)
   enemyTypes: ('strep' | 'phage' | 'bacillus' | 'capsid' | 'amoeba_boss' | 'tank')[];
+  isSecret?: boolean;
+}
+
+export interface BiologyConceptCard {
+  id: string;
+  title: string;
+  category: 'ORGAN ENVIRONMENT' | 'IMMUNE DEFENSE' | 'PATHOGEN THREAT' | 'BIOLOGICAL HAZARD' | 'ANATOMICAL LANDMARK';
+  stage: string;
+  scientificFact: string;
+  keyTakeaway: string;
+  tacticalTip: string;
 }
 
 export interface Weapon {
@@ -62,6 +73,9 @@ export interface HitMarkerInfo {
   y: number;
   isCritical: boolean;
   damage: number;
+  offsetX?: number;
+  offsetY?: number;
+  isArmored?: boolean;
 }
 
 export interface KillfeedEntry {

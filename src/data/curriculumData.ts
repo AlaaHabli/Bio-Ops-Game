@@ -1,4 +1,4 @@
-import { LevelConfig, Weapon } from '../types/game';
+import { BiologyConceptCard, LevelConfig, Weapon } from '../types/game';
 
 export const INITIAL_WEAPONS: Weapon[] = [
   {
@@ -1173,4 +1173,285 @@ export const CURRICULUM_LEVELS: LevelConfig[] = [
       },
     ],
   },
+  {
+    id: 'level_secret_omega',
+    title: 'SECRET OP: Cytokine Storm',
+    codename: 'CLASSIFIED OMEGA: MULTISYSTEM CRISIS',
+    stage: 'Stage 8',
+    topic: 'Classified Covert Spy Infiltration & Base Sabotage',
+    organSector: 'Enemy Pathogen Command Citadel',
+    description: 'CLASSIFIED SECRET SPY ATTACK: Infiltrate behind enemy lines as a Cytotoxic T-Cell Spy armed with a Silenced Perforin Pistol & C4 Sabotage Charges to assassinate Pathogen Generals and blow up Enemy Bio-Bases and Tanks!',
+    briefing: 'TOP SECRET SPY DIRECTIVE: Instead of holding defensive bunkers, you are infiltrating deep inside the Pathogen Command Citadel! Equip your suppressed subsonic Perforin Pistol, engage your Optical Cell-Membrane Cloak [C], assassinate high-ranking Pathogen Generals, and plant C4 Complement Charges [E] to sabotage Enemy Bio-Tanks and Toxin Reactor Bases!',
+    targetPathogen: 'Pathogen Command Generals, Bio-Tanks & Toxin Reactor Bases',
+    enemyTypes: ['tank', 'bacillus', 'amoeba_boss', 'strep'],
+    isSecret: true,
+    questions: [
+      // Phase 1 Questions (1-3): Immune Memory, Vaccines & Antibiotics
+      {
+        id: 'sec_q1',
+        topic: 'Immune Memory',
+        stage: 'Stage 8',
+        question: 'How does a vaccine protect the human body against future infections by the same pathogen?',
+        options: [
+          'Harmless pathogen antigens stimulate white blood cells to create memory lymphocytes that produce antibodies rapidly upon re-infection',
+          'Vaccines coat the skin in hydrochloric acid so bacteria cannot land',
+          'Vaccines replace all red blood cells with antibiotic crystals',
+          'Vaccines permanently raise human body temperature to 48°C',
+        ],
+        correctIndex: 0,
+        explanation: 'Vaccines introduce weakened or dead antigens, training B and T lymphocytes to form long-lived memory cells. On secondary exposure, antibodies are produced so fast the person does not fall ill.',
+        cambridgeConcept: 'Active Immunity: Vaccination and Memory Lymphocytes.',
+        hint: 'Memory white blood cells remember the specific antigen shape.',
+      },
+      {
+        id: 'sec_q2',
+        topic: 'Pathogen Resistance',
+        stage: 'Stage 8',
+        question: 'Why must patients always complete their full prescribed course of antibiotics even if they feel better after 2 days?',
+        options: [
+          'To ensure all bacteria are killed so partially resistant bacteria do not survive, mutate, and multiply into an antibiotic-resistant superbug',
+          'Because leftover antibiotics turn into viruses inside the bottle',
+          'To help the stomach produce more bile',
+          'Because antibiotics are needed to digest dietary cellulose',
+        ],
+        correctIndex: 0,
+        explanation: 'Stopping antibiotics early leaves the most resistant bacteria alive. Through natural selection, these survivors reproduce and pass on resistance genes, creating dangerous superbugs like MRSA.',
+        cambridgeConcept: 'Antibiotic Resistance and Natural Selection in Bacteria.',
+        hint: 'Leaving the toughest bacteria alive lets them multiply into resistant strains.',
+      },
+      {
+        id: 'sec_q3',
+        topic: 'Nervous System',
+        stage: 'Stage 8',
+        question: 'In a rapid human reflex arc (such as pulling your hand away from a hot stove), what is the correct sequence of neurones?',
+        options: [
+          'Sensory neurone → Relay neurone (in spinal cord) → Motor neurone',
+          'Motor neurone → Sensory neurone → Red blood cell',
+          'Relay neurone → Root hair cell → Sensory neurone',
+          'Brain cortex → Platelet → Sensory neurone',
+        ],
+        correctIndex: 0,
+        explanation: 'Receptors detect the stimulus and send an electrical impulse along a Sensory neurone to a Relay neurone in the spinal cord CNS, which immediately signals a Motor neurone to contract the muscle.',
+        cambridgeConcept: 'Nervous System: The Reflex Arc pathway.',
+        hint: 'Sensory senses first, Relay relays in the spine, Motor moves the muscle.',
+      },
+      // Phase 2 Questions (4-6): Synapses, Homeostasis & Gas Exchange Integration
+      {
+        id: 'sec_q4',
+        topic: 'Synapses',
+        stage: 'Stage 8',
+        question: 'How does a nerve signal cross the microscopic gap (synapse) between two neurones?',
+        options: [
+          'By chemical neurotransmitter molecules diffusing across the synaptic cleft to bind to receptors on the next neurone',
+          'The two neurones physically fuse their nuclei together',
+          'Red blood cells carry the electrical spark across the gap',
+          'Sound waves echo across the gap',
+        ],
+        correctIndex: 0,
+        explanation: 'When an electrical action potential reaches the axon terminal, vesicles release chemical neurotransmitters that diffuse across the synaptic gap and trigger a new electrical impulse in the next neurone.',
+        cambridgeConcept: 'Synaptic transmission via chemical diffusion.',
+        hint: 'Electrical along the axon, chemical diffusion across the gap.',
+      },
+      {
+        id: 'sec_q5',
+        topic: 'Bio-Energetics Synthesis',
+        stage: 'Stage 8',
+        question: 'During an intense infection and fever, how do the respiratory and circulatory systems work together to supply White Blood Cells with energy?',
+        options: [
+          'Alveoli diffuse O2 into capillaries, and haemoglobin in red blood cells transports O2 to tissues for aerobic respiration in mitochondria',
+          'Lungs pump blood directly while the heart digests starch into maltose',
+          'Villi absorb carbon dioxide and send it to chloroplasts',
+          'Platelets convert oxygen into lactic acid',
+        ],
+        correctIndex: 0,
+        explanation: 'Gas exchange in the lungs loads oxygen onto haemoglobin in red blood cells; the heart pumps oxygenated blood to cells where mitochondria use O2 and glucose for aerobic respiration.',
+        cambridgeConcept: 'Integration of Respiratory, Circulatory, and Cellular Systems.',
+        hint: 'Lungs load O2, RBCs transport it, Mitochondria use it for aerobic respiration.',
+      },
+      {
+        id: 'sec_q6',
+        topic: 'Homeostasis & Excretion',
+        stage: 'Stage 8',
+        question: 'Which organ filters toxic urea from the blood plasma to produce urine and maintain water balance (osmoregulation)?',
+        options: ['Kidneys', 'Gall bladder', 'Pancreas', 'Trachea'],
+        correctIndex: 0,
+        explanation: 'The liver deaminates excess amino acids into urea, and the kidneys filter urea, excess water, and salts from the blood to form urine.',
+        cambridgeConcept: 'Renal Excretion and Homeostasis.',
+        hint: 'Bean-shaped organs that filter blood and send urine to the bladder.',
+      },
+      // Phase 3 Questions (7-9): Master Checkpoint Synthesis
+      {
+        id: 'sec_q7',
+        topic: 'Cellular Synthesis',
+        stage: 'Stage 7',
+        question: 'Why does a phagocyte White Blood Cell have a lobed, flexible nucleus and abundant mitochondria & lysosomes?',
+        options: [
+          'Flexible nucleus lets it squeeze through capillary walls (diapedesis); mitochondria power engulfing; lysosomes contain digestive enzymes to destroy bacteria',
+          'To perform photosynthesis when exposed to sunlight',
+          'To store insoluble starch crystals for winter',
+          'To transport carbon dioxide from toes to lungs',
+        ],
+        correctIndex: 0,
+        explanation: 'Phagocytes are specialized to squeeze between capillary endothelial cells into infected tissues, using ATP from mitochondria to engulf pathogens and lysosomal enzymes to digest them.',
+        cambridgeConcept: 'Structural adaptations of Phagocytic White Blood Cells.',
+        hint: 'Every organelle in a phagocyte is specialized for hunting, squeezing, engulfing, and digesting.',
+      },
+      {
+        id: 'sec_q8',
+        topic: 'Plant & Animal Synthesis',
+        stage: 'Stage 8',
+        question: 'How are the products of Plant Photosynthesis and Aerobic Cellular Respiration related in the global biosphere?',
+        options: [
+          'The products of photosynthesis (Glucose + Oxygen) are the exact reactants required for aerobic respiration, which releases CO2 + Water back for plants',
+          'Both processes only happen in the dark and consume oxygen',
+          'Photosynthesis produces lactic acid while respiration produces cellulose',
+          'They have no chemical molecules in common',
+        ],
+        correctIndex: 0,
+        explanation: 'Photosynthesis (6CO2 + 6H2O -> C6H12O6 + 6O2) and aerobic respiration (C6H12O6 + 6O2 -> 6CO2 + 6H2O) form a complementary biological cycle of matter and energy.',
+        cambridgeConcept: 'Complementary nature of Photosynthesis and Respiration.',
+        hint: 'What plants make using sunlight, animals and plants use to release energy.',
+      },
+      {
+        id: 'sec_q9',
+        topic: 'Master Checkpoint Finale',
+        stage: 'Stage 8',
+        question: 'When antibodies bind to matching antigens on invading bacteria, how does this help clear the infection?',
+        options: [
+          'Antibodies clump pathogens together (agglutination) and mark them for rapid destruction by phagocytes, or neutralize their toxins',
+          'Antibodies turn bacteria into healthy red blood cells',
+          'Antibodies freeze the blood plasma into solid ice',
+          'Antibodies dissolve the host\'s own stomach wall',
+        ],
+        correctIndex: 0,
+        explanation: 'Specific Y-shaped antibodies lock onto complementary antigens, clumping bacteria together (agglutination) so phagocytes can engulf whole clusters at once and neutralizing bacterial toxins.',
+        cambridgeConcept: 'Humoral & Cellular Immune Synergy: Agglutination and Opsonization.',
+        hint: 'Clumping enemies together makes them an easy target for phagocytes!',
+      },
+    ],
+  },
 ];
+
+export const BIOLOGY_CONCEPT_CARDS: Record<string, BiologyConceptCard> = {
+  organ_capillary: {
+    id: 'organ_capillary',
+    title: 'Red Blood Cells (Erythrocytes)',
+    category: 'ORGAN ENVIRONMENT',
+    stage: 'Stage 7 & 8 Biology',
+    scientificFact:
+      'Red Blood Cells have a biconcave disc shape and no nucleus, giving them extra room for haemoglobin to carry oxygen around the body.',
+    keyTakeaway: 'Liquid plasma carries dissolved glucose and CO₂, while Red Blood Cells carry oxygen.',
+    tacticalTip: 'Keep invading bacteria away from the Red Blood Cells!',
+  },
+  organ_alveoli: {
+    id: 'organ_alveoli',
+    title: 'Airway Cilia & Goblet Cells',
+    category: 'ORGAN ENVIRONMENT',
+    stage: 'Stage 7 & 8 Biology',
+    scientificFact:
+      'Goblet cells make sticky mucus to trap dust and bacteria, while tiny hair-like cilia sweep the mucus up and out of your lungs.',
+    keyTakeaway: 'Alveoli air sacs have walls just one cell thick for fast gas exchange.',
+    tacticalTip: 'Step around green mucus surges on the floor so you do not get slowed down.',
+  },
+  organ_stomach: {
+    id: 'organ_stomach',
+    title: 'Stomach Hydrochloric Acid (HCl)',
+    category: 'ORGAN ENVIRONMENT',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Your stomach lining makes strong hydrochloric acid (HCl) to kill swallowed bacteria and help the enzyme pepsin digest proteins.',
+    keyTakeaway: 'Stomach muscles churn food and acid together in waves called peristalsis.',
+    tacticalTip: 'Move left or right when green acid geysers bubble up in your lane.',
+  },
+  organ_intestine: {
+    id: 'organ_intestine',
+    title: 'Small Intestine Villi & Bile',
+    category: 'ORGAN ENVIRONMENT',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Finger-like villi line the small intestine to provide a huge surface area for absorbing digested nutrients into the blood.',
+    keyTakeaway: 'Bile neutralizes stomach acid and breaks large fat drops into tiny droplets.',
+    tacticalTip: 'Watch out for bile jets surging down the intestinal lanes.',
+  },
+  organ_brain: {
+    id: 'organ_brain',
+    title: 'Neurones & Synapses',
+    category: 'ORGAN ENVIRONMENT',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Neurones carry fast electrical nerve impulses along insulated axons and pass signals across tiny gaps called synapses using chemicals.',
+    keyTakeaway: 'Reflexes follow: Receptor → Sensory Neurone → Relay Neurone → Motor Neurone → Muscle.',
+    tacticalTip: 'Step out of electrical synapse warning lanes before they spark.',
+  },
+  enemy_bacteria: {
+    id: 'enemy_bacteria',
+    title: 'Pathogenic Bacteria',
+    category: 'PATHOGEN THREAT',
+    stage: 'Stage 7 & 8 Biology',
+    scientificFact:
+      'Bacteria are single-celled prokaryotes with a cell wall and circular DNA, but no nucleus. Pathogenic bacteria make us ill by releasing toxins.',
+    keyTakeaway: 'Antibiotics kill bacteria, but they never work on viruses.',
+    tacticalTip: 'Use your weapon or Scope [F] to eliminate bacterial troops.',
+  },
+  enemy_tank_biofilm: {
+    id: 'enemy_tank_biofilm',
+    title: 'Bacterial Capsule & Biofilm Armor',
+    category: 'PATHOGEN THREAT',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Some bacteria build a thick slimy capsule or biofilm shield to protect themselves from white blood cells and antibiotics.',
+    keyTakeaway: 'Immune enzymes and targeted antibodies are needed to break through bacterial capsules.',
+    tacticalTip: 'Aim for the glowing tank turret weak spot or toss a Frag [G].',
+  },
+  enemy_boss_virus: {
+    id: 'enemy_boss_virus',
+    title: 'Viruses & Superbugs',
+    category: 'PATHOGEN THREAT',
+    stage: 'Stage 7 & 8 Biology',
+    scientificFact:
+      'Viruses are non-cellular particles made of DNA or RNA inside a protein coat that must hijack living host cells to reproduce.',
+    keyTakeaway: 'Antibiotics cannot harm viruses; only antibodies and immune cells can stop them.',
+    tacticalTip: 'Shoot the boss weak point and intercept incoming missiles.',
+  },
+  ally_airdrop_marrow: {
+    id: 'ally_airdrop_marrow',
+    title: 'Bone Marrow Reinforcements',
+    category: 'IMMUNE DEFENSE',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'All red blood cells, platelets, and white blood cells are made inside spongy red bone marrow and released into the blood during infection.',
+    keyTakeaway: 'Bone marrow boosts white blood cell production when pathogens attack.',
+    tacticalTip: 'Press Airdrop [T] at the bottom bar to call allied paratroopers.',
+  },
+  ally_platelets_clotting: {
+    id: 'ally_platelets_clotting',
+    title: 'Platelets & Fibrin Blood Clotting',
+    category: 'IMMUNE DEFENSE',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Platelets are tiny cell fragments that form a tough mesh of fibrin fibers at wounds to clot blood and rebuild damaged barriers.',
+    keyTakeaway: 'Fibrin clots stop bleeding and block germs from entering.',
+    tacticalTip: 'Stand behind intact bunkers for cover while platelets repair them.',
+  },
+  hazard_organ_event: {
+    id: 'hazard_organ_event',
+    title: 'Organ Defense Surges',
+    category: 'BIOLOGICAL HAZARD',
+    stage: 'Stage 7 & 8 Biology',
+    scientificFact:
+      'Organs actively fight germs using stomach acid, airway mucus, intestinal bile, and nerve impulses that sweep through the body.',
+    keyTakeaway: 'Physical and chemical organ barriers are the body’s first line of defense.',
+    tacticalTip: 'Move left [A] or right [D] out of glowing floor warning rings.',
+  },
+  spy_tcell_assassin: {
+    id: 'spy_tcell_assassin',
+    title: 'Killer T-Cell Spy Infiltration',
+    category: 'IMMUNE DEFENSE',
+    stage: 'Stage 8 Biology',
+    scientificFact:
+      'Killer T-Cells (Lymphocytes) stealthily inspect tissue and release perforin enzymes to destroy pathogen command targets from within.',
+    keyTakeaway: 'T-Cells target specific foreign antigens to eliminate infected cells and pathogen bases.',
+    tacticalTip: 'Crouch [C] behind structures, open Bio-Doors [E], and assassinate turned-around Generals & Tanks!',
+  },
+};
+

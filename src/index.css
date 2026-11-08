@@ -7,13 +7,30 @@
     --font-mono: 'Share Tech Mono', monospace;
   }
 
+  *, *::before, *::after {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+    -webkit-user-drag: none;
+  }
+
+  html, body, #root {
+    height: 100%;
+    height: 100dvh;
+    width: 100%;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+  }
+
   body {
     font-family: var(--font-tactical);
     background-color: #050608;
     color: #e2e8f0;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+    overscroll-behavior: none;
   }
 }
 
@@ -58,6 +75,50 @@
 
 .animate-hitmarker {
   animation: hitmarker-fade 0.22s ease-out forwards;
+}
+
+/* Fortnite-Style Floating Damage Number Pop & Arc Animation */
+@keyframes fortnite-dmg-pop {
+  0% {
+    transform: translate3d(0, 6px, 0) scale(0.45);
+    opacity: 0;
+  }
+  18% {
+    transform: translate3d(0, -8px, 0) scale(1.28);
+    opacity: 1;
+  }
+  38% {
+    transform: translate3d(0, -16px, 0) scale(1.0);
+    opacity: 1;
+  }
+  80% {
+    transform: translate3d(0, -30px, 0) scale(0.96);
+    opacity: 0.92;
+  }
+  100% {
+    transform: translate3d(0, -42px, 0) scale(0.82);
+    opacity: 0;
+  }
+}
+
+.animate-fortnite-dmg {
+  animation: fortnite-dmg-pop 0.68s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.fortnite-dmg-text {
+  font-family: 'Chakra Petch', 'Rajdhani', sans-serif;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: -0.02em;
+  -webkit-text-stroke: 2px #000000;
+  paint-order: stroke fill;
+  text-shadow:
+    0 2px 0 #000000,
+    -1.5px -1.5px 0 #000000,
+    1.5px -1.5px 0 #000000,
+    -1.5px 1.5px 0 #000000,
+    1.5px 1.5px 0 #000000,
+    0 4px 10px rgba(0, 0, 0, 0.85);
 }
 
 /* Low HP Red Pulse Screen */
@@ -112,3 +173,31 @@
               radial-gradient(circle at 85% 80%, rgba(185, 28, 28, 0.35) 0%, transparent 45%);
   pointer-events: none;
 }
+
+/* 3-Second Hold-to-Scope Charge Animation (60FPS GPU Accelerated) */
+@keyframes scopeCharge {
+  from {
+    stroke-dashoffset: 163.36;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Black Ops Aim Down Sights (ADS) Weapon Raise */
+@keyframes adsSnap {
+  0% {
+    transform: translateY(38px) scale(0.92);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-ads-snap {
+  animation: adsSnap 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+

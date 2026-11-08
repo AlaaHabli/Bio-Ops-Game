@@ -39,11 +39,15 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenLeaderboard,
   onOpenProfile,
 }) => {
-  const [stageFilter, setStageFilter] = useState<'ALL' | 'Stage 7' | 'Stage 8'>('ALL');
+  const [stageFilter, setStageFilter] = useState<'ALL' | 'Stage 7' | 'Stage 8' | 'SECRET'>('ALL');
 
-  const filteredLevels = CURRICULUM_LEVELS.filter((lvl) =>
-    stageFilter === 'ALL' ? true : lvl.stage === stageFilter
-  );
+  const secretLevel = CURRICULUM_LEVELS.find((lvl) => lvl.isSecret) || CURRICULUM_LEVELS[CURRICULUM_LEVELS.length - 1];
+
+  const filteredLevels = CURRICULUM_LEVELS.filter((lvl) => {
+    if (stageFilter === 'ALL') return true;
+    if (stageFilter === 'SECRET') return Boolean(lvl.isSecret);
+    return lvl.stage === stageFilter && !lvl.isSecret;
+  });
 
   // Listen for Enter to start game directly
   useEffect(() => {
@@ -309,6 +313,47 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 )}
               </div>
 
+              {/* CLASSIFIED SECRET SPY ATTACK DIRECT LAUNCH BANNER */}
+              {secretLevel && (
+                <div className="p-3.5 rounded-lg bg-purple-950/60 border border-purple-500/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_0_20px_rgba(168,85,247,0.25)]">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-mono font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      <span>🕵️ SECRET SPY ATTACK: SILENCED PISTOL &amp; BASE SABOTAGE</span>
+                    </div>
+                    <div className="text-sm sm:text-base font-display font-extrabold text-white truncate">
+                      {secretLevel.title} — Assassinate Generals &amp; Sabotage Tanks/Bases!
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => {
+                        sounds.unlockAudio();
+                        sounds.playCombatAlarm();
+                        onSelectLevel(secretLevel);
+                        onStartGame();
+                      }}
+                      className="px-3.5 py-2 rounded-lg bg-purple-500 hover:bg-purple-400 text-slate-950 font-display font-extrabold text-xs uppercase tracking-wider cursor-pointer transition-all shadow-[0_0_15px_rgba(168,85,247,0.5)] whitespace-nowrap"
+                    >
+                      Play Spy Mission
+                    </button>
+                    {onQuickCombat && (
+                      <button
+                        onClick={() => {
+                          sounds.unlockAudio();
+                          sounds.playCombatAlarm();
+                          onSelectLevel(secretLevel);
+                          onQuickCombat();
+                        }}
+                        className="px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-extrabold text-xs uppercase tracking-wider cursor-pointer transition-all shadow-[0_0_15px_rgba(16,185,129,0.45)] whitespace-nowrap"
+                      >
+                        Instant 3D Spy Attack
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Quick Utility Buttons Row (Leaderboard, Weapons, Study Guide, Sound) */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-1">
                 <button
@@ -379,7 +424,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
 
               {/* Interactive Stage Filter Tabs */}
               <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg mb-4">
-                {(['ALL', 'Stage 7', 'Stage 8'] as const).map((tab) => (
+                {(['ALL', 'Stage 7', 'Stage 8', 'SECRET'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => {
@@ -387,13 +432,17 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                       sounds.playRadioChirp();
                       setStageFilter(tab);
                     }}
-                    className={`flex-1 py-1.5 px-3 rounded-md text-xs font-display font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                    className={`flex-1 py-1.5 px-2.5 rounded-md text-xs font-display font-bold transition-colors cursor-pointer whitespace-nowrap ${
                       stageFilter === tab
-                        ? 'bg-cyan-500 text-slate-950 shadow-xs'
+                        ? tab === 'SECRET'
+                          ? 'bg-purple-500 text-slate-950 shadow-xs'
+                          : 'bg-cyan-500 text-slate-950 shadow-xs'
+                        : tab === 'SECRET'
+                        ? 'text-purple-300 hover:text-purple-200'
                         : 'text-slate-300 hover:text-white'
                     }`}
                   >
-                    {tab === 'ALL' ? 'All Topics' : tab}
+                    {tab === 'ALL' ? 'All Topics' : tab === 'SECRET' ? '★ Secret Op' : tab}
                   </button>
                 ))}
               </div>
@@ -415,13 +464,19 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                       }}
                       className={`w-full p-3.5 rounded-lg border text-left transition-all flex items-center justify-between gap-3 cursor-pointer ${
                         isSelected
-                          ? 'bg-cyan-950/70 border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.25)]'
+                          ? lvl.isSecret
+                            ? 'bg-purple-950/80 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.35)]'
+                            : 'bg-cyan-950/70 border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.25)]'
+                          : lvl.isSecret
+                          ? 'bg-purple-950/30 border-purple-800/80 hover:border-purple-500'
                           : 'bg-slate-900/90 border-slate-800 hover:border-slate-600'
                       }`}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                          <span className="text-cyan-400 font-bold">{lvl.stage}</span>
+                          <span className={lvl.isSecret ? 'text-purple-300 font-bold' : 'text-cyan-400 font-bold'}>
+                            {lvl.isSecret ? '★ CLASSIFIED SECRET' : lvl.stage}
+                          </span>
                           <span aria-hidden="true">·</span>
                           <span className="truncate">{lvl.topic}</span>
                         </div>

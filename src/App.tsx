@@ -21,6 +21,7 @@ import { TitleScreen } from './components/TitleScreen';
 import { MissionBriefingModal } from './components/MissionBriefingModal';
 import { QuizPhase } from './components/QuizPhase';
 import { CombatView } from './components/CombatView';
+import { SpyMissionView } from './components/SpyMissionView';
 import { VictoryModal } from './components/VictoryModal';
 import { DefeatModal } from './components/DefeatModal';
 import { ArmoryModal } from './components/ArmoryModal';
@@ -196,7 +197,22 @@ export default function App() {
     }
   };
 
-  const handlePhaseDefeat = () => {
+  const handlePhaseDefeat = (earnedScore: number = 0, earnedKills: number = 0) => {
+    const finalScore = accumulatedScore + earnedScore;
+    const finalKills = accumulatedKills + earnedKills;
+    if (finalScore > 0) {
+      const currentProf = studentProfile || loadStudentProfile() || { name: 'Field Operative', className: 'Science Unit' };
+      recordScoreToLeaderboard({
+        studentName: currentProf.name,
+        className: currentProf.className,
+        levelTitle: selectedLevel.title,
+        stage: selectedLevel.stage,
+        score: finalScore,
+        kills: finalKills,
+        isVictory: false,
+      });
+      setLeaderboardEntries(loadLeaderboard());
+    }
     setGameState('DEFEAT');
   };
 
@@ -264,22 +280,43 @@ export default function App() {
         />
       )}
 
-      {/* 4. 60-SECOND THREE.JS FPS COMBAT PHASE */}
-      {gameState === 'COMBAT' && (
-        <CombatView
-          key={`${selectedLevel.id}-phase-${phaseNumber}`}
-          level={selectedLevel}
-          phaseNumber={phaseNumber}
-          activeWeapon={activeWeapon}
-          soundEnabled={soundEnabled}
-          autoAimEnabled={autoAimEnabled}
-          playerXp={playerStats.rankXp || (playerStats.totalKills * 50 + playerStats.questionsCorrect * 150)}
-          onPhaseComplete={handlePhaseComplete}
-          onPhaseDefeat={handlePhaseDefeat}
-          onToggleSound={handleToggleSound}
-          onToggleAutoAim={handleToggleAutoAim}
-        />
-      )}
+      {/* 4. THREE.JS FPS COMBAT OR SECRET SPY INFILTRATION ATTACK PHASE */}
+      {gameState === 'COMBAT' &&
+        (selectedLevel.isSecret ? (
+          <SpyMissionView
+            key={`${selectedLevel.id}-spy-phase-${phaseNumber}`}
+            level={selectedLevel}
+            phaseNumber={phaseNumber}
+            activeWeapon={activeWeapon}
+            soundEnabled={soundEnabled}
+            autoAimEnabled={autoAimEnabled}
+            playerXp={playerStats.rankXp || playerStats.totalKills * 50 + playerStats.questionsCorrect * 150}
+            onPhaseComplete={handlePhaseComplete}
+            onPhaseDefeat={handlePhaseDefeat}
+            onToggleSound={handleToggleSound}
+            onToggleAutoAim={handleToggleAutoAim}
+            onExitToMenu={handleMainMenu}
+            onSelectWeapon={handleSelectWeapon}
+            availableWeapons={INITIAL_WEAPONS}
+          />
+        ) : (
+          <CombatView
+            key={`${selectedLevel.id}-phase-${phaseNumber}`}
+            level={selectedLevel}
+            phaseNumber={phaseNumber}
+            activeWeapon={activeWeapon}
+            soundEnabled={soundEnabled}
+            autoAimEnabled={autoAimEnabled}
+            playerXp={playerStats.rankXp || playerStats.totalKills * 50 + playerStats.questionsCorrect * 150}
+            onPhaseComplete={handlePhaseComplete}
+            onPhaseDefeat={handlePhaseDefeat}
+            onToggleSound={handleToggleSound}
+            onToggleAutoAim={handleToggleAutoAim}
+            onExitToMenu={handleMainMenu}
+            onSelectWeapon={handleSelectWeapon}
+            availableWeapons={INITIAL_WEAPONS}
+          />
+        ))}
 
       {/* 5. VICTORY DEBRIEF */}
       {gameState === 'VICTORY' && (

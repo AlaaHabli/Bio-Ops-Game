@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { LevelConfig, Question, Weapon } from '../types/game';
 import { sounds } from '../services/soundEffects';
-import { CheckCircle2, XCircle, Lightbulb, ShieldAlert, Zap, BookOpen } from 'lucide-react';
+import { CheckCircle2, XCircle, Lightbulb, Zap, BookOpen } from 'lucide-react';
 
 interface QuizPhaseProps {
   level: LevelConfig;
@@ -290,7 +290,7 @@ export const QuizPhase: React.FC<QuizPhaseProps> = ({
                 onClick={onThreeCorrectAchieved}
                 className="px-6 py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-display font-bold text-sm tracking-widest uppercase shadow-[0_0_25px_rgba(16,185,129,0.7)] animate-pulse active:scale-95 cursor-pointer"
               >
-                DEPLOY FPS COMBAT (60s)
+                {level.isSecret ? 'DEPLOY 3D SPY ATTACK' : 'DEPLOY FPS COMBAT (60s)'}
               </button>
             ) : isCorrect ? (
               <button
@@ -317,11 +317,6 @@ export const QuizPhase: React.FC<QuizPhaseProps> = ({
             )}
           </div>
         </div>
-      </div>
-
-      {/* FOOTER NOTICE */}
-      <div className="relative z-10 w-full max-w-4xl mx-auto mt-2 text-center text-[11px] font-mono text-slate-500">
-        CAMBRIDGE LOWER SECONDARY SCIENCE (STAGE 7 & 8) • 3 CONSECUTIVE/TOTAL VERIFIED ANSWERS UNLOCKS THE 60-SECOND BLOODSTREAM SHOOTER PHASE
       </div>
     </div>
   );

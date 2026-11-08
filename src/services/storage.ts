@@ -5,6 +5,7 @@ import { db, handleFirestoreError, OperationType } from './firebase';
 const STORAGE_KEY = 'bio_ops_save_data_v1';
 const LEADERBOARD_KEY = 'bio_ops_leaderboard_v1';
 const PROFILE_KEY = 'bio_ops_student_profile_v1';
+const SEEN_CONCEPTS_KEY = 'bio_ops_seen_concepts_v1';
 
 const DEFAULT_STATS: PlayerStats = {
   unlockedLevelIndex: 0,
@@ -26,7 +27,7 @@ export const DEFAULT_LEADERBOARD_ENTRIES: LeaderboardEntry[] = [
     className: 'Class 8-A',
     score: 4850,
     kills: 38,
-    levelTitle: 'Cell Structure & Organelles',
+    levelTitle: 'Operation Cell Recon',
     stage: 'Stage 7',
     date: 'Nov 6',
     timestamp: Date.now() - 1000 * 60 * 180,
@@ -65,7 +66,7 @@ export const DEFAULT_LEADERBOARD_ENTRIES: LeaderboardEntry[] = [
     className: 'Class 8-A',
     score: 3100,
     kills: 24,
-    levelTitle: 'Digestive Enzymes & Acid',
+    levelTitle: 'Operation Gastro-Shield',
     stage: 'Stage 8',
     date: 'Nov 5',
     timestamp: Date.now() - 1000 * 60 * 900,
@@ -73,6 +74,38 @@ export const DEFAULT_LEADERBOARD_ENTRIES: LeaderboardEntry[] = [
     isVictory: true,
   },
 ];
+
+export function loadSeenConcepts(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SEEN_CONCEPTS_KEY);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return new Set<string>(parsed.filter((x) => typeof x === 'string'));
+    }
+    return new Set<string>();
+  } catch {
+    return new Set<string>();
+  }
+}
+
+export function markConceptAsSeen(conceptId: string): void {
+  try {
+    const current = loadSeenConcepts();
+    current.add(conceptId);
+    localStorage.setItem(SEEN_CONCEPTS_KEY, JSON.stringify(Array.from(current)));
+  } catch (e) {
+    console.error('Failed to save seen biology concept:', e);
+  }
+}
+
+export function resetSeenConcepts(): void {
+  try {
+    localStorage.removeItem(SEEN_CONCEPTS_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export function loadStudentProfile(): StudentProfile | null {
   try {
@@ -82,7 +115,7 @@ export function loadStudentProfile(): StudentProfile | null {
     if (parsed && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
       return {
         name: parsed.name.trim(),
-        className: (parsed.className || '').trim(),
+        className: (parsed.className || 'Science Unit').trim(),
       };
     }
     return null;
@@ -99,6 +132,22 @@ export function saveStudentProfile(profile: StudentProfile): void {
   }
 }
 
+export function mergeLeaderboardLists(...lists: LeaderboardEntry[][]): LeaderboardEntry[] {
+  const byId = new Map<string, LeaderboardEntry>();
+  for (const list of lists) {
+    for (const item of list) {
+      if (!item || !item.id) continue;
+      const existing = byId.get(item.id);
+      if (!existing || item.score > existing.score) {
+        byId.set(item.id, item);
+      }
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 150);
+}
+
 export function loadLeaderboard(): LeaderboardEntry[] {
   try {
     const raw = localStorage.getItem(LEADERBOARD_KEY);
@@ -108,7 +157,7 @@ export function loadLeaderboard(): LeaderboardEntry[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.sort((a, b) => b.score - a.score);
+      return mergeLeaderboardLists(parsed, DEFAULT_LEADERBOARD_ENTRIES);
     }
     return DEFAULT_LEADERBOARD_ENTRIES;
   } catch {
@@ -120,31 +169,26 @@ export function loadLeaderboard(): LeaderboardEntry[] {
  * Filters the leaderboard to show only the all-time personal best score for each unique student.
  */
 export function getBestScoresPerStudent(entries: LeaderboardEntry[]): LeaderboardEntry[] {
-  const seenStudents = new Set<string>();
-  const bestScores: LeaderboardEntry[] = [];
+  const bestByStudent = new Map<string, LeaderboardEntry>();
 
-  // Sort descending by score first
-  const sorted = [...entries].sort((a, b) => b.score - a.score);
-
-  for (const entry of sorted) {
+  for (const entry of entries) {
     const normalizedName = entry.studentName.trim().toLowerCase();
-    if (!seenStudents.has(normalizedName)) {
-      seenStudents.add(normalizedName);
-      bestScores.push(entry);
+    const existing = bestByStudent.get(normalizedName);
+    if (!existing || entry.score > existing.score) {
+      bestByStudent.set(normalizedName, entry);
     }
   }
 
-  return bestScores;
+  return Array.from(bestByStudent.values()).sort((a, b) => b.score - a.score);
 }
 
 /**
  * Subscribes to real-time synchronized cloud leaderboard in Firestore.
- * Automatically falls back to local cache if offline.
+ * Automatically merges with local cache so no student score is ever lost.
  */
 export function subscribeToLeaderboard(
   onUpdate: (entries: LeaderboardEntry[], isLiveCloud: boolean) => void
 ): () => void {
-  // Immediately provide current cached entries so UI is responsive
   const cached = loadLeaderboard();
   onUpdate(cached, false);
 
@@ -155,42 +199,35 @@ export function subscribeToLeaderboard(
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const cloudEntries: LeaderboardEntry[] = [];
-          snapshot.forEach((d) => {
-            const data = d.data() as Omit<LeaderboardEntry, 'id'>;
-            cloudEntries.push({
-              id: d.id,
-              studentName: data.studentName || 'Operative',
-              className: data.className || 'Science Unit',
-              score: Number(data.score) || 0,
-              kills: Number(data.kills) || 0,
-              levelTitle: data.levelTitle || 'Classroom Mission',
-              stage: data.stage || 'Stage 7',
-              date: data.date || '',
-              timestamp: Number(data.timestamp) || Date.now(),
-              isVictory: Boolean(data.isVictory),
-              rankTitle: data.rankTitle,
-            });
+        const cloudEntries: LeaderboardEntry[] = [];
+        snapshot.forEach((d) => {
+          const data = d.data() as Omit<LeaderboardEntry, 'id'>;
+          cloudEntries.push({
+            id: d.id,
+            studentName: data.studentName || 'Operative',
+            className: data.className || 'Science Unit',
+            score: Number(data.score) || 0,
+            kills: Number(data.kills) || 0,
+            levelTitle: data.levelTitle || 'Classroom Mission',
+            stage: data.stage || 'Stage 7',
+            date: data.date || '',
+            timestamp: Number(data.timestamp) || Date.now(),
+            isVictory: Boolean(data.isVictory),
+            rankTitle: data.rankTitle,
           });
+        });
 
-          // Sort descending and save to local storage cache
-          cloudEntries.sort((a, b) => b.score - a.score);
-          try {
-            localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(cloudEntries));
-          } catch {
-            // ignore
-          }
-
-          onUpdate(cloudEntries, true);
-        } else {
-          // If the cloud database is brand new, seed with defaults and notify
-          onUpdate(DEFAULT_LEADERBOARD_ENTRIES, true);
+        const merged = mergeLeaderboardLists(cloudEntries, loadLeaderboard(), DEFAULT_LEADERBOARD_ENTRIES);
+        try {
+          localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(merged));
+        } catch {
+          // ignore
         }
+
+        onUpdate(merged, true);
       },
       (error) => {
         console.warn('Firebase sync notice (using local storage fallback):', error.message);
-        // Fall back to local storage
         onUpdate(loadLeaderboard(), false);
         try {
           handleFirestoreError(error, OperationType.GET, path);
@@ -218,17 +255,20 @@ export async function recordScoreToLeaderboard(
   const dateStr = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const entryId = 'score_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
 
+  const cleanStudentName = (entry.studentName || 'Field Operative').trim().slice(0, 64);
+  const cleanClassName = (entry.className || 'Science Unit').trim().slice(0, 64);
+
   const newEntry: LeaderboardEntry = {
     ...entry,
+    studentName: cleanStudentName,
+    className: cleanClassName,
     id: entryId,
     timestamp: Date.now(),
     date: dateStr,
   };
 
   // 1. Immediately update local storage cache for instant UI feedback
-  const updated = [newEntry, ...current.filter((e) => e.id !== entryId)]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 100);
+  const updated = mergeLeaderboardLists([newEntry], current);
 
   try {
     localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(updated));
@@ -238,12 +278,12 @@ export async function recordScoreToLeaderboard(
 
   // 2. Synchronize to shared Firebase Firestore database
   const cleanDoc = {
-    studentName: newEntry.studentName.slice(0, 64),
-    className: newEntry.className.slice(0, 64),
+    studentName: cleanStudentName,
+    className: cleanClassName,
     score: Math.min(1000000, Math.max(0, Math.round(newEntry.score))),
     kills: Math.min(5000, Math.max(0, Math.round(newEntry.kills))),
-    levelTitle: newEntry.levelTitle.slice(0, 128),
-    stage: newEntry.stage.slice(0, 32),
+    levelTitle: (newEntry.levelTitle || 'Operation Cell Recon').slice(0, 128),
+    stage: (newEntry.stage || 'Stage 7').slice(0, 32),
     date: newEntry.date.slice(0, 32),
     timestamp: newEntry.timestamp,
     isVictory: Boolean(newEntry.isVictory),
@@ -251,6 +291,17 @@ export async function recordScoreToLeaderboard(
 
   try {
     await setDoc(doc(db, 'leaderboard', entryId), cleanDoc);
+
+    // Also update deterministic Personal Best document in Firestore if this is the student's highest score!
+    const safeSlug = cleanStudentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
+    const bestDocId = `best_${safeSlug}`;
+    const existingBest = current
+      .filter((e) => e.studentName.trim().toLowerCase() === cleanStudentName.toLowerCase())
+      .reduce((max, item) => Math.max(max, item.score), 0);
+
+    if (cleanDoc.score >= existingBest) {
+      await setDoc(doc(db, 'leaderboard', bestDocId), cleanDoc);
+    }
   } catch (error) {
     console.warn('Could not sync score to cloud (saved to local cache):', error);
   }
