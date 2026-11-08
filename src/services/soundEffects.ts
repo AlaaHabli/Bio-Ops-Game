@@ -2159,8 +2159,71 @@ class SoundEffectsService {
       // ignore
     }
   }
+
+  // Audible Bacterial Squad & NPC Guard Talking / Chatter Sound (multi-syllable bio-commando vocalization)
+  private lastChatterTime: number = 0;
+  public playBacteriaChatter(isAlerted: boolean = false): void {
+    if (!this.enabled) return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastChatterTime < 1400) return;
+    this.lastChatterTime = nowMs;
+
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    try {
+      const ctx = this.ctx;
+      const t0 = ctx.currentTime + 0.005;
+      const syllables = isAlerted ? 4 : 5;
+      const baseFreqs = isAlerted
+        ? [195, 245, 210, 275]
+        : [135, 165, 142, 178, 128];
+
+      for (let i = 0; i < syllables; i++) {
+        const start = t0 + i * 0.095;
+        const dur = 0.072;
+        const osc = ctx.createOscillator();
+        const mod = ctx.createOscillator();
+        const modGain = ctx.createGain();
+        const formant = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+
+        osc.type = 'sawtooth';
+        const f = baseFreqs[i % baseFreqs.length] * (0.92 + Math.random() * 0.16);
+        osc.frequency.setValueAtTime(f, start);
+        osc.frequency.linearRampToValueAtTime(f * (i % 2 === 0 ? 1.18 : 0.86), start + dur);
+
+        // Throat growl FM modulation
+        mod.type = 'sine';
+        mod.frequency.setValueAtTime(32, start);
+        modGain.gain.setValueAtTime(18, start);
+        mod.connect(modGain);
+        modGain.connect(osc.frequency);
+
+        // Vocal tract formant resonance
+        formant.type = 'bandpass';
+        formant.frequency.setValueAtTime(520 + (i % 3) * 240, start);
+        formant.Q.setValueAtTime(2.6, start);
+
+        gain.gain.setValueAtTime(0.001, start);
+        gain.gain.linearRampToValueAtTime(isAlerted ? 0.28 : 0.2, start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+
+        osc.connect(formant);
+        formant.connect(gain);
+        gain.connect(this.masterGain);
+
+        osc.start(start);
+        mod.start(start);
+        osc.stop(start + dur + 0.01);
+        mod.stop(start + dur + 0.01);
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export const sounds = new SoundEffectsService();
+
 
 

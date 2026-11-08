@@ -11,7 +11,7 @@ interface WeaponBlockyIconProps {
  * Renders the exact multi-part blocky ("Lego-shape") 3D weapon designs built in CellModels.ts
  * (`createFortniteWeaponModel` & `createCovertSuppressedPistol`) for HUD weapon slots and Armory cards.
  */
-export const WeaponBlockyIcon: React.FC<WeaponBlockyIconProps> = ({
+export const WeaponBlockyIcon: React.FC<WeaponBlockyIconProps> = React.memo(({
   weaponId,
   category,
   className = 'w-9 h-5 sm:w-11 sm:h-6',
@@ -338,4 +338,4 @@ export const WeaponBlockyIcon: React.FC<WeaponBlockyIconProps> = ({
       <rect x="35" y="9.8" width="29" height="5" rx="0.8" fill="#0f172a" stroke="#f59e0b" strokeWidth="0.6" />
     </svg>
   );
-};
+});

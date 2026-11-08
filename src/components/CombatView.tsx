@@ -486,10 +486,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       crosshairDomRef.current.style.left = `${screenX}%`;
       crosshairDomRef.current.style.top = `${screenY}%`;
     }
-    if (scopeReticleDomRef.current) {
-      scopeReticleDomRef.current.style.left = `${screenX}%`;
-      scopeReticleDomRef.current.style.top = `${screenY}%`;
-    }
   };
 
   const handleToggleScope = () => {
@@ -505,35 +501,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       clearTimeout(holdShootTimerRef.current);
       holdShootTimerRef.current = null;
     }
-    if (next) {
-      // Center the scope optic directly on the exact 3D direction the player was aiming!
-      baseAimYawRef.current = THREE.MathUtils.clamp(
-        baseAimYawRef.current - aimPosRef.current.x * 0.42,
-        -0.55,
-        0.55
-      );
-      baseAimPitchRef.current = THREE.MathUtils.clamp(
-        baseAimPitchRef.current + aimPosRef.current.y * 0.34,
-        -0.38,
-        0.38
-      );
-      aimPosRef.current.x = 0;
-      aimPosRef.current.y = 0;
-      targetAimPosRef.current.x = 0;
-      targetAimPosRef.current.y = 0;
-      syncCrosshairDom(0, 0);
-    } else {
-      // Restore hipfire crosshair cleanly from scoped camera angle
-      const restoredX = THREE.MathUtils.clamp(-baseAimYawRef.current / 0.42, -0.85, 0.85);
-      const restoredY = THREE.MathUtils.clamp(baseAimPitchRef.current / 0.34, -0.85, 0.85);
-      aimPosRef.current.x = restoredX;
-      aimPosRef.current.y = restoredY;
-      targetAimPosRef.current.x = restoredX;
-      targetAimPosRef.current.y = restoredY;
-      baseAimYawRef.current = 0;
-      baseAimPitchRef.current = 0;
-      syncCrosshairDom(restoredX, restoredY);
-    }
+    // Keep exact same aimPosRef (x, y) when scoping in/out so scope aim is 100% identical to weapon aim!
+    baseAimYawRef.current = 0;
+    baseAimPitchRef.current = 0;
+    syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
     isScopedRef.current = next;
     manualScopeLockRef.current = next;
     autoScopedByHoldRef.current = false;
@@ -552,23 +523,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     }
     holdShootTimerRef.current = setTimeout(() => {
       if (!isScopedRef.current && weaponSupportsScope(currentWeaponRef.current)) {
-        // Center the camera aim on the target the player was aiming at when scoping in!
-        baseAimYawRef.current = THREE.MathUtils.clamp(
-          baseAimYawRef.current - aimPosRef.current.x * 0.42,
-          -0.55,
-          0.55
-        );
-        baseAimPitchRef.current = THREE.MathUtils.clamp(
-          baseAimPitchRef.current + aimPosRef.current.y * 0.34,
-          -0.38,
-          0.38
-        );
-        aimPosRef.current.x = 0;
-        aimPosRef.current.y = 0;
-        targetAimPosRef.current.x = 0;
-        targetAimPosRef.current.y = 0;
-        syncCrosshairDom(0, 0);
-
+        baseAimYawRef.current = 0;
+        baseAimPitchRef.current = 0;
+        syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
         isScopedRef.current = true;
         autoScopedByHoldRef.current = true;
         setIsScoped(true);
@@ -584,16 +541,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
       holdShootTimerRef.current = null;
     }
     if (autoScopedByHoldRef.current && !manualScopeLockRef.current) {
-      const restoredX = THREE.MathUtils.clamp(-baseAimYawRef.current / 0.42, -0.85, 0.85);
-      const restoredY = THREE.MathUtils.clamp(baseAimPitchRef.current / 0.34, -0.85, 0.85);
-      aimPosRef.current.x = restoredX;
-      aimPosRef.current.y = restoredY;
-      targetAimPosRef.current.x = restoredX;
-      targetAimPosRef.current.y = restoredY;
       baseAimYawRef.current = 0;
       baseAimPitchRef.current = 0;
-      syncCrosshairDom(restoredX, restoredY);
-
+      syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
       isScopedRef.current = false;
       autoScopedByHoldRef.current = false;
       setIsScoped(false);
@@ -768,6 +718,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const fpsGroupRef = useRef<THREE.Group | null>(null);
   const weaponMeshRef = useRef<THREE.Group | null>(null);
   const activeWeaponSubmeshRef = useRef<THREE.Group | null>(null);
+  const prebuiltWeaponsRef = useRef<Record<string, { group: THREE.Group; pumpSlide?: THREE.Mesh }>>({});
   const pumpSlideRef = useRef<THREE.Mesh | null>(null);
   const muzzleFlashRef = useRef<THREE.PointLight | null>(null);
   const muzzleSpriteRef = useRef<THREE.Mesh | null>(null);
@@ -778,6 +729,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const recoilRef = useRef<{ z: number; rotX: number }>({ z: 0, rotX: 0 });
   const cameraShakeRef = useRef<number>(0);
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const executeShotRef = useRef<(() => void) | null>(null);
   const visionModeRef = useRef<'normal' | 'nvg' | 'thermal'>('normal');
   const prebuiltAlliedRef = useRef<{
@@ -1170,14 +1122,17 @@ export const CombatView: React.FC<CombatViewProps> = ({
       setIsScoped(false);
     }
 
-    // Rebuild weapon 3D model in FPS rig smoothly and dispose old weapon geometry/materials
-    if (weaponMeshRef.current && activeWeaponSubmeshRef.current) {
-      disposeSceneGraph(activeWeaponSubmeshRef.current);
-      weaponMeshRef.current.remove(activeWeaponSubmeshRef.current);
-      const newModel = createFortniteWeaponModel(nextWpn.id, nextWpn.color);
-      weaponMeshRef.current.add(newModel.group);
-      activeWeaponSubmeshRef.current = newModel.group;
-      pumpSlideRef.current = newModel.pumpSlide || null;
+    // Switch pre-built 3D weapon visibility in 0ms (zero geometry/shader allocation or disposal stutter!)
+    const weaponsMap = prebuiltWeaponsRef.current;
+    if (weaponsMap && Object.keys(weaponsMap).length > 0) {
+      Object.entries(weaponsMap).forEach(([wId, wData]) => {
+        wData.group.visible = wId === nextWpn.id;
+      });
+      const chosen = weaponsMap[nextWpn.id];
+      if (chosen) {
+        activeWeaponSubmeshRef.current = chosen.group;
+        pumpSlideRef.current = chosen.pumpSlide || null;
+      }
     }
 
     sounds.playRadioChirp();
@@ -1216,7 +1171,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.05, 140);
+    camera.rotation.order = 'YXZ';
     camera.position.set(0, 0, 0);
+    cameraRef.current = camera;
 
     // 2. WebGL Renderer
     const renderer = new THREE.WebGLRenderer({
@@ -1520,13 +1477,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
     buildThemeElements(organThemeRef.current);
     rebuildOrganThemeRef.current = buildThemeElements;
 
-    // 7. FPS White Blood Cell Arms (with Black Ops Tactical Gloves) & Fortnite-Style Weapon
+    // 7. FPS White Blood Cell Arms & Pre-Built All 4 Fortnite-Style Weapons (Zero weapon-swap shader stall!)
     const fpsGroup = new THREE.Group();
     const leukocyteArms = createLeukocyteFPSArms(currentWeaponRef.current.color);
     fpsGroup.add(leukocyteArms);
 
-    const initialWeaponModel = createFortniteWeaponModel(currentWeaponRef.current.id, currentWeaponRef.current.color);
-    fpsGroup.add(initialWeaponModel.group);
+    const weaponsMap: Record<string, { group: THREE.Group; pumpSlide?: THREE.Mesh }> = {};
+    INITIAL_WEAPONS.forEach((w) => {
+      const model = createFortniteWeaponModel(w.id, w.color);
+      model.group.visible = w.id === currentWeaponRef.current.id;
+      fpsGroup.add(model.group);
+      weaponsMap[w.id] = { group: model.group, pumpSlide: model.pumpSlide };
+    });
+    prebuiltWeaponsRef.current = weaponsMap;
+    const initialWeaponModel = weaponsMap[currentWeaponRef.current.id] || Object.values(weaponsMap)[0];
     activeWeaponSubmeshRef.current = initialWeaponModel.group;
     pumpSlideRef.current = initialWeaponModel.pumpSlide || null;
 
@@ -1747,8 +1711,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           return resetAndActivatePoolSlot(slot);
         }
       }
-      // 3. Recycle oldest slot
-      return resetAndActivatePoolSlot(enemyPool[0]);
+      // 3. Recycle oldest slot safely (remove any live soldier using this mesh first so two entries never share a Group!)
+      const recycled = enemyPool[0];
+      const existingIdx = activeSoldiersRef.current.findIndex((s) => s.mesh === recycled.group);
+      if (existingIdx !== -1) {
+        activeSoldiersRef.current.splice(existingIdx, 1);
+      }
+      return resetAndActivatePoolSlot(recycled);
     }
 
     function releaseSoldierToPool(soldier: ActiveSoldier) {
@@ -1762,10 +1731,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     }
 
-    // Pre-allocate Fixed Enemy Object Pool (5 Strep Troopers, 4 Bacillus Heavy Gunners, 2 Heavy Tanks — zero mid-combat allocations!)
-    for (let i = 0; i < 5; i++) allocateEnemyPoolSlot('strep');
-    for (let i = 0; i < 4; i++) allocateEnemyPoolSlot('bacillus');
-    for (let i = 0; i < 2; i++) allocateEnemyPoolSlot('tank');
+    // Pre-allocate Generous Fixed Enemy Object Pool (8 Strep Troopers, 6 Bacillus Heavy Gunners, 4 Heavy Tanks — zero mid-combat allocations!)
+    for (let i = 0; i < 8; i++) allocateEnemyPoolSlot('strep');
+    for (let i = 0; i < 6; i++) allocateEnemyPoolSlot('bacillus');
+    for (let i = 0; i < 4; i++) allocateEnemyPoolSlot('tank');
 
     // Pre-allocate Allied Reinforcements & Grenade Pool at startup so [T] and [G] never compile shaders mid-combat!
     {
@@ -2707,7 +2676,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         sounds.playBrassShellDrop();
       }
 
-      // 1:1 True Crosshair Aim Vector (when scoped, center reticle is (0, 0); in hipfire, exact crosshair NDC)
+      // Ensure camera matrixWorld is 100% up-to-date before raycasting or projecting
+      camera.updateMatrixWorld();
+
+      // Unified Aim Vector: When in 3D Black Ops ADS, aim is dead center (0, 0) down the 3D optic axis!
       if (isScopedRef.current) {
         hitVector.set(0, 0);
       } else {
@@ -2760,7 +2732,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       // Spawn a visible 3D Pointed Spitzer Bullet Projectile from playerTracerPool directly out of the 3D gun barrel!
       {
-        if (!isScopedRef.current && weaponMeshRef.current) {
+        if (weaponMeshRef.current) {
           _v1.set(0, 0.03, -1.24);
           weaponMeshRef.current.localToWorld(_v1);
         } else {
@@ -3063,7 +3035,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let cachedRect = container.getBoundingClientRect();
 
     // Professional FPS Aiming (Fortnite / Black Ops style):
-    // 1:1 NDC alignment (no 1.15x distortion) + smooth relative drag when scoped or touch-dragging!
+    // 100% Unified Aim between Hipfire Crosshair & Tactical Scope Reticle!
     const updateAimPosition = (clientX: number, clientY: number, isRelativeDrag: boolean = false, prevX?: number, prevY?: number) => {
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
@@ -3071,40 +3043,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const w = cachedRect.width || window.innerWidth;
       const h = cachedRect.height || window.innerHeight;
 
-      if (isScopedRef.current && isRelativeDrag && prevX !== undefined && prevY !== undefined) {
-        // When Scoped (ADS), dragging smoothly pans the camera optic with precision ADS sensitivity
-        const dxNorm = ((clientX - prevX) / w) * 2;
-        const dyNorm = -((clientY - prevY) / h) * 2;
-        const adsSens = currentWeaponRef.current.category === 'SNIPER' ? 0.28 : 0.42;
-        baseAimYawRef.current = THREE.MathUtils.clamp(baseAimYawRef.current - dxNorm * adsSens, -0.58, 0.58);
-        baseAimPitchRef.current = THREE.MathUtils.clamp(baseAimPitchRef.current + dyNorm * adsSens, -0.40, 0.40);
-        targetAimPosRef.current.x = 0;
-        targetAimPosRef.current.y = 0;
-        aimPosRef.current.x = 0;
-        aimPosRef.current.y = 0;
-        syncCrosshairDom(0, 0);
-        return;
-      }
-
       if (isRelativeDrag && prevX !== undefined && prevY !== undefined) {
-        // Smooth touch-drag aiming in hipfire (combines responsive thumb delta with subtle target slowdown)
-        const dxNorm = ((clientX - prevX) / w) * 2 * 1.15;
-        const dyNorm = -((clientY - prevY) / h) * 2 * 1.15;
+        const sens = isScopedRef.current
+          ? currentWeaponRef.current.category === 'SNIPER'
+            ? 0.72
+            : 0.88
+          : 1.15;
+        const dxNorm = ((clientX - prevX) / w) * 2 * sens;
+        const dyNorm = -((clientY - prevY) / h) * 2 * sens;
         targetAimPosRef.current.x = Math.max(-0.94, Math.min(0.94, targetAimPosRef.current.x + dxNorm));
         targetAimPosRef.current.y = Math.max(-0.90, Math.min(0.90, targetAimPosRef.current.y + dyNorm));
       } else {
-        // True 1:1 cursor-to-crosshair NDC mapping (zero 1.15x overshoot!)
-        const x = ((clientX - cachedRect.left) / w) * 2 - 1;
-        const y = -((clientY - cachedRect.top) / h) * 2 + 1;
-        targetAimPosRef.current.x = Math.max(-0.94, Math.min(0.94, x));
-        targetAimPosRef.current.y = Math.max(-0.90, Math.min(0.90, y));
-        // On desktop mouse move while scoped, smoothly steer the optic across the battlefield
-        if (isScopedRef.current) {
-          const adsYawSpan = currentWeaponRef.current.category === 'SNIPER' ? 0.34 : 0.46;
-          const adsPitchSpan = currentWeaponRef.current.category === 'SNIPER' ? 0.26 : 0.36;
-          baseAimYawRef.current = THREE.MathUtils.clamp(-targetAimPosRef.current.x * adsYawSpan, -0.58, 0.58);
-          baseAimPitchRef.current = THREE.MathUtils.clamp(targetAimPosRef.current.y * adsPitchSpan, -0.40, 0.40);
-        }
+        // True 1:1 cursor-to-crosshair & scope-reticle NDC mapping (identical in hipfire and scope!)
+        const x = THREE.MathUtils.clamp(((clientX - cachedRect.left) / w) * 2 - 1, -0.94, 0.94);
+        const y = THREE.MathUtils.clamp(-((clientY - cachedRect.top) / h) * 2 + 1, -0.90, 0.90);
+        targetAimPosRef.current.x = x;
+        targetAimPosRef.current.y = y;
       }
 
       syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
@@ -3137,8 +3091,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           lastFiringTouchPosRef.current = { x: clientX, y: clientY };
           isPointerDownRef.current = true;
           startHoldShootScopeTimer();
+          updateAimPosition(clientX, clientY, false);
           if (!isScopedRef.current) {
-            updateAimPosition(clientX, clientY, false);
             aimPosRef.current.x = targetAimPosRef.current.x;
             aimPosRef.current.y = targetAimPosRef.current.y;
           }
@@ -3211,10 +3165,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
       setIsFiring(true);
       startHoldShootScopeTimer();
       updateAimPosition(e.clientX, e.clientY, false);
-      if (!isScopedRef.current) {
-        aimPosRef.current.x = targetAimPosRef.current.x;
-        aimPosRef.current.y = targetAimPosRef.current.y;
-      }
+      aimPosRef.current.x = targetAimPosRef.current.x;
+      aimPosRef.current.y = targetAimPosRef.current.y;
       executeShot();
     };
 
@@ -3390,11 +3342,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       elapsedAccumulator += delta;
       const elapsed = elapsedAccumulator;
 
-      // Continuous fire while holding Shoot (executeShot internally enforces each weapon's fireRate cooldown)
-      if (isPointerDownRef.current) {
-        executeShot();
-      }
-
       // 1. UPDATE PLAYER 3D POSITION (Left/Right & Front/Back Movement)
       let inputX = moveInputRef.current.x;
       let inputZ = moveInputRef.current.z;
@@ -3436,10 +3383,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       // Smoothly zoom camera FOV when Black Ops Sight Scope (ADS) is engaged!
       const targetFov = isScopedRef.current
         ? currentWeaponRef.current.category === 'SNIPER'
-          ? 24
+          ? 34
           : currentWeaponRef.current.category === 'SHOTGUN'
           ? 65
-          : 40
+          : 46
         : 65;
       if (Math.abs(camera.fov - targetFov) > 0.05) {
         camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 18, delta);
@@ -3447,14 +3394,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
 
       // Soft Continuous Auto-Aim Pull (Fortnite / Black Ops Aim Assist):
-      // Gently guides aim closer toward the nearest enemy's TORSO/CHEST (never the head!)
+      // Gently guides aim closer toward the nearest enemy's TORSO/CHEST (never the head!) in both Hipfire and Scope!
       if (autoAimEnabledRef.current && activeSoldiersRef.current.length > 0) {
         let closestDist = 0.34;
         let pullTargetX = 0;
         let pullTargetY = 0;
         let foundAssistTarget = false;
-        const curAimX = isScopedRef.current ? 0 : targetAimPosRef.current.x;
-        const curAimY = isScopedRef.current ? 0 : targetAimPosRef.current.y;
+        const curAimX = targetAimPosRef.current.x;
+        const curAimY = targetAimPosRef.current.y;
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
@@ -3474,53 +3421,45 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         if (foundAssistTarget) {
-          if (isScopedRef.current) {
-            // In ADS, gently nudge camera yaw/pitch toward enemy torso
-            baseAimYawRef.current = THREE.MathUtils.clamp(
-              baseAimYawRef.current - pullTargetX * delta * 1.15,
-              -0.58,
-              0.58
-            );
-            baseAimPitchRef.current = THREE.MathUtils.clamp(
-              baseAimPitchRef.current + pullTargetY * delta * 0.95,
-              -0.40,
-              0.40
-            );
-          } else {
-            // In Hipfire, gently pull crosshair partway toward enemy torso
-            targetAimPosRef.current.x = THREE.MathUtils.damp(
-              targetAimPosRef.current.x,
-              pullTargetX,
-              2.6,
-              delta
-            );
-            targetAimPosRef.current.y = THREE.MathUtils.damp(
-              targetAimPosRef.current.y,
-              pullTargetY,
-              2.6,
-              delta
-            );
-            syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
-          }
+          targetAimPosRef.current.x = THREE.MathUtils.damp(
+            targetAimPosRef.current.x,
+            pullTargetX,
+            2.6,
+            delta
+          );
+          targetAimPosRef.current.y = THREE.MathUtils.damp(
+            targetAimPosRef.current.y,
+            pullTargetY,
+            2.6,
+            delta
+          );
+          syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
         }
       }
 
       // High-frequency 60 FPS sub-pixel aim interpolation (buttery smooth manual & assisted aiming!)
       aimPosRef.current.x = THREE.MathUtils.damp(aimPosRef.current.x, targetAimPosRef.current.x, 30, delta);
       aimPosRef.current.y = THREE.MathUtils.damp(aimPosRef.current.y, targetAimPosRef.current.y, 30, delta);
+      syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
 
-      // Responsive pitch (up/down aim) & yaw (left/right aim) with horizon stabilization
+      // Identical camera pitch & yaw formula in Hipfire and Scope so Scope Aim and Weapon Aim never deviate!
       cameraRollShakeRef.current = THREE.MathUtils.damp(cameraRollShakeRef.current, 0, 12, delta);
-      const targetRoll = -inputX * 0.03 + cameraRollShakeRef.current;
-      // In Hipfire, keep camera parallax subtle (0.07) so the 3D world never swims away from under your crosshair!
-      const pitchFactor = isScopedRef.current ? 0.0 : 0.07;
-      const yawFactor = isScopedRef.current ? 0.0 : 0.07;
-      const targetYaw = -playerPosRef.current.x * 0.018 - aimPosRef.current.x * yawFactor + baseAimYawRef.current;
-      const targetPitch = aimPosRef.current.y * pitchFactor + baseAimPitchRef.current + Math.abs(cameraRollShakeRef.current) * 0.25;
-      const camDamp = isScopedRef.current ? 24 : 18;
-      camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 14, delta);
-      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, camDamp, delta);
-      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, camDamp, delta);
+      const targetRoll = isScopedRef.current ? 0 : -inputX * 0.03 + cameraRollShakeRef.current;
+      const targetYaw = isScopedRef.current
+        ? -playerPosRef.current.x * 0.018 - aimPosRef.current.x * 0.65
+        : -playerPosRef.current.x * 0.018 - aimPosRef.current.x * 0.08;
+      const targetPitch = isScopedRef.current
+        ? aimPosRef.current.y * 0.45
+        : aimPosRef.current.y * 0.07 + Math.abs(cameraRollShakeRef.current) * 0.25;
+      camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 16, delta);
+      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, 22, delta);
+      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, 22, delta);
+      camera.updateMatrixWorld();
+
+      // Continuous fire while holding Shoot (runs AFTER camera & aimPosRef update so every shot uses fresh current-frame matrices!)
+      if (isPointerDownRef.current) {
+        executeShot();
+      }
 
       if (cameraShakeRef.current > 0.005) {
         cameraShakeRef.current *= 0.87;
@@ -3865,11 +3804,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
             if (!refCell.hasCried) {
               refCell.hasCried = true;
-              const helpMsg = sounds.speakCellHelpCry(organThemeRef.current.id, refCell.isPlatelet);
-              setCellDistressBanner(helpMsg);
+              sounds.speakCellHelpCry(organThemeRef.current.id, refCell.isPlatelet);
+              // Allied Platelet/Cell Clotting Support: Repairs barricade +18% & heals player +8 HP!
+              if (bar && bar.hp > 0) {
+                bar.hp = Math.min(bar.maxHp, bar.hp + 18);
+                setBarricadeHps(barricadesRef.current.map((b) => Math.max(0, Math.round(b.hp))));
+              }
+              playerHpRef.current = Math.min(100, playerHpRef.current + 8);
+              setPlayerHp(playerHpRef.current);
+              const blueMsg = refCell.isPlatelet
+                ? '💙 ALLIED PLATELET CLOTTING: +18% BUNKER SHIELD & +8 HP!'
+                : '💙 ALLIED CELL RESCUED: +18% BUNKER SHIELD & +8 HP!';
+              setCellDistressBanner(blueMsg);
               setTimeout(() => {
-                setCellDistressBanner((prev) => (prev === helpMsg ? null : prev));
-              }, 3400);
+                setCellDistressBanner((prev) => (prev === blueMsg ? null : prev));
+              }, 3600);
             }
           }
         } else if (refCell.state === 'hiding') {
@@ -4759,11 +4708,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
           const pooledHazard = hazardPool.find((hp) => !hp.inUse) || hazardPool[0];
           pooledHazard.inUse = true;
-          pooledHazard.group.position.set(laneX, -1.65, -8.5);
+          pooledHazard.group.position.set(laneX, -0.75, -8.2);
           pooledHazard.group.visible = true;
           const rMat = pooledHazard.warningRing.material as THREE.MeshBasicMaterial;
           rMat.color.setHex(hazardColorHex);
-          rMat.opacity = 0.85;
+          rMat.opacity = 0.92;
           pooledHazard.plumes.forEach((plume) => {
             const pMat = plume.material as THREE.MeshBasicMaterial;
             pMat.color.setHex(hazardColorHex);
@@ -4818,24 +4767,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
           hz.plumes.forEach((plume, idx) => {
             plume.visible = true;
-            plume.rotation.y += delta * (idx % 2 === 0 ? 4.5 : -4.5);
-            const hScale = 0.85 + Math.sin(elapsed * 12 + idx) * 0.25;
-            plume.scale.set(1, hScale, 1);
+            plume.rotation.y += delta * (idx % 2 === 0 ? 5.5 : -5.5);
+            const hScale = 1.45 + Math.sin(elapsed * 14 + idx) * 0.35;
+            plume.scale.set(1.35, hScale, 1.35);
             (plume.material as THREE.MeshBasicMaterial).opacity = Math.min(
-              0.72,
-              hz.activeTimer * 0.45
+              0.85,
+              hz.activeTimer * 0.55
             );
           });
 
           // Damage & Slow Enemies caught in the active organ hazard lane!
           for (let sIdx = activeSoldiersRef.current.length - 1; sIdx >= 0; sIdx--) {
             const s = activeSoldiersRef.current[sIdx];
-            if (Math.abs(s.mesh.position.x - hz.laneX) <= 1.35 && s.mesh.position.z > -20 && s.mesh.position.z < -2) {
+            if (Math.abs(s.mesh.position.x - hz.laneX) <= 1.55 && s.mesh.position.z > -22 && s.mesh.position.z < -1.5) {
               // Mucus / Acid slows pathogen advance and dissolves their outer capsule
-              s.mesh.position.z -= s.speed * 0.42 * delta;
-              if (nowTime - hz.lastDamageTime >= 650 && !s.isBoss) {
-                s.hp -= 16;
-                s.hitsLeft = Math.max(0.2, s.hitsLeft - 0.35);
+              s.mesh.position.z -= s.speed * 0.55 * delta;
+              if (nowTime - hz.lastDamageTime >= 600 && !s.isBoss) {
+                s.hp -= 28;
+                s.hitsLeft = Math.max(0.15, s.hitsLeft - 0.65);
                 if (s.hpBarFill) {
                   const pct = Math.max(0.01, s.hitsLeft / s.maxHits);
                   s.hpBarFill.scale.x = pct;
@@ -4890,10 +4839,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // Passive Leukocyte Cellular Regeneration when in cover or out of damage for 2.2s (keeps all phases fair & beatable!)
+      // Passive Leukocyte Cellular Regeneration when in cover or out of damage for 2.2s (stepped in 4 HP increments for zero React re-render stutter!)
       if (playerHpRef.current > 0 && playerHpRef.current < 100 && (inCover || elapsed - lastDamageTakenTime > 2.2)) {
         regenAccumulator += delta * (inCover ? 4.8 : 3.0);
-        if (regenAccumulator >= 1.0) {
+        if (regenAccumulator >= 4.0 || playerHpRef.current + regenAccumulator >= 100) {
           const healPts = Math.floor(regenAccumulator);
           regenAccumulator -= healPts;
           playerHpRef.current = Math.min(100, playerHpRef.current + healPts);
@@ -5242,8 +5191,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           );
         }
 
-        // Compute exact 3D point along the true crosshair ray so the laser dot sits 100% under the crosshair!
-        hitVector.set(isScopedRef.current ? 0 : aimPosRef.current.x, isScopedRef.current ? 0 : aimPosRef.current.y);
+        // Compute exact 3D point along the true crosshair/scope ray so the laser dot sits 100% under the reticle!
+        hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
         raycaster.setFromCamera(hitVector, camera);
         _v2.copy(raycaster.ray.direction).multiplyScalar(36).add(camera.position);
 
@@ -5295,8 +5244,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 7. TARGET LOCK RANGEFINDER (Throttled to every 320ms for zero React re-render lag)
-      if (nowTime - lastHudSyncTime >= 320) {
+      // 7. TARGET LOCK RANGEFINDER & MINIMAP RADAR (Throttled to every 650ms for zero React re-render lag)
+      if (nowTime - lastHudSyncTime >= 650) {
         lastHudSyncTime = nowTime;
         const locks: TargetHudLock[] = [];
         const sorted = [...activeSoldiersRef.current]
@@ -5358,9 +5307,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
         if (isReloadingRef.current) {
           const elapsedReload = nowTime - reloadStartTimeRef.current;
           const pct = Math.max(0, Math.min(100, (elapsedReload / Math.max(200, reloadDurationRef.current)) * 100));
+          const prevStepped = Math.floor(reloadProgressRef.current / 20) * 20;
+          const nextStepped = Math.floor(pct / 20) * 20;
           reloadProgressRef.current = pct;
-          if (Math.floor(elapsed * 60) % 2 === 0) {
-            setReloadProgress(Math.round(pct));
+          if (nextStepped !== prevStepped) {
+            setReloadProgress(nextStepped);
             setReloadStageLabel(
               pct < 44
                 ? '1/3 EJECTING MAG'
@@ -5393,31 +5344,49 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         const scopedNow = isScopedRef.current && !isReloadingRef.current && currentWeaponRef.current.category !== 'SHOTGUN';
 
+        // Keep 3D weapon ALWAYS VISIBLE in both Hipfire and ADS Scope!
+        weaponMeshRef.current.visible = true;
+
+        const breathBobX = Math.cos(elapsed * 1.8) * (scopedNow ? 0.002 : 0.004);
+        const breathBobY = Math.sin(elapsed * 2.6) * (scopedNow ? 0.003 : 0.006);
+
+        const aimX = aimPosRef.current.x;
+        const aimY = aimPosRef.current.y;
+
+        // Compute exact 3D convergence point in camera space at distance D = 15 so barrel aims straight at the reticle
+        const halfTanFov = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+        const aimDist = 15.0;
+        const aimCamX = aimX * aimDist * halfTanFov * camera.aspect;
+        const aimCamY = aimY * aimDist * halfTanFov;
+        const aimCamZ = -aimDist;
+
+        let targetX = 0;
+        let targetY = 0;
+        let targetZ = 0;
+        let targetRotX = 0;
+        let targetRotY = 0;
+        let targetRotZ = 0;
+
         if (scopedNow) {
-          // In Black Ops ADS, hide the 3D gun mesh so no weapon receiver or slide clips into the camera/glass as a black box!
-          weaponMeshRef.current.visible = false;
+          // AUTHENTIC 3D BLACK OPS ADS: Weapon is locked right at eye level!
+          // 3D Black Ops scope on the top rail (local y = 0.23) aligns at -0.23 + 0.23 = 0.0 (DEAD CENTER of screen!)
+          const baseAdY = -0.23;
+          targetX = breathBobX * 0.25;
+          targetY = baseAdY + breathBobY * 0.25 + reloadOffsetY;
+          targetZ = -0.54 + recoilRef.current.z * 1.4 + reloadOffsetZ;
+
+          targetRotX = 0.01 - recoilRef.current.rotX * 1.2 + reloadRotX;
+          targetRotY = (isReloadingRef.current ? 0.22 : 0);
+          targetRotZ = reloadRotZ;
         } else {
-          weaponMeshRef.current.visible = true;
-          // Smooth 3D Weapon Aim Tracking: translate and rotate the rifle & hands toward the exact 3D crosshair aim point!
-          const breathBobX = Math.cos(elapsed * 1.8) * 0.004;
-          const breathBobY = Math.sin(elapsed * 2.6) * 0.006;
+          // Hipfire stance: Held down-right with natural operator sway
           const baseWpnX = 0.34;
           const baseWpnY = -0.33 + reloadOffsetY;
           const baseWpnZ = -0.82 + reloadOffsetZ;
 
-          const aimX = aimPosRef.current.x;
-          const aimY = aimPosRef.current.y;
-
-          const targetX = baseWpnX - inputX * 0.06 + aimX * 0.24 + breathBobX;
-          const targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimY * 0.18 + breathBobY;
-          const targetZ = baseWpnZ + recoilRef.current.z - (Math.abs(aimX) + Math.abs(aimY)) * 0.04;
-
-          // Compute exact 3D convergence point in camera space at distance D = 15 so the barrel aims straight at the crosshair
-          const halfTanFov = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
-          const aimDist = 15.0;
-          const aimCamX = aimX * aimDist * halfTanFov * camera.aspect;
-          const aimCamY = aimY * aimDist * halfTanFov;
-          const aimCamZ = -aimDist;
+          targetX = baseWpnX - inputX * 0.06 + aimX * 0.24 + breathBobX;
+          targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimY * 0.18 + breathBobY;
+          targetZ = baseWpnZ + recoilRef.current.z - (Math.abs(aimX) + Math.abs(aimY)) * 0.04;
 
           const dx = aimCamX - targetX;
           const dy = aimCamY - targetY;
@@ -5425,17 +5394,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const aimYaw = THREE.MathUtils.clamp(Math.atan2(-dx, -dz), -0.68, 0.68);
           const aimPitch = THREE.MathUtils.clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.52, 0.52);
 
-          const targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX;
-          const targetRotY = aimYaw + (isReloadingRef.current ? 0.22 : 0);
-          const targetRotZ = -aimX * 0.14 + inputX * 0.09 + reloadRotZ;
-
-          weaponMeshRef.current.position.x = THREE.MathUtils.damp(weaponMeshRef.current.position.x, targetX, 22, delta);
-          weaponMeshRef.current.position.y = THREE.MathUtils.damp(weaponMeshRef.current.position.y, targetY, 22, delta);
-          weaponMeshRef.current.position.z = THREE.MathUtils.damp(weaponMeshRef.current.position.z, targetZ, 22, delta);
-          weaponMeshRef.current.rotation.x = THREE.MathUtils.damp(weaponMeshRef.current.rotation.x, targetRotX, 22, delta);
-          weaponMeshRef.current.rotation.y = THREE.MathUtils.damp(weaponMeshRef.current.rotation.y, targetRotY, 22, delta);
-          weaponMeshRef.current.rotation.z = THREE.MathUtils.damp(weaponMeshRef.current.rotation.z, targetRotZ, 18, delta);
+          targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX;
+          targetRotY = aimYaw + (isReloadingRef.current ? 0.22 : 0);
+          targetRotZ = -aimX * 0.14 + inputX * 0.09 + reloadRotZ;
         }
+
+        const dampSpeed = scopedNow ? 26 : 22;
+        weaponMeshRef.current.position.x = THREE.MathUtils.damp(weaponMeshRef.current.position.x, targetX, dampSpeed, delta);
+        weaponMeshRef.current.position.y = THREE.MathUtils.damp(weaponMeshRef.current.position.y, targetY, dampSpeed, delta);
+        weaponMeshRef.current.position.z = THREE.MathUtils.damp(weaponMeshRef.current.position.z, targetZ, dampSpeed, delta);
+        weaponMeshRef.current.rotation.x = THREE.MathUtils.damp(weaponMeshRef.current.rotation.x, targetRotX, dampSpeed, delta);
+        weaponMeshRef.current.rotation.y = THREE.MathUtils.damp(weaponMeshRef.current.rotation.y, targetRotY, dampSpeed, delta);
+        weaponMeshRef.current.rotation.z = THREE.MathUtils.damp(weaponMeshRef.current.rotation.z, targetRotZ, 18, delta);
       }
 
       if (muzzleFlashRef.current && muzzleFlashRef.current.intensity > 0) {
@@ -5452,15 +5422,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
       animationFrameId = requestAnimationFrame(animate);
     }
 
-    // Frame-0 GPU Buffer & Material Warm-Up for pooled Boss, Aircraft & Rocket meshes so zero GPU upload stall occurs when the Boss spawns at 38s!
+    // Frame-0 GPU Buffer & Material Warm-Up for ALL pooled Enemies, Weapons, Bosses, Aircraft & Projectiles (Zero mid-combat shader compilation stalls!)
     {
       const warmupMeshes: Array<{ obj: THREE.Object3D; prevVis: boolean; prevPos: THREE.Vector3 }> = [];
-      const registerWarmup = (obj?: THREE.Object3D) => {
+      const registerWarmup = (obj?: THREE.Object3D, moveInFront = true) => {
         if (!obj) return;
         warmupMeshes.push({ obj, prevVis: obj.visible, prevPos: obj.position.clone() });
         obj.visible = true;
-        obj.position.set(0, 0, -28);
+        if (moveInFront) obj.position.set(0, 0, -28);
       };
+      Object.values(prebuiltWeaponsRef.current).forEach((w) => registerWarmup(w.group, false));
+      enemyPool.forEach((slot) => {
+        registerWarmup(slot.group);
+        registerWarmup(slot.parachuteGroup, false);
+      });
+      refugeePoolRef.current.forEach((r) => registerWarmup(r.mesh));
       registerWarmup(prebuiltBosses.helicopter?.group);
       registerWarmup(prebuiltBosses.robot?.group);
       registerWarmup(prebuiltBosses.jet?.group);
@@ -5475,6 +5451,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
       registerWarmup(enemyBulletPool[0]);
       registerWarmup(tankShellPool[0]);
       registerWarmup(debrisMeshPool[0]);
+      registerWarmup(playerTracerPool[0]);
+      registerWarmup(shellMeshPool[0]);
+      renderer.compile(scene, camera);
       renderer.render(scene, camera);
       for (const item of warmupMeshes) {
         item.obj.visible = item.prevVis;
@@ -5531,262 +5510,183 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }`}
       />
 
-      {/* Subtle Vignette */}
-      <div className={`absolute inset-0 hud-vignette pointer-events-none z-10 ${playerHp < 35 ? 'danger-vignette' : ''}`} />
-      {operatorMood === 'hit' && <div className="absolute inset-0 visor-damage z-10 animate-pulse" />}
+      {/* Clean Subtle Tactical Vignette (No red alerts or view-obscuring overlays) */}
+      <div className="absolute inset-0 hud-vignette pointer-events-none z-10" />
 
-      {/* SUBTLE EDGE-ONLY DIRECTIONAL DAMAGE PULSE (Never blocks center view) */}
-      {damageIndicators.length > 0 && (
-        <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
-          {damageIndicators.map((ind) => {
-            const hpDangerRatio = Math.max(0, (100 - playerHp) / 100);
-            const alpha = Math.min(0.85, ind.intensity * (0.5 + hpDangerRatio * 0.35));
-            return (
-              <div
-                key={ind.id}
-                className="absolute inset-0 transition-opacity duration-300"
-                style={{
-                  opacity: alpha * 0.65,
-                  background:
-                    ind.sector === 'left'
-                      ? `radial-gradient(ellipse at 0% 50%, rgba(239, 68, 68, ${alpha * 0.5}) 0%, transparent 55%)`
-                      : ind.sector === 'right'
-                      ? `radial-gradient(ellipse at 100% 50%, rgba(239, 68, 68, ${alpha * 0.5}) 0%, transparent 55%)`
-                      : `radial-gradient(ellipse at 50% 0%, rgba(239, 68, 68, ${alpha * 0.5}) 0%, transparent 55%)`,
-                }}
-              />
-            );
-          })}
-        </div>
-      )}
-
-      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (PRE-MOUNTED IN DOM SO SCOPE ASSET APPEARS INSTANTLY ON FIRST TIME!) */}
+      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (ATTACHED TO WEAPON & TRACKS AIM RIGHT/LEFT/UP/DOWN) */}
       <div
-        className={`fixed inset-0 pointer-events-none z-30 select-none overflow-hidden transition-opacity duration-100 ${
-          isScoped ? 'opacity-100 visible animate-ads-snap' : 'opacity-0 invisible'
+        className={`fixed inset-0 pointer-events-none z-30 select-none overflow-hidden transition-opacity duration-150 ${
+          isScoped && !isReloading ? 'opacity-100 visible' : 'opacity-0 invisible pointer-events-none'
         }`}
       >
-          {/* Tactical Peripheral Tunnel Vignette - pulls focus cleanly through the optical glass */}
+          {/* Tactical Peripheral Tunnel Vignette Centered in Viewport */}
           <div
             className="absolute inset-0 pointer-events-none"
             style={{
-              background: 'radial-gradient(circle 38vh at 50% 50%, transparent 40%, rgba(0,0,0,0.4) 68%, rgba(0,0,0,0.85) 100%)',
+              background: 'radial-gradient(circle 42vh at 50% 50%, transparent 35%, rgba(0,0,0,0.48) 65%, rgba(0,0,0,0.88) 100%)',
             }}
           />
 
-          {/* Weapon Rail & Receiver Anchor extending to bottom of viewport */}
-          <div className="absolute inset-x-0 bottom-0 flex flex-col items-center justify-end pointer-events-none">
-            {/* Optic Sight Frame matching IMG_5388 reference */}
-            <div className="relative h-[72vh] sm:h-[82vh] max-h-[720px] aspect-[920/965] flex items-center justify-center">
-              <img
-                src="/assets/scope_optic_clean.png"
-                alt="Tactical Optic Scope"
-                loading="eager"
-                decoding="sync"
-                className="w-full h-full object-contain filter drop-shadow-[0_12px_32px_rgba(0,0,0,0.9)] pointer-events-none"
-                draggable={false}
-              />
-
-              {/* Circular Reflex Optical Lens Glass */}
-              <div
-                className="absolute rounded-full pointer-events-none"
-                style={{
-                  top: '19.5%',
-                  left: '20.5%',
-                  width: '59%',
-                  height: '56%',
-                  background: 'radial-gradient(circle at 35% 35%, rgba(255,255,255,0.06) 0%, rgba(245,158,11,0.02) 40%, rgba(6,182,212,0.05) 80%, rgba(0,0,0,0.12) 100%)',
-                  boxShadow: 'inset 0 0 18px rgba(0,0,0,0.6), inset 0 0 6px rgba(245,158,11,0.15)',
-                }}
+          {/* AUTHENTIC 3D BLACK OPS SCOPE HUD BARS (LOCKED DIRECTLY AROUND SCOPE — 100% VISIBLE ON PHONE) */}
+          <div
+            ref={scopeReticleDomRef}
+            className="absolute -translate-x-1/2 -translate-y-1/2 w-[38vh] h-[38vh] max-w-[62vw] max-h-[62vw] sm:w-[52vh] sm:h-[52vh] sm:max-w-[84vw] sm:max-h-[84vw] flex items-center justify-center pointer-events-none will-change-transform"
+            style={{ left: '50%', top: '50%' }}
+          >
+              {/* CURVED PERIMETER HUD ARCS HUGGING 3D SCOPE RING (LEFT: HEALTH, RIGHT: AMMO) */}
+              <svg
+                viewBox="0 0 200 200"
+                className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
               >
-                {/* Subtle Anti-Reflective Lens Glare Slant */}
-                <div
-                  className="absolute inset-0 rounded-full pointer-events-none opacity-40"
+                {/* Left Curved Health Track (135° to 225°) */}
+                <path
+                  d="M 38 162 A 88 88 0 0 1 38 38"
+                  fill="none"
+                  stroke="rgba(15, 23, 42, 0.95)"
+                  strokeWidth="8"
+                  strokeLinecap="round"
+                />
+                {/* Left Curved Health Fill Arc */}
+                <path
+                  d="M 38 162 A 88 88 0 0 1 38 38"
+                  fill="none"
+                  stroke={playerHp < 35 ? '#f43f5e' : playerHp < 65 ? '#f59e0b' : '#22c55e'}
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray="145"
+                  strokeDashoffset={145 - (145 * Math.max(0, Math.min(100, playerHp))) / 100}
                   style={{
-                    background: 'linear-gradient(135deg, rgba(255,255,255,0.15) 0%, transparent 42%, rgba(245,158,11,0.08) 55%, transparent 100%)',
+                    filter:
+                      playerHp < 35
+                        ? 'drop-shadow(0 0 8px rgba(244,63,94,0.95))'
+                        : 'drop-shadow(0 0 6px rgba(34,197,94,0.85))',
+                    transition: 'stroke-dashoffset 150ms ease-out, stroke 150ms ease-out',
                   }}
                 />
 
-                {/* CURVED PERIMETER HUD ARCS ROUNDING LEFT & RIGHT LENS EDGES */}
-                <svg
-                  viewBox="0 0 200 200"
-                  className="absolute -inset-[6%] w-[112%] h-[112%] pointer-events-none overflow-visible"
-                >
-                  {/* Left Curved Health Track (135° to 225°) */}
-                  <path
-                    d="M 35 165 A 92 92 0 0 1 35 35"
-                    fill="none"
-                    stroke="rgba(24, 24, 27, 0.85)"
-                    strokeWidth="7"
-                    strokeLinecap="round"
-                  />
-                  {/* Left Curved Health Fill Arc */}
-                  <path
-                    d="M 35 165 A 92 92 0 0 1 35 35"
-                    fill="none"
-                    stroke={playerHp < 35 ? '#f43f5e' : playerHp < 65 ? '#f59e0b' : '#10b981'}
-                    strokeWidth="5"
-                    strokeLinecap="round"
-                    strokeDasharray="145"
-                    strokeDashoffset={145 - (145 * Math.max(0, Math.min(100, playerHp))) / 100}
-                    style={{
-                      filter:
-                        playerHp < 35
-                          ? 'drop-shadow(0 0 8px rgba(244,63,94,0.9))'
-                          : 'drop-shadow(0 0 6px rgba(16,185,129,0.75))',
-                      transition: 'stroke-dashoffset 150ms ease-out, stroke 150ms ease-out',
-                    }}
-                  />
+                {/* Right Curved Magazine / Energy Track (45° to -45°) */}
+                <path
+                  d="M 162 162 A 88 88 0 0 0 162 38"
+                  fill="none"
+                  stroke="rgba(15, 23, 42, 0.95)"
+                  strokeWidth="8"
+                  strokeLinecap="round"
+                />
+                {/* Right Curved Magazine Fill Arc */}
+                <path
+                  d="M 162 162 A 88 88 0 0 0 162 38"
+                  fill="none"
+                  stroke={isReloading ? '#f59e0b' : currentAmmo === 0 ? '#f43f5e' : '#38bdf8'}
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray="145"
+                  strokeDashoffset={
+                    145 -
+                    (145 *
+                      Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          isReloading
+                            ? reloadProgress / 100
+                            : currentAmmo / Math.max(1, currentWeapon.magSize)
+                        )
+                      ))
+                  }
+                  style={{
+                    filter: 'drop-shadow(0 0 6px rgba(56,189,248,0.85))',
+                    transition: 'stroke-dashoffset 120ms ease-out',
+                  }}
+                />
+              </svg>
 
-                  {/* Right Curved Magazine / Ability Energy Track (45° to -45°) */}
-                  <path
-                    d="M 165 165 A 92 92 0 0 0 165 35"
-                    fill="none"
-                    stroke="rgba(24, 24, 27, 0.85)"
-                    strokeWidth="7"
-                    strokeLinecap="round"
-                  />
-                  {/* Right Curved Magazine Fill Arc */}
-                  <path
-                    d="M 165 165 A 92 92 0 0 0 165 35"
-                    fill="none"
-                    stroke={isReloading ? '#f59e0b' : currentAmmo === 0 ? '#f43f5e' : '#22d3ee'}
-                    strokeWidth="5"
-                    strokeLinecap="round"
-                    strokeDasharray="145"
-                    strokeDashoffset={
-                      145 -
-                      (145 *
-                        Math.max(
-                          0,
-                          Math.min(
-                            1,
-                            isReloading
-                              ? reloadProgress / 100
-                              : currentAmmo / Math.max(1, currentWeapon.magSize)
-                          )
-                        ))
-                    }
-                    style={{
-                      filter: 'drop-shadow(0 0 6px rgba(34,211,238,0.75))',
-                      transition: 'stroke-dashoffset 120ms ease-out',
-                    }}
-                  />
-                </svg>
-
-                {/* LEFT ROUNDED SCOPE TELEMETRY: HEALTH & COVER STATUS */}
-                <div className="absolute top-1/2 -left-3 sm:-left-6 -translate-x-full -translate-y-1/2 flex flex-col items-end gap-1.5 pointer-events-none font-mono">
-                  <div className="px-2 py-1 bg-zinc-950/90 border-r-2 border-emerald-400 border-y border-l border-emerald-500/30 rounded-l-xl shadow-[0_0_14px_rgba(0,0,0,0.85)] flex flex-col items-end">
-                    <span className="text-[8px] tracking-widest text-zinc-400 uppercase">VITALITY</span>
-                    <div className="flex items-center gap-1">
-                      <Shield className={`w-3.5 h-3.5 ${playerHp < 35 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`} />
-                      <span className={`text-xs sm:text-sm font-black tabular-nums ${playerHp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
-                        {playerHp}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className={`px-2 py-0.5 bg-zinc-950/90 border-r-2 rounded-l-lg text-[9px] font-bold tracking-wider uppercase shadow-md ${
-                    isPlayerInCover ? 'border-cyan-400 text-cyan-300' : 'border-amber-500/70 text-amber-400'
-                  }`}>
-                    {isPlayerInCover ? `BUNKER ${activeCoverHp}%` : 'EXPOSED'}
-                  </div>
-                </div>
-
-                {/* RIGHT ROUNDED SCOPE TELEMETRY: ABILITIES & AMMO ARC */}
-                <div className={`absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono ${isScoped ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-                  {/* Top of Right Curve: Live Ammo Badge */}
-                  <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
-                    <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
-                    <span className={`text-xs font-black tabular-nums ${currentAmmo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
-                      {isReloading ? `${reloadProgress}%` : `${currentAmmo}/${reserveAmmo}`}
+              {/* LEFT HUD TELEMETRY: HEALTH & SHIELD (LOCKED TO LEFT ARC OF SCOPE — MOBILE OPTIMIZED) */}
+              <div className="absolute top-1/2 -left-1 sm:-left-3 -translate-x-full -translate-y-1/2 flex flex-col items-end gap-1 pointer-events-none font-mono z-30">
+                <div className="px-1.5 py-0.5 sm:px-2 sm:py-1 bg-zinc-950/95 border-r-2 border-emerald-400 border-y border-l border-emerald-500/40 rounded-l-lg shadow-[0_0_14px_rgba(0,0,0,0.9)] flex flex-col items-end">
+                  <span className="text-[6.5px] sm:text-[8px] tracking-widest text-zinc-400 uppercase leading-none">HP</span>
+                  <div className="flex items-center gap-1">
+                    <Heart className={`w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 ${playerHp < 35 ? 'text-rose-500 fill-rose-500 animate-pulse' : 'text-emerald-400 fill-emerald-400'}`} />
+                    <span className={`text-[11px] sm:text-sm font-black tabular-nums ${playerHp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
+                      {playerHp}%
                     </span>
                   </div>
-
-                  {/* Upper-Mid Right Curve: STIM [E] */}
-                  <button
-                    onClick={() => {
-                      sounds.unlockAudio();
-                      sounds.triggerHaptic([20, 30, 20], 'medium');
-                      handleStimpack();
-                    }}
-                    disabled={stimCooldown > 0 || playerHp >= 100}
-                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
-                      stimCooldown === 0 && playerHp < 100
-                        ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300 cursor-pointer hover:bg-emerald-900'
-                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <Zap className="w-3 h-3 text-emerald-400 shrink-0" />
-                    <span>STIM {stimCooldown > 0 ? `${stimCooldown}S` : '[E]'}</span>
-                  </button>
-
-                  {/* Lower-Mid Right Curve: FRAG [G] */}
-                  <button
-                    onClick={() => {
-                      sounds.unlockAudio();
-                      sounds.triggerHaptic([25, 20], 'medium');
-                      handleThrowGrenade();
-                    }}
-                    disabled={grenadeCooldown > 0}
-                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
-                      grenadeCooldown === 0
-                        ? 'bg-amber-950/90 border-amber-400 text-amber-300 cursor-pointer hover:bg-amber-900'
-                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <Bomb className="w-3 h-3 text-amber-400 shrink-0" />
-                    <span>FRAG {grenadeCooldown > 0 ? `${grenadeCooldown}S` : '[G]'}</span>
-                  </button>
-
-                  {/* Bottom of Right Curve: AIRDROP [T] */}
-                  <button
-                    onClick={() => {
-                      sounds.unlockAudio();
-                      sounds.triggerHaptic([35, 25, 45], 'heavy');
-                      handleAirdropReinforcements();
-                    }}
-                    disabled={reinforceCooldown > 0 || isAirdropActive}
-                    className={`-ml-2 px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
-                      reinforceCooldown === 0 && !isAirdropActive
-                        ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300 cursor-pointer hover:bg-cyan-900'
-                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <Plane className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>{isAirdropActive ? 'ACTIVE' : reinforceCooldown > 0 ? `AIR ${reinforceCooldown}S` : 'AIR [T]'}</span>
-                  </button>
                 </div>
-
-                {/* Luminous Holographic Laser Reticle System */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  {/* Center Glowing Dot */}
-                  <div className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_10px_#f59e0b,0_0_4px_#ffffff] flex items-center justify-center">
-                    <div className="w-0.5 h-0.5 rounded-full bg-white" />
-                  </div>
-
-                  {/* Left Chevron >> */}
-                  <div className="absolute left-[24%] flex items-center text-amber-500/90 text-xs font-black tracking-tighter drop-shadow-[0_0_6px_rgba(245,158,11,0.8)]">
-                    &gt;&gt;
-                  </div>
-
-                  {/* Right Chevron << */}
-                  <div className="absolute right-[24%] flex items-center text-amber-500/90 text-xs font-black tracking-tighter drop-shadow-[0_0_6px_rgba(245,158,11,0.8)]">
-                    &lt;&lt;
-                  </div>
-
-                  {/* Reticle Range Brackets [ . ] */}
-                  <div className="absolute flex items-center justify-center gap-6 pointer-events-none">
-                    <div className="w-2 h-3 border-l-2 border-t-2 border-amber-400/80 shadow-[0_0_4px_#f59e0b]" />
-                    <div className="w-2 h-3 border-r-2 border-t-2 border-amber-400/80 shadow-[0_0_4px_#f59e0b]" />
-                  </div>
+                <div className={`px-1.5 py-0.5 bg-zinc-950/95 border-r-2 rounded-l-md text-[7px] sm:text-[9px] font-bold tracking-wider uppercase shadow-md whitespace-nowrap ${
+                  isPlayerInCover ? 'border-cyan-400 text-cyan-300' : 'border-amber-500/80 text-amber-300'
+                }`}>
+                  {isPlayerInCover ? `SHIELD ${activeCoverHp}%` : 'EXPOSED'}
                 </div>
               </div>
 
-              {/* Tactical HUD Telemetry Badge under the lens */}
-              <div className="absolute bottom-[14%] left-1/2 -translate-x-1/2 px-3 py-0.5 bg-zinc-950/90 border border-amber-500/40 text-[9px] font-mono tracking-widest text-amber-400 uppercase whitespace-nowrap shadow-md">
-                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC // LOCK: ACTIVE' : 'HOLO REFLEX SIGHT // HEADSHOT 3X'}
+              {/* RIGHT HUD TELEMETRY: AMMO, STIM, FRAG, AIRDROP (LOCKED TO RIGHT ARC OF SCOPE — MOBILE OPTIMIZED) */}
+              <div className={`absolute top-1/2 -right-1 sm:-right-3 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono z-30 ${isScoped && !isReloading ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+                {/* Live Ammo Badge */}
+                <div className="px-1.5 sm:px-2.5 py-0.5 bg-zinc-950/95 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1">
+                  <span className="text-[7px] sm:text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
+                  <span className={`text-[10px] sm:text-xs font-black tabular-nums ${currentAmmo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
+                    {isReloading ? `${reloadProgress}%` : `${currentAmmo}/${reserveAmmo}`}
+                  </span>
+                </div>
+
+                {/* STIM [E] (Bio-Stim Heal) */}
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic([20, 30, 20], 'medium');
+                    handleStimpack();
+                  }}
+                  disabled={stimCooldown > 0 || playerHp >= 100}
+                  className={`px-1.5 sm:px-2.5 py-0.5 rounded-r-lg border-l-2 text-[7.5px] sm:text-[9px] font-black uppercase tracking-wide sm:tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                    stimCooldown === 0 && playerHp < 100
+                      ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300 cursor-pointer hover:bg-emerald-900'
+                      : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Zap className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-emerald-400 shrink-0" />
+                  <span>STIM {stimCooldown > 0 ? `${stimCooldown}S` : '[E]'}</span>
+                </button>
+
+                {/* FRAG [G] (Bio-Cluster Frag Grenade) */}
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic([25, 20], 'medium');
+                    handleThrowGrenade();
+                  }}
+                  disabled={grenadeCooldown > 0}
+                  className={`px-1.5 sm:px-2.5 py-0.5 rounded-r-lg border-l-2 text-[7.5px] sm:text-[9px] font-black uppercase tracking-wide sm:tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                    grenadeCooldown === 0
+                      ? 'bg-amber-950/90 border-amber-400 text-amber-300 cursor-pointer hover:bg-amber-900'
+                      : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Bomb className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-amber-400 shrink-0" />
+                  <span>FRAG {grenadeCooldown > 0 ? `${grenadeCooldown}S` : '[G]'}</span>
+                </button>
+
+                {/* AIRDROP [T] (Allied Leukocyte Reinforcements) */}
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic([35, 25, 45], 'heavy');
+                    handleAirdropReinforcements();
+                  }}
+                  disabled={reinforceCooldown > 0 || isAirdropActive}
+                  className={`px-1.5 sm:px-2.5 py-0.5 rounded-r-lg border-l-2 text-[7.5px] sm:text-[9px] font-black uppercase tracking-wide sm:tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                    reinforceCooldown === 0 && !isAirdropActive
+                      ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300 cursor-pointer hover:bg-cyan-900'
+                      : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Plane className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-cyan-400 shrink-0" />
+                  <span>{isAirdropActive ? 'ACT' : reinforceCooldown > 0 ? `${reinforceCooldown}S` : 'AIR [T]'}</span>
+                </button>
               </div>
-            </div>
+
+              {/* Tactical HUD Telemetry Badge directly below the 3D Scope */}
+              <div className="absolute -bottom-5 sm:-bottom-6 left-1/2 -translate-x-1/2 px-2 sm:px-3 py-0.5 bg-zinc-950/95 border border-amber-500/40 text-[7.5px] sm:text-[9px] font-mono tracking-widest text-amber-400 uppercase whitespace-nowrap shadow-md">
+                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC' : '3D BLACK OPS REFLEX'}
+              </div>
           </div>
       </div>
 
@@ -5988,19 +5888,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
               </div>
             )}
 
-            {(hazardAlert || bleriotAlert || enemyAirdropAlert || damageIndicators.length > 0) && (
-              <div className="bg-rose-950/90 border border-rose-400 rounded-md px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black tracking-wider uppercase text-rose-200 shadow-lg max-w-full truncate">
-                {hazardAlert
-                  ? hazardAlert
-                  : bleriotAlert
-                  ? bleriotAlert
-                  : enemyAirdropAlert
-                  ? enemyAirdropAlert
-                  : (() => {
-                      const latest = damageIndicators[damageIndicators.length - 1];
-                      const dirArrow = latest.sector === 'left' ? '◀ LEFT' : latest.sector === 'right' ? 'RIGHT ▶' : '▲ FRONT';
-                      return `ALERT [${dirArrow}]: ${latest.sourceType} FIRE — MOVE TO COVER!`;
-                    })()}
+            {(hazardAlert || bleriotAlert || enemyAirdropAlert) && (
+              <div className="bg-amber-950/95 border-2 border-amber-400 rounded-md px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black tracking-wider uppercase text-amber-100 shadow-[0_4px_14px_rgba(245,158,11,0.45)] max-w-full truncate">
+                {hazardAlert || bleriotAlert || enemyAirdropAlert}
+              </div>
+            )}
+
+            {(cellDistressBanner || organRadioComm) && (
+              <div className="bg-sky-950/95 border-2 border-sky-400 rounded-md px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black tracking-wider uppercase text-sky-100 shadow-[0_4px_14px_rgba(56,189,248,0.45)] max-w-full truncate">
+                {cellDistressBanner
+                  ? cellDistressBanner
+                  : organRadioComm
+                  ? `🔵 ${organRadioComm.callsign}: ${organRadioComm.message}`
+                  : ''}
               </div>
             )}
           </div>

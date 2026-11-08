@@ -34,6 +34,7 @@ import {
   createCiliaTreeModel,
   createVesicularCrateModel,
   createTracheaCartilageBarricadeModel,
+  createC4SatchelModel,
   disposeSceneGraph
 } from './CellModels';
 
@@ -74,6 +75,21 @@ interface SpyTarget {
   radarDish?: THREE.Group;
   turret?: THREE.Group;
   barrel?: THREE.Mesh;
+  npcRole?: 'STATIC' | 'TALKER' | 'PATROL' | 'DOOR_GUARD';
+  patrolMinX?: number;
+  patrolMaxX?: number;
+  patrolMinZ?: number;
+  patrolMaxZ?: number;
+  patrolDir?: number;
+  patrolPauseTimer?: number;
+  guardDoorId?: string;
+  guardLine?: string;
+  c4Planted?: boolean;
+  c4Timer?: number;
+  c4LastBeepSec?: number;
+  c4Mesh?: THREE.Group;
+  c4Led?: THREE.Mesh;
+  fireGroup?: THREE.Group;
 }
 
 interface BioDoor {
@@ -404,6 +420,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     scene.fog = new THREE.FogExp2(0xffb8aa, 0.007);
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 220);
+    camera.rotation.order = 'YXZ';
     camera.position.set(0, 0, 14);
 
     const renderer = new THREE.WebGLRenderer({ antialias: window.innerWidth >= 900, powerPreference: 'high-performance' });
@@ -657,6 +674,59 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     // =========================================================================
     const targets: SpyTarget[] = [];
 
+    // Shared pre-allocated 3D fire & smoke materials/geometries for C4 sabotage (Zero runtime allocations!)
+    const flameOuterMat = new THREE.MeshBasicMaterial({ color: 0xff4500, transparent: true, opacity: 0.88 });
+    const flameMidMat = new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.92 });
+    const flameCoreMat = new THREE.MeshBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.95 });
+    const smokePuffMat = new THREE.MeshBasicMaterial({ color: 0x1e293b, transparent: true, opacity: 0.55 });
+    const flameConeGeo = new THREE.ConeGeometry(0.55, 1.85, 7);
+    const smokeSphereGeo = new THREE.SphereGeometry(0.48, 7, 7);
+
+    const attachSabotageRig = (
+      parentGroup: THREE.Group,
+      c4LocalPos: [number, number, number],
+      fireLocalY: number,
+      fireScale = 1.0
+    ) => {
+      const c4 = createC4SatchelModel();
+      c4.group.position.set(c4LocalPos[0], c4LocalPos[1], c4LocalPos[2]);
+      c4.group.scale.setScalar(1.15);
+      c4.group.visible = false;
+      parentGroup.add(c4.group);
+
+      const fireGroup = new THREE.Group();
+      fireGroup.position.set(0, fireLocalY, 0);
+      fireGroup.scale.setScalar(fireScale);
+      fireGroup.visible = false;
+
+      const flameOffsets: Array<[number, number, number, number, THREE.MeshBasicMaterial]> = [
+        [0, 0.7, 0, 1.25, flameOuterMat],
+        [-0.55, 0.55, 0.35, 0.95, flameMidMat],
+        [0.55, 0.6, -0.3, 1.0, flameMidMat],
+        [0.2, 0.45, 0.5, 0.8, flameCoreMat],
+        [-0.25, 0.5, -0.45, 0.85, flameCoreMat],
+      ];
+      flameOffsets.forEach(([fx, fy, fz, fScale, mat]) => {
+        const cone = new THREE.Mesh(flameConeGeo, mat);
+        cone.position.set(fx, fy, fz);
+        cone.scale.setScalar(fScale);
+        cone.userData.isFlame = true;
+        cone.userData.baseScale = fScale;
+        fireGroup.add(cone);
+      });
+
+      for (let s = 0; s < 3; s++) {
+        const smoke = new THREE.Mesh(smokeSphereGeo, smokePuffMat);
+        smoke.position.set((s - 1) * 0.45, 1.4 + s * 0.65, (s % 2 === 0 ? 0.25 : -0.25));
+        smoke.userData.isSmoke = true;
+        smoke.userData.smokeOffset = s * 0.33;
+        fireGroup.add(smoke);
+      }
+
+      parentGroup.add(fireGroup);
+      return { c4Mesh: c4.group, c4Led: c4.ledMesh, fireGroup };
+    };
+
     // Pathogen Command Bases
     const basePositions = [
       { id: 'base-1', name: 'Pathogen Command Relay Alpha', x: -7.5, z: -54 },
@@ -665,6 +735,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     basePositions.forEach(bp => {
       const bm = createEnemyBioBaseModel();
       bm.group.position.set(bp.x, -2.5, bp.z);
+      const rig = attachSabotageRig(bm.group, [0, 1.4, 2.1], 1.1, 1.45);
       scene.add(bm.group);
       targets.push({
         id: bp.id,
@@ -679,11 +750,16 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         speed: 0,
         shootCooldown: 999,
         coreMesh: bm.coreMesh,
-        radarDish: bm.radarDish
+        radarDish: bm.radarDish,
+        c4Planted: false,
+        c4Timer: 0,
+        c4Mesh: rig.c4Mesh,
+        c4Led: rig.c4Led,
+        fireGroup: rig.fireGroup
       });
     });
 
-    // Armored Bio-Tanks
+    // Armored Bio-Tanks (Desert-Tan & Olive Camo Main Battle Tanks matching IMG_5396)
     const tankPositions = [
       { id: 'tank-1', name: 'Armored Bio-Tank MK-I', x: 5.5, z: -16 },
       { id: 'tank-2', name: 'Siege Bio-Tank MK-II', x: 5.5, z: -84 },
@@ -691,9 +767,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     ];
     tankPositions.forEach(tp => {
       const tm = createBacteriaTank();
-      tm.group.position.set(tp.x, -2.1, tp.z);
+      // Roadwheels bottom is at local y = -0.31; at scale 1.35 -> y = -2.08 rests treads right on floor (-2.5)
+      tm.group.position.set(tp.x, -2.08, tp.z);
       tm.group.scale.setScalar(1.35);
       tm.group.rotation.y = Math.PI;
+      const rig = attachSabotageRig(tm.group, [0, 0.95, 1.65], 0.85, 1.25);
       scene.add(tm.group);
       targets.push({
         id: tp.id,
@@ -707,11 +785,16 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         facingAngle: Math.PI,
         speed: 0.4,
         shootCooldown: 3.2,
-        turret: tm.turret
+        turret: tm.turret,
+        c4Planted: false,
+        c4Timer: 0,
+        c4Mesh: rig.c4Mesh,
+        c4Led: rig.c4Led,
+        fireGroup: rig.fireGroup
       });
     });
 
-    // Pathogen Spore Artillery Batteries (Mortar Cannon Installations)
+    // Pathogen Spore Artillery Batteries (Towed Olive-Drab Field Howitzers matching IMG_5395)
     const artilleryPositions = [
       { id: 'artillery-1', name: 'Pathogen Spore Artillery Alpha', x: -6.5, z: -38 },
       { id: 'artillery-2', name: 'Pathogen Spore Artillery Beta', x: 6.0, z: -102 }
@@ -720,6 +803,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       const art = createBacterialArtilleryModel();
       art.group.position.set(ap.x, -2.5, ap.z);
       art.group.rotation.y = Math.PI;
+      const rig = attachSabotageRig(art.group, [0, 1.35, -0.45], 1.0, 1.2);
       scene.add(art.group);
       targets.push({
         id: ap.id,
@@ -733,11 +817,16 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         facingAngle: Math.PI,
         speed: 0,
         shootCooldown: 4.0,
-        barrel: art.barrel
+        barrel: art.barrel,
+        c4Planted: false,
+        c4Timer: 0,
+        c4Mesh: rig.c4Mesh,
+        c4Led: rig.c4Led,
+        fireGroup: rig.fireGroup
       });
     });
 
-    // Bacterial Generals (Crimson Berets, Gold Epaulets, Officers)
+    // Bacterial Generals (Standing on their boots on the floor y = -2.5; boots at local -1.57 * 1.45 -> y = -0.22)
     const generalPositions = [
       { id: 'gen-1', name: 'General Necrosis (Sector 1 Commander)', x: -2.5, z: -14 },
       { id: 'gen-2', name: 'General Toxoid (Artillery Overseer)', x: 2.5, z: -58 },
@@ -745,7 +834,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     ];
     generalPositions.forEach(gp => {
       const gm = createPathogenGeneralModel();
-      gm.group.position.set(gp.x, -2.5, gp.z);
+      gm.group.position.set(gp.x, -0.22, gp.z);
       gm.group.scale.setScalar(1.45);
       gm.group.rotation.y = Math.PI;
       scene.add(gm.group);
@@ -765,40 +854,45 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         rightLeg: gm.rightLeg,
         leftArm: gm.leftArm,
         rightArm: gm.rightArm,
-        headGroup: gm.headGroup
+        headGroup: gm.headGroup,
+        npcRole: 'PATROL',
+        patrolMinX: gp.x - 2.2,
+        patrolMaxX: gp.x + 2.2,
+        patrolDir: 1,
+        patrolPauseTimer: 0
       });
     });
 
-    // Groups of Bacteria Talking to Each Other (Standing in Circles Facing Inward!)
+    // Groups of Living Bipedal Bacteria Standing on Legs & Talking to Each Other
     const talkingSquadsData = [
       {
         id: 'squad-1',
-        pos: [-3.5, -2.5, -22] as [number, number, number],
+        pos: [-3.5, -0.8, -20.5] as [number, number, number],
         lines: [
-          'General Necrosis ordered extra sentries near the cartilage ring!',
+          'General Necrosis ordered extra sentries near the cartilage valve!',
           'Relax, no leukocyte could sneak past the cilia thicket...',
-          'Keep your flagella down, the mucus current is fast today!'
+          'Keep your flagella steady, the mucus current is strong today!'
         ],
-        offsets: [[-0.8, 0, 0.6], [0.8, 0, 0.6], [0, 0, -0.8]]
+        offsets: [[-0.95, 0, 0.7], [0.95, 0, 0.7], [0, 0, -0.95]]
       },
       {
         id: 'squad-2',
-        pos: [4.5, -2.5, -74] as [number, number, number],
+        pos: [4.5, -0.8, -74] as [number, number, number],
         lines: [
-          'Did you check the spore artillery? All canisters primed!',
-          'I heard an immune siren in the vocal cords...',
-          'Watch the vesicular crates, stay in formation.'
+          'Did you check the heavy field howitzer? All spore shells primed!',
+          'I heard an immune siren echoing down the upper airway...',
+          'Watch the vesicular crates and keep your rifle ready.'
         ],
-        offsets: [[-0.7, 0, 0.5], [0.7, 0, -0.5]]
+        offsets: [[-0.85, 0, 0.6], [0.85, 0, -0.6]]
       },
       {
         id: 'squad-3',
-        pos: [-2.5, -2.5, -116] as [number, number, number],
+        pos: [-2.5, -0.8, -116] as [number, number, number],
         lines: [
           'Supreme General Virulence said the bronchial barrage is ready!',
-          'Keep watch behind the cartilage barrier, no slacking!'
+          'Stay sharp behind the cartilage barrier, no slacking!'
         ],
-        offsets: [[-0.6, 0, 0.5], [0.6, 0, -0.5]]
+        offsets: [[-0.8, 0, 0.6], [0.8, 0, -0.6]]
       }
     ];
 
@@ -808,27 +902,41 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       lines: string[];
       currentLineIndex: number;
       timer: number;
+      chatterCooldown: number;
+      memberIds: string[];
     }> = [];
 
     talkingSquadsData.forEach((sqData, sqIdx) => {
       const sqPos = new THREE.Vector3(...sqData.pos);
+      const memberIds: string[] = [];
       sqData.offsets.forEach((off, mIdx) => {
-        const soldier = mIdx % 2 === 0 ? createBacillusSoldier() : createStreptococcusSoldier();
-        soldier.group.position.set(sqPos.x + off[0], sqPos.y, sqPos.z + off[2]);
-        soldier.group.lookAt(sqPos.x, sqPos.y, sqPos.z);
+        const isBacillus = mIdx % 2 === 0;
+        const soldier = isBacillus ? createBacillusSoldier() : createStreptococcusSoldier();
+        soldier.group.scale.setScalar(1.1);
+        // Boots rest right on floor y = -2.5 (Bacillus boot local -1.57 * 1.1 = -1.73 -> y = -0.77; Strep -1.40 * 1.1 = -1.54 -> y = -0.96)
+        const standingY = isBacillus ? -0.77 : -0.96;
+        soldier.group.position.set(sqPos.x + off[0], standingY, sqPos.z + off[2]);
+        soldier.group.lookAt(sqPos.x, standingY, sqPos.z);
         scene.add(soldier.group);
+        const tid = `talker-${sqIdx}-${mIdx}`;
+        memberIds.push(tid);
         targets.push({
-          id: `talker-${sqIdx}-${mIdx}`,
+          id: tid,
           kind: 'GUARD',
-          name: `Pathogen Sentry (${sqData.id})`,
+          name: `Pathogen Commando (${sqData.id})`,
           mesh: soldier.group,
           hp: 70,
           maxHp: 70,
           sabotaged: false,
           alerted: false,
           facingAngle: soldier.group.rotation.y,
-          speed: 2.2,
-          shootCooldown: 2.5
+          speed: 2.4,
+          shootCooldown: 2.5,
+          leftLeg: soldier.leftLeg,
+          rightLeg: soldier.rightLeg,
+          leftArm: soldier.leftArm,
+          rightArm: soldier.rightArm,
+          npcRole: 'TALKER'
         });
       });
       talkingSquads.push({
@@ -836,28 +944,97 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         pos: sqPos,
         lines: sqData.lines,
         currentLineIndex: 0,
-        timer: sqIdx * 1.5
+        timer: sqIdx * 1.5,
+        chatterCooldown: 1.2 + sqIdx * 0.9,
+        memberIds
       });
     });
 
-    // Lone Patrolling Sentries
+    // NPC Door-Defending Sentries (Walk back and forth guarding the 3 Bio-Security Doors!)
+    const doorGuardConfigs = [
+      {
+        id: 'door-guard-1',
+        doorId: 'door-1',
+        name: 'Valve Gate Defender Alpha',
+        x: -6.5,
+        z: -23.4,
+        minX: -9.6,
+        maxX: -3.4,
+        line: 'Halt! Sector 1 Cartilage Valve is locked—guard the doorway!'
+      },
+      {
+        id: 'door-guard-2',
+        doorId: 'door-2',
+        name: 'Bulkhead Gate Defender Beta',
+        x: 6.5,
+        z: -65.4,
+        minX: 3.4,
+        maxX: 9.6,
+        line: 'Defending Sector 2 Bulkhead! No leukocyte gets through this gate!'
+      },
+      {
+        id: 'door-guard-3',
+        doorId: 'door-3',
+        name: 'Bronchial Gate Warden Omega',
+        x: 0.0,
+        z: -109.4,
+        minX: -3.2,
+        maxX: 3.2,
+        line: 'Bronchial Security Gate sealed! Protect Supreme General Virulence!'
+      }
+    ];
+    doorGuardConfigs.forEach((dg) => {
+      const defender = createBacillusSoldier();
+      defender.group.scale.setScalar(1.18);
+      defender.group.position.set(dg.x, -0.65, dg.z);
+      defender.group.rotation.y = Math.PI * 0.5;
+      scene.add(defender.group);
+      targets.push({
+        id: dg.id,
+        kind: 'GUARD',
+        name: dg.name,
+        mesh: defender.group,
+        hp: 85,
+        maxHp: 85,
+        sabotaged: false,
+        alerted: false,
+        facingAngle: Math.PI * 0.5,
+        speed: 2.9,
+        shootCooldown: 2.2,
+        leftLeg: defender.leftLeg,
+        rightLeg: defender.rightLeg,
+        leftArm: defender.leftArm,
+        rightArm: defender.rightArm,
+        npcRole: 'DOOR_GUARD',
+        patrolMinX: dg.minX,
+        patrolMaxX: dg.maxX,
+        patrolDir: 1,
+        patrolPauseTimer: 0,
+        guardDoorId: dg.doorId,
+        guardLine: dg.line
+      });
+    });
+
+    // Corridor Patrolling NPC Sentries (Walk along airway patrol routes on their legs!)
     const guardPositions = [
-      { x: 3.5, z: -4 },
-      { x: -5.5, z: -42 },
-      { x: 5.0, z: -72 },
-      { x: -3.5, z: -98 },
-      { x: 4.5, z: -120 }
+      { x: 3.5, z: -4, minZ: -11, maxZ: 2 },
+      { x: -5.5, z: -42, minZ: -49, maxZ: -34 },
+      { x: 5.0, z: -72, minZ: -80, maxZ: -64 },
+      { x: -3.5, z: -98, minZ: -105, maxZ: -90 },
+      { x: 4.5, z: -120, minZ: -128, maxZ: -114 }
     ];
     guardPositions.forEach((gp, idx) => {
-      const tr = createBacillusSoldier();
-      tr.group.position.set(gp.x, -2.5, gp.z);
+      const isStrep = idx % 2 === 1;
+      const tr = isStrep ? createStreptococcusSoldier() : createBacillusSoldier();
       tr.group.scale.setScalar(1.15);
+      const standingY = isStrep ? -0.89 : -0.69;
+      tr.group.position.set(gp.x, standingY, gp.z);
       tr.group.rotation.y = Math.PI;
       scene.add(tr.group);
       targets.push({
         id: `guard-${idx}`,
         kind: 'GUARD',
-        name: 'Trachea Sentry',
+        name: isStrep ? 'Streptococcus Patrol Trooper' : 'Bacillus Corridor Sentry',
         mesh: tr.group,
         hp: 75,
         maxHp: 75,
@@ -869,7 +1046,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         leftLeg: tr.leftLeg,
         rightLeg: tr.rightLeg,
         leftArm: tr.leftArm,
-        rightArm: tr.rightArm
+        rightArm: tr.rightArm,
+        npcRole: 'PATROL',
+        patrolMinZ: gp.minZ,
+        patrolMaxZ: gp.maxZ,
+        patrolDir: idx % 2 === 0 ? -1 : 1,
+        patrolPauseTimer: 0
       });
     });
 
@@ -898,9 +1080,9 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       return fallback;
     };
 
-    const sharedParticleGeo = new THREE.SphereGeometry(0.16, 5, 5);
+    const sharedParticleGeo = new THREE.SphereGeometry(0.18, 5, 5);
     const particlePool: THREE.Mesh[] = [];
-    for (let i = 0; i < 36; i++) {
+    for (let i = 0; i < 64; i++) {
       const pm = new THREE.Mesh(sharedParticleGeo, new THREE.MeshBasicMaterial({ color: 0x10b981 }));
       pm.visible = false;
       scene.add(pm);
@@ -957,12 +1139,18 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
 
       const bulletMesh = acquireBulletMesh(0x38bdf8);
 
+      const cameraLookDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      const convergencePoint = camera.position.clone().addScaledVector(cameraLookDir, 35);
       const muzzleWorldPos = new THREE.Vector3();
-      pistolModel.group.getWorldPosition(muzzleWorldPos);
-      muzzleWorldPos.y += 0.08;
+      if (stateRef.current.isScoped) {
+        muzzleWorldPos.copy(camera.position).addScaledVector(cameraLookDir, 0.75);
+      } else {
+        pistolModel.group.getWorldPosition(muzzleWorldPos);
+        muzzleWorldPos.y += 0.08;
+      }
       bulletMesh.position.copy(muzzleWorldPos);
 
-      let shootDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+      let shootDir = convergencePoint.sub(muzzleWorldPos).normalize();
 
       // Soft Auto-Aim Assist toward nearest General or Guard TORSO (helps move closer without auto-headshotting!)
       if (stateRef.current.autoAim) {
@@ -1019,6 +1207,9 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       mouseRef.current.y = Math.max(-1, Math.min(1, ny));
     };
 
+    let aimTouchStartPos: { x: number; y: number; time: number } | null = null;
+    let aimTouchDragged = false;
+
     const handleTouchStart = (e: TouchEvent) => {
       if (isConceptModalOpenRef.current) return;
       if (e.cancelable) e.preventDefault(); // Block mobile OS long-press magnifying glass ("zooming lens")!
@@ -1029,11 +1220,10 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         const clientX = touch.clientX;
         const clientY = touch.clientY;
 
-        // Bottom-left zone (left 48%, bottom 65%) activates the Virtual Movement Joystick!
+        // Left side of phone screen (left 52%) controls the Virtual Movement Joystick WITHOUT shooting!
         if (
           movementTouchIdRef.current === null &&
-          clientX - cachedRect.left < cachedRect.width * 0.48 &&
-          clientY - cachedRect.top > cachedRect.height * 0.35
+          clientX - cachedRect.left < cachedRect.width * 0.52
         ) {
           movementTouchIdRef.current = touch.identifier;
           joystickCenterRef.current = { x: clientX, y: clientY };
@@ -1041,11 +1231,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           sounds.triggerHaptic(8, 0.25);
           setJoystickDisplay({ x: clientX, y: clientY });
         } else if (firingTouchIdRef.current === null) {
-          // Tap fires silenced shot immediately; holding for 3s deploys covert optic!
+          // Right side of phone screen: drag to look/aim smoothly WITHOUT automatically firing!
           firingTouchIdRef.current = touch.identifier;
-          startHoldShootScopeTimer();
+          aimTouchStartPos = { x: clientX, y: clientY, time: performance.now() };
+          aimTouchDragged = false;
           updateAimFromClient(clientX, clientY);
-          triggerShootRef.current = true;
         }
       }
     };
@@ -1069,6 +1259,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
             joystickKnobDomRef.current.style.transform = `translate3d(${clampedX}px, ${clampedY}px, 0)`;
           }
         } else if (touch.identifier === firingTouchIdRef.current) {
+          if (
+            aimTouchStartPos &&
+            Math.hypot(touch.clientX - aimTouchStartPos.x, touch.clientY - aimTouchStartPos.y) > 9
+          ) {
+            aimTouchDragged = true;
+          }
           updateAimFromClient(touch.clientX, touch.clientY);
         }
       }
@@ -1086,7 +1282,17 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           moveInputRef.current.z = 0;
         }
         if (touch.identifier === firingTouchIdRef.current) {
+          // Only fire if it was a deliberate quick stationary tap on the right side (never when moving/dragging to aim!)
+          if (
+            !aimTouchDragged &&
+            aimTouchStartPos &&
+            performance.now() - aimTouchStartPos.time < 190
+          ) {
+            triggerShootRef.current = true;
+          }
           firingTouchIdRef.current = null;
+          aimTouchStartPos = null;
+          aimTouchDragged = false;
           cancelHoldShootScope();
         }
       }
@@ -1343,11 +1549,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         setCoverObjectName(foundCoverName);
       }
 
-      // Camera aim rotation based on mouse / touch aim (smooth frame-rate-independent damping like Fortnite / Black Ops)
-      const targetRotY = -mouseRef.current.x * (stateRef.current.isScoped ? 0.58 : 0.44);
-      const targetRotX = mouseRef.current.y * (stateRef.current.isScoped ? 0.46 : 0.34);
-      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetRotY, 22, dt);
-      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetRotX, 22, dt);
+      // Camera aim rotation based on mouse / touch aim (identical 3D angle in hipfire & scoped so scope aim never deviates!)
+      const targetRotY = -mouseRef.current.x * 0.48;
+      const targetRotX = mouseRef.current.y * 0.36;
+      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetRotY, 24, dt);
+      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetRotX, 24, dt);
 
       // 3D Silenced Pistol Scope-In (ADS), Smooth Crosshair Aim Tracking & Recoil Recovery
       if (stateRef.current.isScoped) {
@@ -1386,7 +1592,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       let closestSabotage: SpyTarget | null = null;
       let closestDist = Infinity;
       for (const t of targets) {
-        if ((t.kind === 'TANK' || t.kind === 'BASE' || t.kind === 'ARTILLERY') && !t.sabotaged && t.hp > 0) {
+        if ((t.kind === 'TANK' || t.kind === 'BASE' || t.kind === 'ARTILLERY') && !t.sabotaged && !t.c4Planted && t.hp > 0) {
           const d = t.mesh.position.distanceTo(camera.position);
           if (d < 14.5 && d < closestDist) {
             closestDist = d;
@@ -1401,7 +1607,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         setNearbySabotageTarget(nextSabotageName);
       }
 
-      // Execute [E] Interact: Open Bio-Security Door OR Plant Bio-Sabotage Charge!
+      // Execute [E] Interact: Open Bio-Security Door OR Plant Timed C4 Charge!
       if (triggerInteractRef.current) {
         triggerInteractRef.current = false;
 
@@ -1411,42 +1617,98 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           sounds.triggerHaptic([14, 25, 22], 0.65);
           sounds.playActiveReloadLock();
           setAlertMessage(`UNLOCKED: ${closestClosedDoor.name} — Take the turn & stay crouched!`);
-        } else if (closestSabotage) {
-          closestSabotage.sabotaged = true;
-          closestSabotage.hp = 0;
-          sounds.playExplosion();
-          _v1.copy(closestSabotage.mesh.position).add(new THREE.Vector3(0, 2, 0));
-          spawnParticles(_v1, 0x10b981, 14);
-
-          if (closestSabotage.kind === 'TANK') {
-            closestSabotage.mesh.rotation.z = 0.35;
-            closestSabotage.mesh.position.y = -2.6;
-            stateRef.current.tanksSabotaged += 1;
-            setTanksSabotaged(stateRef.current.tanksSabotaged);
-            setAlertMessage(`SABOTAGED: ${closestSabotage.name} disabled silently!`);
-          } else if (closestSabotage.kind === 'ARTILLERY') {
-            closestSabotage.mesh.rotation.z = 0.55;
-            closestSabotage.mesh.position.y = -2.7;
-            stateRef.current.artillerySabotaged += 1;
-            setArtillerySabotaged(stateRef.current.artillerySabotaged);
-            setAlertMessage(`SABOTAGED: ${closestSabotage.name} disarmed silently!`);
-          } else if (closestSabotage.kind === 'BASE') {
-            if (closestSabotage.coreMesh) {
-              (closestSabotage.coreMesh.material as THREE.MeshStandardMaterial).color.setHex(0x334155);
-              (closestSabotage.coreMesh.material as THREE.MeshStandardMaterial).emissive.setHex(0x000000);
-            }
-            stateRef.current.basesSabotaged += 1;
-            setBasesSabotaged(stateRef.current.basesSabotaged);
-            setAlertMessage(`SABOTAGED: ${closestSabotage.name} core neutralized!`);
+        } else if (closestSabotage && !closestSabotage.c4Planted) {
+          closestSabotage.c4Planted = true;
+          closestSabotage.c4Timer = 3.0;
+          closestSabotage.c4LastBeepSec = 3;
+          if (closestSabotage.c4Mesh) {
+            closestSabotage.c4Mesh.visible = true;
           }
-
-          stateRef.current.kills += 1;
-          stateRef.current.score += closestSabotage.maxHp * 3;
+          sounds.playC4Arming();
+          sounds.triggerHaptic([18, 30, 18], 0.7);
+          setAlertMessage(`💣 C4 ARMED ON ${closestSabotage.name.toUpperCase()} — 3.0s TO DETONATION! STEP BACK!`);
         }
       }
 
       // =====================================================================
-      // Update Targets & Stealth Vision Logic
+      // Update Timed C4 Countdown, Explosion & Persistent 3D Burning Flames
+      // =====================================================================
+      for (const t of targets) {
+        if (t.c4Planted && !t.sabotaged) {
+          t.c4Timer = Math.max(0, (t.c4Timer ?? 0) - dt);
+          if (t.c4Led) {
+            const ledOn = Math.sin(now * 0.035) > 0;
+            (t.c4Led.material as THREE.MeshBasicMaterial).color.setHex(ledOn ? 0xff1111 : 0x450a0a);
+          }
+          const ceilSec = Math.ceil(t.c4Timer);
+          if (t.c4Timer > 0 && ceilSec < (t.c4LastBeepSec ?? 4)) {
+            t.c4LastBeepSec = ceilSec;
+            sounds.playC4CountdownTick(t.c4Timer <= 1.05);
+            setAlertMessage(`💣 C4 DETONATING IN ${ceilSec}s — ${t.name.toUpperCase()}!`);
+          }
+          if (t.c4Timer <= 0) {
+            // DETONATE C4 WITH EXPLOSION + PERSISTENT FIRE!
+            t.sabotaged = true;
+            t.hp = 0;
+            if (t.c4Mesh) t.c4Mesh.visible = false;
+            if (t.fireGroup) t.fireGroup.visible = true;
+
+            sounds.playExplosion();
+            sounds.playCascadeShockwave();
+            sounds.triggerHaptic([45, 30, 65], 1.0);
+
+            _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 1.8, 0));
+            spawnParticles(_v1, 0xff4500, 12);
+            spawnParticles(_v1, 0xfacc15, 10);
+            spawnParticles(_v1, 0xef4444, 8);
+
+            if (t.kind === 'TANK') {
+              t.mesh.rotation.z = 0.28;
+              t.mesh.position.y = -2.25;
+              stateRef.current.tanksSabotaged += 1;
+              setTanksSabotaged(stateRef.current.tanksSabotaged);
+              setAlertMessage(`💥 C4 DETONATED: ${t.name} engulfed in flames!`);
+            } else if (t.kind === 'ARTILLERY') {
+              t.mesh.rotation.z = 0.38;
+              t.mesh.position.y = -2.6;
+              stateRef.current.artillerySabotaged += 1;
+              setArtillerySabotaged(stateRef.current.artillerySabotaged);
+              setAlertMessage(`💥 C4 DETONATED: ${t.name} destroyed & burning!`);
+            } else if (t.kind === 'BASE') {
+              if (t.coreMesh) {
+                (t.coreMesh.material as THREE.MeshStandardMaterial).color.setHex(0x334155);
+                (t.coreMesh.material as THREE.MeshStandardMaterial).emissive.setHex(0xff4500);
+                (t.coreMesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.45;
+              }
+              stateRef.current.basesSabotaged += 1;
+              setBasesSabotaged(stateRef.current.basesSabotaged);
+              setAlertMessage(`💥 C4 DETONATED: ${t.name} core incinerated!`);
+            }
+
+            stateRef.current.kills += 1;
+            stateRef.current.score += t.maxHp * 3;
+          }
+        }
+
+        // Animate persistent 3D flickering flames & rising smoke on sabotaged/destroyed targets
+        if (t.sabotaged && t.fireGroup && t.fireGroup.visible) {
+          t.fireGroup.children.forEach((child, cIdx) => {
+            if (child.userData.isFlame) {
+              const baseS = child.userData.baseScale || 1.0;
+              const flicker = 0.82 + Math.sin(now * 0.022 + cIdx * 1.9) * 0.34;
+              child.scale.set(baseS * (0.9 + Math.cos(now * 0.015 + cIdx) * 0.12), baseS * flicker, baseS * 0.95);
+              child.rotation.y += dt * (2.2 + cIdx * 0.4);
+            } else if (child.userData.isSmoke) {
+              const cycle = ((now * 0.0007 + (child.userData.smokeOffset || 0)) % 1);
+              child.position.y = 1.2 + cycle * 2.5;
+              child.scale.setScalar(0.75 + cycle * 0.9);
+            }
+          });
+        }
+      }
+
+      // =====================================================================
+      // Update Targets, NPC Door Defenders, Corridor Patrols & Stealth Vision
       // =====================================================================
       for (const t of targets) {
         if (t.hp <= 0 || t.sabotaged) continue;
@@ -1462,20 +1724,129 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         const distToPlayer = t.mesh.position.distanceTo(camera.position);
 
         if (!t.alerted) {
-          if (t.leftArm && t.rightArm) {
-            t.leftArm.rotation.x = Math.sin(now * 0.002) * 0.08;
-            t.rightArm.rotation.x = -Math.sin(now * 0.002) * 0.08;
+          // Living NPC Behaviors: Door Guards, Corridor Patrols & Conversing Squads
+          if (t.npcRole === 'DOOR_GUARD' && t.patrolMinX !== undefined && t.patrolMaxX !== undefined) {
+            if ((t.patrolPauseTimer ?? 0) > 0) {
+              t.patrolPauseTimer = (t.patrolPauseTimer ?? 0) - dt;
+              t.facingAngle = Math.PI; // Look down corridor while pausing at door post
+              if (t.leftLeg && t.rightLeg) {
+                t.leftLeg.rotation.x = THREE.MathUtils.damp(t.leftLeg.rotation.x, 0, 10, dt);
+                t.rightLeg.rotation.x = THREE.MathUtils.damp(t.rightLeg.rotation.x, 0, 10, dt);
+              }
+              if (t.headGroup) {
+                t.headGroup.rotation.y = Math.sin(now * 0.0035) * 0.45;
+              }
+            } else {
+              const dir = t.patrolDir ?? 1;
+              t.mesh.position.x += dir * (t.speed * 0.62) * dt;
+              t.facingAngle = dir > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+              const stride = Math.sin(now * 0.0095) * 0.55;
+              if (t.leftLeg && t.rightLeg) {
+                t.leftLeg.rotation.x = stride;
+                t.rightLeg.rotation.x = -stride;
+              }
+              if (t.leftArm && t.rightArm) {
+                t.leftArm.rotation.x = -stride * 0.55;
+                t.rightArm.rotation.x = stride * 0.55;
+              }
+              if (t.mesh.position.x >= t.patrolMaxX) {
+                t.mesh.position.x = t.patrolMaxX;
+                t.patrolDir = -1;
+                t.patrolPauseTimer = 1.1;
+              } else if (t.mesh.position.x <= t.patrolMinX) {
+                t.mesh.position.x = t.patrolMinX;
+                t.patrolDir = 1;
+                t.patrolPauseTimer = 1.1;
+              }
+            }
+          } else if (t.npcRole === 'PATROL' && t.patrolMinZ !== undefined && t.patrolMaxZ !== undefined) {
+            if ((t.patrolPauseTimer ?? 0) > 0) {
+              t.patrolPauseTimer = (t.patrolPauseTimer ?? 0) - dt;
+              if (t.leftLeg && t.rightLeg) {
+                t.leftLeg.rotation.x = THREE.MathUtils.damp(t.leftLeg.rotation.x, 0, 10, dt);
+                t.rightLeg.rotation.x = THREE.MathUtils.damp(t.rightLeg.rotation.x, 0, 10, dt);
+              }
+              if (t.headGroup) {
+                t.headGroup.rotation.y = Math.sin(now * 0.003) * 0.38;
+              }
+            } else {
+              const dir = t.patrolDir ?? 1;
+              t.mesh.position.z += dir * (t.speed * 0.58) * dt;
+              t.facingAngle = dir > 0 ? 0 : Math.PI;
+              const stride = Math.sin(now * 0.0085) * 0.5;
+              if (t.leftLeg && t.rightLeg) {
+                t.leftLeg.rotation.x = stride;
+                t.rightLeg.rotation.x = -stride;
+              }
+              if (t.leftArm && t.rightArm) {
+                t.leftArm.rotation.x = -stride * 0.5;
+                t.rightArm.rotation.x = stride * 0.5;
+              }
+              if (t.mesh.position.z >= t.patrolMaxZ) {
+                t.mesh.position.z = t.patrolMaxZ;
+                t.patrolDir = -1;
+                t.patrolPauseTimer = 1.4;
+              } else if (t.mesh.position.z <= t.patrolMinZ) {
+                t.mesh.position.z = t.patrolMinZ;
+                t.patrolDir = 1;
+                t.patrolPauseTimer = 1.4;
+              }
+            }
+          } else if (t.npcRole === 'PATROL' && t.patrolMinX !== undefined && t.patrolMaxX !== undefined) {
+            // Generals pacing command post
+            const dir = t.patrolDir ?? 1;
+            t.mesh.position.x += dir * (t.speed * 0.45) * dt;
+            t.facingAngle = Math.PI + dir * 0.35;
+            const stride = Math.sin(now * 0.007) * 0.42;
+            if (t.leftLeg && t.rightLeg) {
+              t.leftLeg.rotation.x = stride;
+              t.rightLeg.rotation.x = -stride;
+            }
+            if (t.leftArm && t.rightArm) {
+              t.leftArm.rotation.x = -stride * 0.4;
+              t.rightArm.rotation.x = stride * 0.4;
+            }
+            if (t.mesh.position.x >= t.patrolMaxX) {
+              t.mesh.position.x = t.patrolMaxX;
+              t.patrolDir = -1;
+            } else if (t.mesh.position.x <= t.patrolMinX) {
+              t.mesh.position.x = t.patrolMinX;
+              t.patrolDir = 1;
+            }
+          } else if (t.npcRole === 'TALKER') {
+            // Animated conversational gestures, weight shifting on legs & head nodding
+            const phase = now * 0.004 + t.mesh.position.x * 1.7;
+            if (t.leftArm && t.rightArm) {
+              t.leftArm.rotation.x = -0.25 + Math.sin(phase * 1.4) * 0.28;
+              t.rightArm.rotation.x = -0.35 - Math.cos(phase * 1.2) * 0.32;
+            }
+            if (t.leftLeg && t.rightLeg) {
+              t.leftLeg.rotation.x = Math.sin(phase * 0.6) * 0.1;
+              t.rightLeg.rotation.x = -Math.sin(phase * 0.6) * 0.1;
+            }
+            if (t.headGroup) {
+              t.headGroup.rotation.y = Math.sin(phase * 0.9) * 0.24;
+              t.headGroup.rotation.x = Math.cos(phase * 1.3) * 0.12;
+            }
+          } else {
+            if (t.leftArm && t.rightArm) {
+              t.leftArm.rotation.x = Math.sin(now * 0.002) * 0.08;
+              t.rightArm.rotation.x = -Math.sin(now * 0.002) * 0.08;
+            }
           }
-          t.mesh.rotation.y += (t.facingAngle - t.mesh.rotation.y) * 0.1;
+
+          t.mesh.rotation.y += (t.facingAngle - t.mesh.rotation.y) * 0.12;
 
           const isPlayerExposed =
             !stateRef.current.isCrouching &&
             !stateRef.current.isBehindCover &&
             !stateRef.current.stealthCloakActive;
 
-          if (isPlayerExposed && distToPlayer < 12) {
+          const detectRange = t.npcRole === 'DOOR_GUARD' ? 14 : 12;
+          if (isPlayerExposed && distToPlayer < detectRange) {
             t.alerted = true;
             t.facingAngle = 0;
+            sounds.playBacteriaChatter(true);
             setAlertMessage(`DETECTED BY ${t.name.toUpperCase()}! Crouch [C] behind cover or eliminate!`);
           }
         } else {
@@ -1502,8 +1873,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           }
 
           if (t.leftLeg && t.rightLeg) {
-            t.leftLeg.rotation.x = Math.sin(now * 0.008) * 0.5;
-            t.rightLeg.rotation.x = -Math.sin(now * 0.008) * 0.5;
+            t.leftLeg.rotation.x = Math.sin(now * 0.009) * 0.55;
+            t.rightLeg.rotation.x = -Math.sin(now * 0.009) * 0.55;
+          }
+          if (t.leftArm && t.rightArm) {
+            t.leftArm.rotation.x = -0.45 + Math.cos(now * 0.009) * 0.25;
+            t.rightArm.rotation.x = -0.55;
           }
 
           t.shootCooldown -= dt;
@@ -1621,26 +1996,32 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                   setAlertMessage(`SILENT ASSASSINATION: ${t.name} eliminated!`);
                 } else if (t.kind === 'TANK') {
                   t.sabotaged = true;
-                  t.mesh.rotation.z = 0.35;
+                  if (t.c4Mesh) t.c4Mesh.visible = false;
+                  if (t.fireGroup) t.fireGroup.visible = true;
+                  t.mesh.rotation.z = 0.28;
                   stateRef.current.tanksSabotaged += 1;
                   setTanksSabotaged(stateRef.current.tanksSabotaged);
-                  setAlertMessage(`NEUTRALIZED: ${t.name} destroyed!`);
+                  setAlertMessage(`NEUTRALIZED: ${t.name} destroyed & burning!`);
                 } else if (t.kind === 'ARTILLERY') {
                   t.sabotaged = true;
-                  t.mesh.rotation.z = 0.55;
-                  t.mesh.position.y = -2.7;
+                  if (t.c4Mesh) t.c4Mesh.visible = false;
+                  if (t.fireGroup) t.fireGroup.visible = true;
+                  t.mesh.rotation.z = 0.38;
+                  t.mesh.position.y = -2.6;
                   stateRef.current.artillerySabotaged += 1;
                   setArtillerySabotaged(stateRef.current.artillerySabotaged);
-                  setAlertMessage(`NEUTRALIZED: ${t.name} destroyed!`);
+                  setAlertMessage(`NEUTRALIZED: ${t.name} destroyed & burning!`);
                 } else if (t.kind === 'BASE') {
                   t.sabotaged = true;
+                  if (t.c4Mesh) t.c4Mesh.visible = false;
+                  if (t.fireGroup) t.fireGroup.visible = true;
                   if (t.coreMesh) {
                     (t.coreMesh.material as THREE.MeshStandardMaterial).color.setHex(0x334155);
-                    (t.coreMesh.material as THREE.MeshStandardMaterial).emissive.setHex(0x000000);
+                    (t.coreMesh.material as THREE.MeshStandardMaterial).emissive.setHex(0xff4500);
                   }
                   stateRef.current.basesSabotaged += 1;
                   setBasesSabotaged(stateRef.current.basesSabotaged);
-                  setAlertMessage(`SABOTAGED: ${t.name} destroyed!`);
+                  setAlertMessage(`SABOTAGED: ${t.name} destroyed & burning!`);
                 } else {
                   t.mesh.visible = false;
                 }
@@ -1692,18 +2073,34 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         d.position.y += Math.sin(now * 0.002 + idx) * 0.003;
       });
 
-      // Update talking squads dialogue & 2D speech bubble projection
+      // Update talking squads dialogue, audible bacterial chatter & 2D speech bubble projection
       const currentDialogues: Array<{ id: string; x: number; y: number; text: string }> = [];
       const camPos = camera.position;
       talkingSquads.forEach((sq) => {
+        // Check if at least one member of the squad is still alive and unalerted
+        const hasActiveTalker = targets.some(
+          (t) => sq.memberIds.includes(t.id) && t.hp > 0 && !t.alerted
+        );
+        if (!hasActiveTalker) return;
+
         sq.timer += dt;
-        if (sq.timer > 4.5) {
+        sq.chatterCooldown = Math.max(0, sq.chatterCooldown - dt);
+        const dist = sq.pos.distanceTo(camPos);
+
+        if (sq.timer > 4.2) {
           sq.timer = 0;
           sq.currentLineIndex = (sq.currentLineIndex + 1) % sq.lines.length;
+          if (dist < 30 && sq.chatterCooldown <= 0) {
+            sounds.playBacteriaChatter(false);
+            sq.chatterCooldown = 3.2;
+          }
+        } else if (dist < 22 && sq.chatterCooldown <= 0) {
+          sounds.playBacteriaChatter(false);
+          sq.chatterCooldown = 4.0;
         }
-        const dist = sq.pos.distanceTo(camPos);
-        if (dist < 32 && sq.pos.z < camPos.z) {
-          _v1.copy(sq.pos).add(new THREE.Vector3(0, 3.2, 0));
+
+        if (dist < 34 && sq.pos.z < camPos.z) {
+          _v1.copy(sq.pos).add(new THREE.Vector3(0, 2.8, 0));
           _v1.project(camera);
           if (_v1.z < 1) {
             const screenX = (_v1.x * 0.5 + 0.5) * 100;
@@ -1719,6 +2116,30 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           }
         }
       });
+
+      // Project Door-Defending NPC Sentry speech bubbles when player approaches a guarded door
+      for (const t of targets) {
+        if (t.npcRole === 'DOOR_GUARD' && t.hp > 0 && t.guardLine) {
+          const dist = t.mesh.position.distanceTo(camPos);
+          if (dist < 28 && t.mesh.position.z < camPos.z) {
+            _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 2.75, 0));
+            _v1.project(camera);
+            if (_v1.z < 1) {
+              const screenX = (_v1.x * 0.5 + 0.5) * 100;
+              const screenY = (-(_v1.y * 0.5) + 0.5) * 100;
+              if (screenX >= 5 && screenX <= 95 && screenY >= 5 && screenY <= 95) {
+                currentDialogues.push({
+                  id: t.id,
+                  x: screenX,
+                  y: screenY,
+                  text: t.alerted ? 'INTRUDER AT THE GATE! OPEN FIRE!' : t.guardLine
+                });
+              }
+            }
+          }
+        }
+      }
+
       setSquadDialogues(currentDialogues);
 
       renderer.render(scene, camera);
@@ -1793,10 +2214,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
             }}
           />
 
-          {/* Weapon Rail & Receiver Anchor extending to bottom of viewport */}
-          <div className="absolute inset-x-0 bottom-0 flex flex-col items-center justify-end pointer-events-none">
-            {/* Optic Sight Frame matching IMG_5388 reference */}
-            <div className="relative h-[72vh] sm:h-[82vh] max-h-[720px] aspect-[920/965] flex items-center justify-center">
+          {/* Centered Optic Sight Frame: Responsive width on portrait mobile so curved Health/Ammo HUD never clips off-screen */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div
+              className="relative w-[74vw] max-w-[420px] sm:w-auto sm:max-w-none sm:h-[74vh] max-h-[660px] aspect-[920/965] flex items-center justify-center"
+              style={{ transform: 'translateY(2.5%)' }}
+            >
               <img
                 src="/assets/scope_optic_clean.png"
                 alt="Tactical Optic Scope"
@@ -1808,7 +2231,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
 
               {/* Circular Reflex Optical Lens Glass */}
               <div
-                className="absolute rounded-full pointer-events-none"
+                className="absolute rounded-full pointer-events-none z-20"
                 style={{
                   top: '19.5%',
                   left: '20.5%',
@@ -1881,29 +2304,29 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                   />
                 </svg>
 
-                {/* LEFT ROUNDED SCOPE TELEMETRY: HEALTH & CLOAK */}
-                <div className="absolute top-1/2 -left-3 sm:-left-6 -translate-x-full -translate-y-1/2 flex flex-col items-end gap-1.5 pointer-events-none font-mono">
-                  <div className="px-2 py-1 bg-zinc-950/90 border-r-2 border-emerald-400 border-y border-l border-emerald-500/30 rounded-l-xl shadow-[0_0_14px_rgba(0,0,0,0.85)] flex flex-col items-end">
-                    <span className="text-[8px] tracking-widest text-zinc-400 uppercase">VITALITY</span>
-                    <div className="flex items-center gap-1">
-                      <Shield className={`w-3.5 h-3.5 ${hp < 35 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`} />
-                      <span className={`text-xs sm:text-sm font-black tabular-nums ${hp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
+                {/* LEFT ROUNDED SCOPE TELEMETRY: HEALTH & CLOAK (Phone-safe positioning) */}
+                <div className="absolute top-1/2 -left-1 sm:-left-6 -translate-x-[68%] sm:-translate-x-full -translate-y-1/2 flex flex-col items-end gap-1 sm:gap-1.5 pointer-events-none font-mono z-30">
+                  <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-zinc-950/95 border-r-2 border-emerald-400 border-y border-l border-emerald-500/30 rounded-l-xl shadow-[0_0_14px_rgba(0,0,0,0.9)] flex flex-col items-end">
+                    <span className="text-[7px] sm:text-[8px] tracking-widest text-zinc-400 uppercase">VITALITY</span>
+                    <div className="flex items-center gap-0.5 sm:gap-1">
+                      <Shield className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${hp < 35 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`} />
+                      <span className={`text-[11px] sm:text-sm font-black tabular-nums ${hp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
                         {hp}%
                       </span>
                     </div>
                   </div>
-                  <div className={`px-2 py-0.5 bg-zinc-950/90 border-r-2 rounded-l-lg text-[9px] font-bold tracking-wider uppercase shadow-md ${
+                  <div className={`px-1.5 sm:px-2 py-0.5 bg-zinc-950/95 border-r-2 rounded-l-lg text-[8px] sm:text-[9px] font-bold tracking-wider uppercase shadow-md ${
                     stealthCloakActive ? 'border-cyan-400 text-cyan-300' : isBehindCover ? 'border-emerald-400 text-emerald-300' : 'border-amber-500/70 text-amber-400'
                   }`}>
                     {stealthCloakActive ? `CLOAK ${stealthEnergy}%` : isBehindCover ? 'IN COVER' : isCrouching ? 'LOW PROFILE' : 'EXPOSED'}
                   </div>
                 </div>
 
-                {/* RIGHT ROUNDED SCOPE TELEMETRY: SPY ABILITIES & AMMO ARC */}
-                <div className={`absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono ${isScoped ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-                  <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
-                    <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
-                    <span className={`text-xs font-black tabular-nums ${ammo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
+                {/* RIGHT ROUNDED SCOPE TELEMETRY: SPY ABILITIES & AMMO ARC (Phone-safe positioning) */}
+                <div className={`absolute top-1/2 -right-1 sm:-right-6 translate-x-[68%] sm:translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono z-30 ${isScoped ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+                  <div className="-ml-1 sm:-ml-2 px-1.5 sm:px-2 py-0.5 bg-zinc-950/95 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1 sm:gap-1.5">
+                    <span className="text-[7px] sm:text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
+                    <span className={`text-[11px] sm:text-xs font-black tabular-nums ${ammo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
                       {isReloading ? 'RLD' : `${ammo}/${maxAmmo}`}
                     </span>
                   </div>
@@ -1914,14 +2337,14 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                       sounds.triggerHaptic(12, 0.4);
                       toggleCloak();
                     }}
-                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
+                    className={`px-1.5 sm:px-2 py-0.5 rounded-r-lg border-l-2 text-[8px] sm:text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
                       stealthCloakActive
-                        ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300'
-                        : 'bg-zinc-950/90 border-cyan-500/50 text-slate-200 hover:bg-cyan-950/60'
+                        ? 'bg-cyan-950/95 border-cyan-400 text-cyan-300'
+                        : 'bg-zinc-950/95 border-cyan-500/50 text-slate-200 hover:bg-cyan-950/60'
                     }`}
                   >
-                    <EyeOff className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>CLK {stealthEnergy}% [V]</span>
+                    <EyeOff className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-cyan-400 shrink-0" />
+                    <span>CLK {stealthEnergy}%</span>
                   </button>
 
                   <button
@@ -1930,10 +2353,10 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                       sounds.triggerHaptic(12, 0.4);
                       handleHeal();
                     }}
-                    className="px-2 py-0.5 rounded-r-lg border-l-2 border-emerald-400 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all"
+                    className="px-1.5 sm:px-2 py-0.5 rounded-r-lg border-l-2 border-emerald-400 bg-emerald-950/95 hover:bg-emerald-900 text-emerald-300 text-[8px] sm:text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all"
                   >
-                    <Shield className="w-3 h-3 text-emerald-400 shrink-0" />
-                    <span>STIM [SPC]</span>
+                    <Shield className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-emerald-400 shrink-0" />
+                    <span>STIM</span>
                   </button>
 
                   <button
@@ -1942,14 +2365,14 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                       sounds.triggerHaptic(10, 0.3);
                       toggleCrouch();
                     }}
-                    className={`-ml-2 px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
+                    className={`-ml-1 sm:-ml-2 px-1.5 sm:px-2 py-0.5 rounded-r-lg border-l-2 text-[8px] sm:text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
                       isCrouching
-                        ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300'
-                        : 'bg-zinc-950/90 border-amber-400/60 text-amber-300'
+                        ? 'bg-emerald-950/95 border-emerald-400 text-emerald-300'
+                        : 'bg-zinc-950/95 border-amber-400/60 text-amber-300'
                     }`}
                   >
-                    <ArrowDownToLine className="w-3 h-3 text-emerald-400 shrink-0" />
-                    <span>{isCrouching ? 'LOW [C]' : 'CROUCH [C]'}</span>
+                    <ArrowDownToLine className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-emerald-400 shrink-0" />
+                    <span>{isCrouching ? 'LOW' : 'CROUCH'}</span>
                   </button>
                 </div>
 
@@ -2336,8 +2759,27 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
 
             {/* Bottom-Right: Fortnite Spy Weapons + Covert Equipment Hotbar */}
             <div className="flex flex-col items-end gap-1 pointer-events-auto">
-              {/* Action Utility Row Above Hotbar */}
+              {/* Action Utility Row Above Hotbar (Includes Dedicated Mobile/Touch FIRE Button!) */}
               <div className="flex items-center gap-1">
+                <button
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(14, 0.45);
+                    triggerShootRef.current = true;
+                    startHoldShootScopeTimer();
+                  }}
+                  onPointerUp={(e) => {
+                    e.stopPropagation();
+                    cancelHoldShootScope();
+                  }}
+                  onPointerCancel={() => cancelHoldShootScope()}
+                  className="h-8 sm:h-9 px-3 sm:px-3.5 rounded-md bg-gradient-to-r from-rose-600 to-amber-500 hover:from-rose-500 hover:to-amber-400 border-2 border-white text-white font-black text-[10px] sm:text-xs uppercase tracking-wider flex items-center gap-1 shadow-[0_0_16px_rgba(244,63,94,0.75)] active:scale-95 cursor-pointer"
+                >
+                  <Crosshair className="w-3.5 h-3.5 text-yellow-200" />
+                  <span>FIRE</span>
+                </button>
+
                 <button
                   onClick={() => {
                     if (holdShootTimerRef.current) {

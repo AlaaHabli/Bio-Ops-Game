@@ -907,7 +907,7 @@ export function createLeukocyteFPSArms(_weaponColor: string): THREE.Group {
   return group;
 }
 
-// 6. BACTERIA BATTLE TANK (Heavy M1A2 Abrams / Bio-Leopard Armored Tank with Reactive Armor & Recoiling 120mm Cannon)
+// 6. BACTERIA BATTLE TANK (Desert-Tan & Olive-Drab Camo Main Battle Tank with 6 Roadwheels, Sloped ERA Turret Armor, Bore-Evacuator Cannon & Dual Antennas — Matched to IMG_5396.png!)
 export function createBacteriaTank(): {
   group: THREE.Group;
   turret: THREE.Group;
@@ -917,195 +917,243 @@ export function createBacteriaTank(): {
 } {
   const group = new THREE.Group();
 
-  // Palette matched directly to IMG_5381_0d50bcc0.webp
-  const oliveLightMat = createFastLitMaterial({
-    color: 0x748b47, // Classic Olive-Green upper armor
-    roughness: 0.42,
+  // Palette matched directly to IMG_5396.png (Weathered Desert Sand Tan + Olive Green Camo + Gunmetal Track Links)
+  const desertTanLightMat = createFastLitMaterial({
+    color: 0xd8c398, // Sunlit weathered desert sand armor
+    roughness: 0.45,
+    metalness: 0.25,
+  });
+  const desertTanMidMat = createFastLitMaterial({
+    color: 0xbfa678, // Warm desert tan mid-tone
+    roughness: 0.5,
+    metalness: 0.3,
+  });
+  const oliveCamoMat = createFastLitMaterial({
+    color: 0x5c6b43, // Olive-drab camouflage bands
+    roughness: 0.48,
     metalness: 0.35,
   });
-  const oliveMidMat = createFastLitMaterial({
-    color: 0x5b7035, // Shaded Olive-Green lower & side armor
-    roughness: 0.48,
-    metalness: 0.4,
-  });
   const oliveDarkMat = createFastLitMaterial({
-    color: 0x3b4d21, // Deep olive shadow / structural plates
-    roughness: 0.5,
+    color: 0x3b462b, // Deep olive structural shadow & ERA frames
+    roughness: 0.52,
     metalness: 0.45,
   });
-  const tanFenderMat = createFastLitMaterial({
-    color: 0xeab676, // Signature Warm Tan / Sand Front Fender & Tread Link plates
-    roughness: 0.38,
-    metalness: 0.25,
+  const trackSteelMat = createFastLitMaterial({
+    color: 0x1e242b, // Dark gunmetal steel caterpillar tracks
+    roughness: 0.4,
+    metalness: 0.75,
   });
   const blackOutlineMat = new THREE.MeshBasicMaterial({ color: 0x0f1410 });
 
-  // 1. Lower & Upper Stepped Olive-Green Armored Hull Chassis
-  const lowerHull = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.56, 3.05), oliveMidMat);
-  lowerHull.position.set(0, -0.08, 0.05);
+  // 1. Lower & Upper Sloped Main Battle Tank Hull Chassis
+  const lowerHull = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.52, 3.35), oliveDarkMat);
+  lowerHull.position.set(0, -0.1, 0.0);
   group.add(lowerHull);
 
-  // Sloped Front Lower Glacis Block with Dark Tow-Hook Mounts
-  const frontGlacis = new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.52, 0.9), oliveLightMat);
-  frontGlacis.position.set(0, 0.04, 1.38);
-  frontGlacis.rotation.x = -0.28;
+  // Sloped Front Glacis Plate in Weathered Desert Tan + Olive Camo Stripe
+  const frontGlacis = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.42, 1.15), desertTanLightMat);
+  frontGlacis.position.set(0, 0.08, 1.42);
+  frontGlacis.rotation.x = 0.34;
   group.add(frontGlacis);
 
-  [-0.58, 0.58].forEach((tx) => {
-    const towBracket = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.28, 0.22), oliveDarkMat);
-    towBracket.position.set(tx, 0.04, 1.72);
-    group.add(towBracket);
+  const glacisCamoStripe = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.43, 1.12), oliveCamoMat);
+  glacisCamoStripe.position.set(-0.28, 0.085, 1.42);
+  glacisCamoStripe.rotation.x = 0.34;
+  group.add(glacisCamoStripe);
+
+  // Lower Front Toe Plate & Dual Tow Shackles (as seen on the front hull of IMG_5396)
+  const lowerToePlate = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.36, 0.55), oliveDarkMat);
+  lowerToePlate.position.set(0, -0.14, 1.72);
+  lowerToePlate.rotation.x = -0.45;
+  group.add(lowerToePlate);
+
+  [-0.52, 0.52].forEach((tx) => {
+    const towHook = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.035, 6, 12), desertTanMidMat);
+    towHook.position.set(tx, -0.06, 1.92);
+    towHook.rotation.y = Math.PI / 2;
+    group.add(towHook);
   });
 
-  // Stepped Upper Hull Deck Over Sponsons
-  const upperDeck = new THREE.Mesh(new THREE.BoxGeometry(2.72, 0.28, 3.28), oliveLightMat);
-  upperDeck.position.set(0, 0.26, -0.05);
+  // Wide Upper Hull Deck & Engine Deck
+  const upperDeck = new THREE.Mesh(new THREE.BoxGeometry(2.78, 0.26, 3.45), desertTanLightMat);
+  upperDeck.position.set(0, 0.24, -0.05);
   group.add(upperDeck);
 
-  const upperDeckCap = new THREE.Mesh(new THREE.BoxGeometry(2.38, 0.16, 2.95), oliveMidMat);
-  upperDeckCap.position.set(0, 0.42, -0.1);
-  group.add(upperDeckCap);
+  // Armored Side Ballistic Skirts with Desert-Tan & Olive-Green Camo Bands
+  [-1.38, 1.38].forEach((sx) => {
+    const sideSkirt = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.34, 3.35), desertTanMidMat);
+    sideSkirt.position.set(sx, 0.14, -0.04);
+    group.add(sideSkirt);
 
-  // 2. Signature Sloped Warm Tan / Sand Front Track Mudguard Fenders (Left & Right, from IMG_5381!)
+    // Alternating Olive Camo Patches along side skirt
+    [-1.05, 0.15, 1.1].forEach((cz) => {
+      const camoPatch = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.33, 0.55), oliveCamoMat);
+      camoPatch.position.set(sx, 0.14, cz);
+      group.add(camoPatch);
+    });
+  });
+
+  // 2. Curved Desert-Tan & Olive Front Track Mudguard Fenders + Headlight Clusters (IMG_5396!)
   [-1.18, 1.18].forEach((fx) => {
     const fenderGroup = new THREE.Group();
-    fenderGroup.position.set(fx, 0.16, 1.65);
+    fenderGroup.position.set(fx, 0.18, 1.78);
 
-    const tanFlap = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.09, 0.92), tanFenderMat);
-    tanFlap.rotation.x = 0.46;
-    fenderGroup.add(tanFlap);
+    const tanFender = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.1, 0.72), desertTanLightMat);
+    tanFender.rotation.x = 0.38;
+    fenderGroup.add(tanFender);
 
-    // Crisp dark edge trim around tan fender
-    const trim = new THREE.Mesh(new THREE.BoxGeometry(0.79, 0.04, 0.95), blackOutlineMat);
-    trim.position.set(0, -0.03, 0);
-    trim.rotation.x = 0.46;
-    fenderGroup.add(trim);
+    const fenderLip = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.05, 0.74), oliveDarkMat);
+    fenderLip.position.set(0, -0.03, 0.02);
+    fenderLip.rotation.x = 0.38;
+    fenderGroup.add(fenderLip);
+
+    // Armored Front Headlight Housing on Upper Glacis Fender
+    const lightBox = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.24), oliveDarkMat);
+    lightBox.position.set(fx < 0 ? 0.22 : -0.22, 0.16, -0.35);
+    fenderGroup.add(lightBox);
 
     group.add(fenderGroup);
   });
 
-  // 3. Heavy Caterpillar Tracks with Golden-Tan Tread Bars, 4 Lower Tan Roadwheels & 4 Upper Green Bogies
-  const treadGeo = new THREE.BoxGeometry(0.68, 0.78, 3.65);
-  const leftTread = new THREE.Mesh(treadGeo, blackOutlineMat);
-  leftTread.position.set(-1.18, -0.22, 0);
+  // 3. Heavy Caterpillar Tracks with 6 Concave Desert-Tan Roadwheels per side + Drive Sprocket (Matched to IMG_5396!)
+  const treadGeo = new THREE.BoxGeometry(0.66, 0.76, 3.82);
+  const leftTread = new THREE.Mesh(treadGeo, trackSteelMat);
+  leftTread.position.set(-1.18, -0.24, 0);
   group.add(leftTread);
 
-  const rightTread = new THREE.Mesh(treadGeo, blackOutlineMat);
-  rightTread.position.set(1.18, -0.22, 0);
+  const rightTread = new THREE.Mesh(treadGeo, trackSteelMat);
+  rightTread.position.set(1.18, -0.24, 0);
   group.add(rightTread);
 
-  // Golden-Tan Horizontal Tread Link Bars on Front & Rear Track Faces
+  const roadwheelZPositions = [-1.42, -0.85, -0.28, 0.28, 0.85, 1.42];
   [-1.18, 1.18].forEach((tx) => {
-    for (let bar = -2; bar <= 2; bar++) {
-      const frontLink = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.07, 0.08), tanFenderMat);
-      frontLink.position.set(tx, -0.2 + bar * 0.13, 1.81 - Math.abs(bar) * 0.04);
-      group.add(frontLink);
+    // Front & Rear Exposed Steel Track Link Pads
+    for (let bar = -3; bar <= 3; bar++) {
+      const frontPad = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.065, 0.08), desertTanMidMat);
+      frontPad.position.set(tx, -0.22 + bar * 0.1, 1.92 - Math.abs(bar) * 0.03);
+      group.add(frontPad);
     }
 
-    // 4 Lower Golden-Tan Roadwheels with Dark Rim & Inner Hub
-    [-1.15, -0.38, 0.38, 1.15].forEach((wz) => {
+    // 6 Concave Desert-Tan Roadwheels with Dark Rubber Tires & Center Hubs
+    roadwheelZPositions.forEach((wz) => {
       const wheelX = tx < 0 ? tx - 0.31 : tx + 0.31;
-      const lowerWheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.27, 0.27, 0.14, 16),
-        tanFenderMat
-      );
-      lowerWheel.rotateZ(Math.PI / 2);
-      lowerWheel.position.set(wheelX, -0.38, wz);
-      group.add(lowerWheel);
-
-      const lowerHub = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.13, 0.13, 0.17, 12),
-        oliveDarkMat
-      );
-      lowerHub.rotateZ(Math.PI / 2);
-      lowerHub.position.set(wheelX, -0.38, wz);
-      group.add(lowerHub);
-    });
-
-    // Upper Olive-Green Suspension Housing + 4 Upper Green Bogie Wheels
-    const upperSuspension = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, 0.34, 3.25),
-      oliveLightMat
-    );
-    upperSuspension.position.set(tx < 0 ? tx - 0.29 : tx + 0.29, -0.02, -0.05);
-    group.add(upperSuspension);
-
-    [-1.22, -0.42, 0.38, 1.18].forEach((wz) => {
-      const wheelX = tx < 0 ? tx - 0.33 : tx + 0.33;
-      const bogie = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.22, 0.22, 0.12, 14),
-        oliveMidMat
-      );
-      bogie.rotateZ(Math.PI / 2);
-      bogie.position.set(wheelX, -0.02, wz);
-      group.add(bogie);
-
-      const bogieHub = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.09, 0.09, 0.15, 10),
+      const tireRim = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 0.15, 14),
         blackOutlineMat
       );
-      bogieHub.rotateZ(Math.PI / 2);
-      bogieHub.position.set(wheelX, -0.02, wz);
-      group.add(bogieHub);
+      tireRim.rotateZ(Math.PI / 2);
+      tireRim.position.set(wheelX, -0.38, wz);
+      group.add(tireRim);
+
+      const dishWheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2, 0.2, 0.17, 14),
+        desertTanMidMat
+      );
+      dishWheel.rotateZ(Math.PI / 2);
+      dishWheel.position.set(wheelX, -0.38, wz);
+      group.add(dishWheel);
+
+      const centerHub = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 0.19, 10),
+        oliveDarkMat
+      );
+      centerHub.rotateZ(Math.PI / 2);
+      centerHub.position.set(wheelX, -0.38, wz);
+      group.add(centerHub);
+    });
+
+    // Front Toothed Drive Sprocket Wheel & Rear Idler Wheel
+    [-1.72, 1.72].forEach((endZ) => {
+      const wheelX = tx < 0 ? tx - 0.31 : tx + 0.31;
+      const sprocket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.22, 0.16, 12),
+        desertTanLightMat
+      );
+      sprocket.rotateZ(Math.PI / 2);
+      sprocket.position.set(wheelX, -0.14, endZ);
+      group.add(sprocket);
     });
   });
 
-  // 4. Tall Boxy-Angled Olive-Green Main Turret (Matched to IMG_5381)
+  // 4. Faceted Sloped Desert-Tan MBT Turret with 5 Sloped ERA Reactive Armor Blocks per Cheek (IMG_5396!)
   const turret = new THREE.Group();
-  turret.position.set(0, 0.88, -0.08);
+  turret.position.set(0, 0.78, -0.06);
 
-  // Main Tall Turret Block
-  const turretMain = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.86, 2.22), oliveLightMat);
-  turret.add(turretMain);
+  // Main Wide Faceted Turret Core
+  const turretCore = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.12, 1.38, 0.68, 8),
+    desertTanLightMat
+  );
+  turretCore.rotation.y = Math.PI / 8;
+  turretCore.scale.set(1.08, 1.0, 1.18);
+  turret.add(turretCore);
 
-  // Chamfered Top & Bottom Turret Bevel Plates
-  const turretRoof = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.12, 2.02), oliveMidMat);
-  turretRoof.position.set(0, 0.47, 0);
-  turret.add(turretRoof);
+  // Turret Rear Bustle Rack
+  const turretBustle = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.52, 0.85), oliveCamoMat);
+  turretBustle.position.set(0, 0.04, -1.05);
+  turret.add(turretBustle);
 
-  const turretCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.02, 0.18, 16), blackOutlineMat);
-  turretCollar.position.set(0, -0.46, 0);
-  turret.add(turretCollar);
+  // 5 Sloped Explosive Reactive Armor (ERA) Bricks Arrayed Along Left & Right Turret Cheeks (Signature feature of IMG_5396!)
+  [-1, 1].forEach((sideSign) => {
+    for (let bIdx = 0; bIdx < 5; bIdx++) {
+      const zOff = 0.72 - bIdx * 0.34;
+      const xOff = sideSign * (1.16 + (bIdx < 2 ? -0.06 : 0.04));
+      const eraBrick = new THREE.Mesh(
+        new THREE.BoxGeometry(0.16, 0.42, 0.26),
+        bIdx % 2 === 0 ? desertTanMidMat : oliveDarkMat
+      );
+      eraBrick.position.set(xOff, -0.02, zOff);
+      eraBrick.rotation.z = sideSign * 0.38;
+      eraBrick.rotation.y = sideSign * (0.28 - bIdx * 0.08);
+      turret.add(eraBrick);
 
-  // Two Dark Front Armor Viewport Slits on Upper Turret Face (Left & Right, as in IMG_5381)
-  [-0.58, 0.62].forEach((vx) => {
-    const slitRecess = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.12), blackOutlineMat);
-    slitRecess.position.set(vx, 0.22, 1.08);
-    slitRecess.rotation.x = -0.15;
-    turret.add(slitRecess);
+      const eraFrame = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.45, 0.04),
+        blackOutlineMat
+      );
+      eraFrame.position.set(xOff, -0.02, zOff + 0.12);
+      eraFrame.rotation.z = sideSign * 0.38;
+      turret.add(eraFrame);
+    }
   });
 
-  // Side Rivet Bolts on Turret Cheek (3 vertical rivets + rear bolt as in IMG_5381)
-  [-1.03, 1.03].forEach((rx) => {
-    [-0.18, -0.02, 0.14].forEach((ry) => {
-      const rivet = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), oliveDarkMat);
-      rivet.position.set(rx, ry, 0.58);
-      turret.add(rivet);
-    });
-    const rearBolt = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), tanFenderMat);
-    rearBolt.position.set(rx, -0.22, -0.82);
-    turret.add(rearBolt);
-  });
+  // Canvas Gun Mantlet Dust Cover on Front Turret Center
+  const mantlet = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 0.34, 0.52, 14),
+    desertTanMidMat
+  );
+  mantlet.rotateX(Math.PI / 2);
+  mantlet.position.set(0, 0.0, 1.28);
+  turret.add(mantlet);
 
-  // Rounded Rectangular Offset Mantlet Box on Front Turret Face
-  const mantletBox = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.34, 0.34), oliveLightMat);
-  mantletBox.position.set(-0.22, -0.02, 1.12);
-  turret.add(mantletBox);
-
-  const mantletTrim = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.38, 0.26), blackOutlineMat);
-  mantletTrim.position.set(-0.22, -0.02, 1.08);
-  turret.add(mantletTrim);
-
-  // 5. Stepped Olive-Green Main Cannon Barrel with 3 Barrel Rings & Wide Cylindrical Muzzle Collar
-  const cannonGeo = new THREE.CylinderGeometry(0.18, 0.21, 2.55, 16);
+  // 5. Long 125mm Smoothbore Main Cannon Barrel with Central Bore Evacuator & Camo Bands (IMG_5396!)
+  const cannonGeo = new THREE.CylinderGeometry(0.135, 0.165, 3.15, 16);
   cannonGeo.rotateX(Math.PI / 2);
-  const cannon = new THREE.Mesh(cannonGeo, oliveMidMat);
-  cannon.position.set(0.22, -0.02, 1.65);
+  const cannon = new THREE.Mesh(cannonGeo, desertTanLightMat);
+  cannon.position.set(0, 0.02, 2.25);
 
-  // 3 Distinct Black/Dark-Olive Barrel Rings along the Cannon Tube (exactly like IMG_5381)
-  [-0.55, 0.02, 0.58].forEach((rz) => {
+  // Olive Camo Band on Cannon Barrel
+  const barrelCamoBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.152, 0.158, 0.75, 16),
+    oliveCamoMat
+  );
+  barrelCamoBand.rotateX(Math.PI / 2);
+  barrelCamoBand.position.set(0, 0, -0.45);
+  cannon.add(barrelCamoBand);
+
+  // Central Bore Evacuator (Fume Extractor Bulge) on Main Barrel
+  const boreEvacuator = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.21, 0.21, 0.62, 16),
+    desertTanMidMat
+  );
+  boreEvacuator.rotateX(Math.PI / 2);
+  boreEvacuator.position.set(0, 0, 0.22);
+  cannon.add(boreEvacuator);
+
+  // Thermal Shroud Rings & Muzzle Reference Collar
+  [-0.85, -0.12, 0.56, 1.38].forEach((rz) => {
     const ring = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.215, 0.215, 0.07, 16),
+      new THREE.CylinderGeometry(0.175, 0.175, 0.05, 16),
       blackOutlineMat
     );
     ring.rotateX(Math.PI / 2);
@@ -1113,72 +1161,241 @@ export function createBacteriaTank(): {
     cannon.add(ring);
   });
 
-  // Wide Cylindrical Muzzle Brake Collar & Deep Black Bore Opening
   const muzzleCollar = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.27, 0.25, 0.48, 18),
-    oliveLightMat
+    new THREE.CylinderGeometry(0.17, 0.16, 0.26, 16),
+    oliveDarkMat
   );
   muzzleCollar.rotateX(Math.PI / 2);
-  muzzleCollar.position.set(0, 0, 1.15);
+  muzzleCollar.position.set(0, 0, 1.48);
   cannon.add(muzzleCollar);
 
-  const muzzleRim = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.28, 0.28, 0.08, 18),
-    blackOutlineMat
-  );
-  muzzleRim.rotateX(Math.PI / 2);
-  muzzleRim.position.set(0, 0, 1.36);
-  cannon.add(muzzleRim);
-
   const boreOpening = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.21, 0.21, 0.12, 16),
+    new THREE.CylinderGeometry(0.115, 0.115, 0.08, 14),
     blackOutlineMat
   );
   boreOpening.rotateX(Math.PI / 2);
-  boreOpening.position.set(0, 0, 1.38);
+  boreOpening.position.set(0, 0, 1.58);
   cannon.add(boreOpening);
 
   turret.add(cannon);
 
-  // 6. Roof-Mounted Commander Auxiliary Turret with Secondary Gun Barrel & Periscope Sights (IMG_5381!)
-  const auxTurret = new THREE.Group();
-  auxTurret.position.set(-0.34, 0.62, -0.15);
+  // 6. Turret Roof Commander Cupola, Pintle Heavy Machine Gun, Thermal Sight Box & Dual Tall Whip Antennas (IMG_5396!)
+  const cupolaGroup = new THREE.Group();
+  cupolaGroup.position.set(-0.42, 0.42, -0.12);
 
-  const auxBox = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.34, 0.88), oliveLightMat);
-  auxTurret.add(auxBox);
+  const cupolaRing = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.42, 0.22, 12), oliveDarkMat);
+  cupolaGroup.add(cupolaRing);
 
-  const auxRearDome = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 10), blackOutlineMat);
-  auxRearDome.position.set(-0.46, -0.02, -0.35);
-  auxTurret.add(auxRearDome);
+  // Pintle-Mounted Heavy Machine Gun & Ammo Box on Commander Cupola
+  const mgReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.48), blackOutlineMat);
+  mgReceiver.position.set(0, 0.22, 0.15);
+  cupolaGroup.add(mgReceiver);
 
-  // Stepped Secondary Roof Cannon pointing forward
-  const auxGun = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.1, 0.13, 0.92, 12),
-    oliveMidMat
-  );
-  auxGun.rotateX(Math.PI / 2);
-  auxGun.position.set(0.12, 0.04, 0.66);
-  auxTurret.add(auxGun);
+  const mgBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.68, 10), trackSteelMat);
+  mgBarrel.rotateX(Math.PI / 2);
+  mgBarrel.position.set(0, 0.24, 0.58);
+  cupolaGroup.add(mgBarrel);
 
-  const auxMuzzle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.12, 0.14, 12),
-    blackOutlineMat
-  );
-  auxMuzzle.rotateX(Math.PI / 2);
-  auxMuzzle.position.set(0.12, 0.04, 1.12);
-  auxTurret.add(auxMuzzle);
+  turret.add(cupolaGroup);
 
-  turret.add(auxTurret);
+  // Right Roof Rectangular Thermal Sight / Laser Rangefinder Housing (with glass window as in IMG_5396)
+  const thermalBox = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.28, 0.36), oliveDarkMat);
+  thermalBox.position.set(0.42, 0.48, 0.22);
+  turret.add(thermalBox);
 
-  // Roof Periscope & Pintle Machine-Gunner Sight on Right Roof
-  const roofSight = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.48), oliveMidMat);
-  roofSight.position.set(0.45, 0.58, 0.38);
-  roofSight.rotation.x = -0.2;
-  turret.add(roofSight);
+  const thermalWindow = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.04), desertTanLightMat);
+  thermalWindow.position.set(0.42, 0.48, 0.4);
+  turret.add(thermalWindow);
+
+  // Side Stowage Ammunition Box on Left Turret Rear
+  const sideAmmoBox = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.52), oliveCamoMat);
+  sideAmmoBox.position.set(-1.12, 0.28, -0.58);
+  turret.add(sideAmmoBox);
+
+  // Dual Tall Vertical Radio Whip Antennas rising from Turret Roof (Signature silhouette of IMG_5396!)
+  [-0.58, 0.48].forEach((ax) => {
+    const antennaMast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.015, 0.025, 1.45, 6),
+      blackOutlineMat
+    );
+    antennaMast.position.set(ax, 1.05, -0.45);
+    turret.add(antennaMast);
+  });
 
   group.add(turret);
 
   return { group, turret, cannon, leftTread, rightTread };
+}
+
+
+// 6b. REAL 3D TACTICAL HOLOGRAPHIC REFLEX SCOPE (Exact 3D model of scope_optic_clean.png):
+// - Picatinny dual cross-bolt rail riser clamp
+// - Hollow tactical cylindrical housing with chamfered angular shoulders (looking straight through along Z!)
+// - Luminous glowing amber/orange inner bezel ring
+// - Top solar ambient light collector with amber glow & knurled elevation dial
+// - Windage turret on the right side
+// - Clear multi-coated optical glass disc
+// - Glowing illuminated amber reticle (center dot, chevrons >> <<, horizontal range brackets —| · |—)
+export function createTacticalReflexScopeModel(options?: { isSniper?: boolean }): THREE.Group {
+  const scope = new THREE.Group();
+  scope.name = 'tactical_optic_scope';
+
+  const matteBlack = createFastLitMaterial({ color: 0x0f172a, roughness: 0.45, metalness: 0.75 });
+  const darkGunmetal = createFastLitMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.9 });
+  const neonAmberGlow = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+  const reticleYellowGlow = new THREE.MeshBasicMaterial({ color: 0xfbbf24, side: THREE.DoubleSide });
+  const clearLensMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  // 1. Picatinny Riser Base & Dual Clamp Assembly (locks firmly to top rail teeth)
+  const baseClamp = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.034, 0.22), matteBlack);
+  baseClamp.position.set(0, -0.092, 0);
+  scope.add(baseClamp);
+
+  // Left & Right Hex Cross-Bolts
+  [-0.06, 0.06].forEach((cz) => {
+    const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.125, 8), darkGunmetal);
+    bolt.rotateZ(Math.PI / 2);
+    bolt.position.set(0, -0.092, cz);
+    scope.add(bolt);
+
+    const knob = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.024, 0.024), matteBlack);
+    knob.position.set(0.062, -0.092, cz);
+    scope.add(knob);
+  });
+
+  // 2. Sculpted Lower Cradle / Neck
+  const neck = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.038, 0.17), darkGunmetal);
+  neck.position.set(0, -0.058, 0);
+  scope.add(neck);
+
+  // 3. Solid Machined Tactical Housing Tube with Beveled Rims (Solid optic chassis)
+  const tubeLength = options?.isSniper ? 0.34 : 0.18;
+  const outerRadius = 0.128;
+  const innerRadius = 0.108;
+  const rearRimZ = tubeLength * 0.5;
+
+  const outerHousing = new THREE.Mesh(
+    new THREE.CylinderGeometry(outerRadius, outerRadius, tubeLength, 28, 1, true),
+    darkGunmetal
+  );
+  outerHousing.rotateX(Math.PI / 2);
+  scope.add(outerHousing);
+
+  const innerHousing = new THREE.Mesh(
+    new THREE.CylinderGeometry(innerRadius, innerRadius, tubeLength, 28, 1, true),
+    matteBlack
+  );
+  innerHousing.rotateX(Math.PI / 2);
+  scope.add(innerHousing);
+
+  // Solid Rear Ocular Eyepiece Bezel (Thick machined metal face facing shooter)
+  const rearBezel = new THREE.Mesh(
+    new THREE.RingGeometry(innerRadius - 0.002, outerRadius + 0.004, 28),
+    darkGunmetal
+  );
+  rearBezel.position.set(0, 0, rearRimZ);
+  scope.add(rearBezel);
+
+  // Solid Front Objective Sunshade Bezel
+  const frontBezel = new THREE.Mesh(
+    new THREE.RingGeometry(innerRadius - 0.002, outerRadius + 0.004, 28),
+    matteBlack
+  );
+  frontBezel.position.set(0, 0, -rearRimZ);
+  scope.add(frontBezel);
+
+  // 4. Chamfered Angular Armored Shoulders (from scope_optic_clean.png)
+  const leftWing = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.088, tubeLength * 0.9), matteBlack);
+  leftWing.position.set(-0.118, 0.02, 0);
+  leftWing.rotation.z = -0.42;
+  scope.add(leftWing);
+
+  const rightWing = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.088, tubeLength * 0.9), matteBlack);
+  rightWing.position.set(0.118, 0.02, 0);
+  rightWing.rotation.z = 0.42;
+  scope.add(rightWing);
+
+  // 5. Top Ambient Solar Light Collector & Elevation Dial (from scope_optic_clean.png)
+  const topCover = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.024, tubeLength * 0.72), matteBlack);
+  topCover.position.set(0, outerRadius + 0.012, 0);
+  scope.add(topCover);
+
+  const solarCell = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.008, 0.07), neonAmberGlow);
+  solarCell.position.set(0, outerRadius + 0.024, 0);
+  scope.add(solarCell);
+
+  const elevDial = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.018, 12), darkGunmetal);
+  elevDial.position.set(0, outerRadius + 0.028, -0.02);
+  scope.add(elevDial);
+
+  const windDial = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.018, 12), darkGunmetal);
+  windDial.rotateZ(Math.PI / 2);
+  windDial.position.set(outerRadius + 0.024, 0.01, 0);
+  scope.add(windDial);
+
+  // 6. SINGLE LUMINOUS GLOWING AMBER/ORANGE OCULAR RIM (Only 1 ring facing shooter — NO second ring down the tube!)
+  const amberRing = new THREE.Mesh(
+    new THREE.TorusGeometry(innerRadius - 0.003, 0.005, 12, 32),
+    neonAmberGlow
+  );
+  amberRing.position.set(0, 0, rearRimZ - 0.003);
+  scope.add(amberRing);
+
+  // 7. Clear Optical Glass Disc (Multi-Coated Reflex Lens)
+  const lens = new THREE.Mesh(new THREE.CircleGeometry(innerRadius - 0.004, 24), clearLensMat);
+  lens.position.set(0, 0, rearRimZ - 0.008);
+  scope.add(lens);
+
+  // 8. HOLOGRAPHIC AMBER RETICLE (Projected in center of lens with glowing yellow circle & white core)
+  const reticleDot = new THREE.Mesh(new THREE.CircleGeometry(0.006, 16), reticleYellowGlow);
+  reticleDot.position.set(0, 0, rearRimZ - 0.008);
+  scope.add(reticleDot);
+
+  const reticleCore = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 12), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+  reticleCore.position.set(0, 0, rearRimZ - 0.0075);
+  scope.add(reticleCore);
+
+  // Chevrons >> (left) and << (right)
+  const chevronL1 = new THREE.Mesh(new THREE.PlaneGeometry(0.016, 0.0032), reticleYellowGlow);
+  chevronL1.position.set(-0.046, 0.006, rearRimZ - 0.008);
+  chevronL1.rotation.z = 0.55;
+  scope.add(chevronL1);
+  const chevronL2 = new THREE.Mesh(new THREE.PlaneGeometry(0.016, 0.0032), reticleYellowGlow);
+  chevronL2.position.set(-0.046, -0.006, rearRimZ - 0.008);
+  chevronL2.rotation.z = -0.55;
+  scope.add(chevronL2);
+
+  const chevronR1 = new THREE.Mesh(new THREE.PlaneGeometry(0.016, 0.0032), reticleYellowGlow);
+  chevronR1.position.set(0.046, 0.006, rearRimZ - 0.008);
+  chevronR1.rotation.z = -0.55;
+  scope.add(chevronR1);
+  const chevronR2 = new THREE.Mesh(new THREE.PlaneGeometry(0.016, 0.0032), reticleYellowGlow);
+  chevronR2.position.set(0.046, -0.006, rearRimZ - 0.008);
+  chevronR2.rotation.z = 0.55;
+  scope.add(chevronR2);
+
+  // Horizontal Range Brackets: —|   ·   |—
+  const bracketL = new THREE.Mesh(new THREE.PlaneGeometry(0.022, 0.0028), reticleYellowGlow);
+  bracketL.position.set(-0.022, 0, rearRimZ - 0.008);
+  scope.add(bracketL);
+  const postL = new THREE.Mesh(new THREE.PlaneGeometry(0.0028, 0.012), reticleYellowGlow);
+  postL.position.set(-0.012, -0.005, rearRimZ - 0.008);
+  scope.add(postL);
+
+  const bracketR = new THREE.Mesh(new THREE.PlaneGeometry(0.022, 0.0028), reticleYellowGlow);
+  bracketR.position.set(0.022, 0, rearRimZ - 0.008);
+  scope.add(bracketR);
+  const postR = new THREE.Mesh(new THREE.PlaneGeometry(0.0028, 0.012), reticleYellowGlow);
+  postR.position.set(0.012, -0.005, rearRimZ - 0.008);
+  scope.add(postR);
+
+  return scope;
 }
 
 // 7. FORTNITE + CALL OF DUTY: BLACK OPS WEAPON MODELS (SCAR-H, Tactical Pump Shotgun, Bolt-Action Sniper, Heavy Drum LMG)
@@ -1264,12 +1481,12 @@ export function createFortniteWeaponModel(weaponId: string, _color: string): { g
     lower.position.set(0, -0.11, 0.08);
     group.add(lower);
 
-    // Iconic SCAR UGG-Boot Folding Buttstock with Cheek Riser
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.24, 0.46), scarTanMat);
-    stock.position.set(0, -0.03, 0.72);
+    // Iconic SCAR UGG-Boot Folding Buttstock (Trimmed for First-Person ADS so it NEVER clips into camera eye!)
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.22, 0.32), scarTanMat);
+    stock.position.set(0, -0.03, 0.32);
     group.add(stock);
-    const cheekRest = new THREE.Mesh(new THREE.BoxGeometry(0.138, 0.07, 0.34), matteBlackMat);
-    cheekRest.position.set(0, 0.08, 0.68);
+    const cheekRest = new THREE.Mesh(new THREE.BoxGeometry(0.138, 0.06, 0.22), matteBlackMat);
+    cheekRest.position.set(0, 0.07, 0.3);
     group.add(cheekRest);
 
     // Heavy 7.62mm Box Magazine with Glowing Bio-Ammo Window
@@ -1288,22 +1505,10 @@ export function createFortniteWeaponModel(weaponId: string, _color: string): { g
     foregrip.position.set(0, -0.16, -0.36);
     group.add(foregrip);
 
-    // Black Ops EOTech Holographic Reflex Sight with Glowing Cyan Bullseye Reticle
-    const sightHood = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.15, 0.2), matteBlackMat);
-    sightHood.position.set(0, 0.19, 0.06);
-    group.add(sightHood);
-    const sightGlass = new THREE.Mesh(
-      new THREE.BoxGeometry(0.095, 0.105, 0.015),
-      new THREE.MeshBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.65 })
-    );
-    sightGlass.position.set(0, 0.195, 0.06);
-    group.add(sightGlass);
-    const sightDot = new THREE.Mesh(
-      new THREE.RingGeometry(0.014, 0.024, 16),
-      new THREE.MeshBasicMaterial({ color: 0x22d3ee, side: THREE.DoubleSide })
-    );
-    sightDot.position.set(0, 0.195, 0.07);
-    group.add(sightDot);
+    // Real 3D Tactical Holographic Reflex Scope (Matches scope_optic_clean.png with 100% Hollow Look-Through!)
+    const reflexScope = createTacticalReflexScopeModel();
+    reflexScope.position.set(0, 0.23, 0.0);
+    group.add(reflexScope);
 
     // Free-Float Barrel, Gas Block & 3-Prong Flash Suppressor
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.044, 0.58, 14), gunmetalMat);
@@ -1438,46 +1643,19 @@ export function createFortniteWeaponModel(weaponId: string, _color: string): { g
       group.add(leg);
     });
 
-    // High-Magnification 12x Telescopic Sniper Scope with Dual Mount Rings & Turret Dials
-    const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.56, 16), matteBlackMat);
-    scopeTube.rotateX(Math.PI / 2);
-    scopeTube.position.set(0, 0.23, -0.04);
-    group.add(scopeTube);
-
-    const objBell = new THREE.Mesh(new THREE.CylinderGeometry(0.076, 0.05, 0.22, 16), matteBlackMat);
-    objBell.rotateX(Math.PI / 2);
-    objBell.position.set(0, 0.23, -0.36);
-    group.add(objBell);
-
-    const eyeBell = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.064, 0.16, 16), matteBlackMat);
-    eyeBell.rotateX(Math.PI / 2);
-    eyeBell.position.set(0, 0.23, 0.26);
-    group.add(eyeBell);
-
-    // Glowing Cyan Multi-Coated Sniper Lenses
-    const frontLens = new THREE.Mesh(
-      new THREE.CircleGeometry(0.068, 16),
-      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
-    );
-    frontLens.rotateY(Math.PI);
-    frontLens.position.set(0, 0.23, -0.472);
-    group.add(frontLens);
-
-    const rearLens = new THREE.Mesh(
-      new THREE.CircleGeometry(0.056, 16),
-      new THREE.MeshBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.75 })
-    );
-    rearLens.position.set(0, 0.23, 0.342);
-    group.add(rearLens);
+    // Real 3D Tactical Telescopic Scope (Matches scope_optic_clean.png with 100% Hollow Look-Through!)
+    const sniperScope = createTacticalReflexScopeModel({ isSniper: true });
+    sniperScope.position.set(0, 0.23, -0.04);
+    group.add(sniperScope);
 
     // Detachable .338 Lapua Box Magazine
     const sniperMag = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.26, 0.24), matteBlackMat);
     sniperMag.position.set(0, -0.2, 0.0);
     group.add(sniperMag);
 
-    // Skeletonized Precision Buttstock
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.22, 0.52), sniperCyanMat);
-    stock.position.set(0, -0.04, 0.74);
+    // Skeletonized Precision Buttstock (Trimmed for First-Person ADS so it NEVER clips into camera eye!)
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.2, 0.34), sniperCyanMat);
+    stock.position.set(0, -0.04, 0.34);
     group.add(stock);
 
     return { group };
@@ -1525,20 +1703,14 @@ export function createFortniteWeaponModel(weaponId: string, _color: string): { g
     muzzle.position.set(0, 0.02, -1.32);
     group.add(muzzle);
 
-    // Black Ops Target-Finder Reflex Optic on Top Rail
-    const tfFrame = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.22), matteBlackMat);
-    tfFrame.position.set(0, 0.2, 0.05);
-    group.add(tfFrame);
-    const tfGlass = new THREE.Mesh(
-      new THREE.BoxGeometry(0.11, 0.095, 0.015),
-      new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.65 })
-    );
-    tfGlass.position.set(0, 0.2, 0.05);
-    group.add(tfGlass);
+    // Real 3D Tactical Holographic Reflex Scope (Matches scope_optic_clean.png with 100% Hollow Look-Through!)
+    const lmgScope = createTacticalReflexScopeModel();
+    lmgScope.position.set(0, 0.23, 0.0);
+    group.add(lmgScope);
 
-    // Heavy Buffer Stock
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.48), matteBlackMat);
-    stock.position.set(0, -0.04, 0.72);
+    // Heavy Buffer Stock (Trimmed for First-Person ADS so it NEVER clips into camera eye!)
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 0.32), matteBlackMat);
+    stock.position.set(0, -0.04, 0.32);
     group.add(stock);
 
     return { group };
@@ -5118,78 +5290,307 @@ export function createBacterialArtilleryModel(): {
 } {
   const group = new THREE.Group();
 
-  const chitinMat = createFastLitMaterial({
-    color: 0x334155,
-    roughness: 0.45,
-    metalness: 0.65,
+  // Palette matched directly to IMG_5395.webp (Military Olive-Drab Field Howitzer + Dark Treaded Tires + Red Breech Recess)
+  const oliveDrabLightMat = createFastLitMaterial({
+    color: 0x767d56, // Sunlit olive-drab armor & barrel
+    roughness: 0.46,
+    metalness: 0.32,
   });
-  const darkSteelMat = createFastLitMaterial({
-    color: 0x1e293b,
-    roughness: 0.35,
-    metalness: 0.85,
+  const oliveDrabMidMat = createFastLitMaterial({
+    color: 0x5d6443, // Main olive-drab carriage & recoil housing
+    roughness: 0.5,
+    metalness: 0.38,
   });
-  const sporeGlowMat = createFastLitMaterial({
-    color: 0x10b981,
-    emissive: 0x059669,
-    emissiveIntensity: 0.85,
-    roughness: 0.2,
+  const oliveDrabDarkMat = createFastLitMaterial({
+    color: 0x3d432b, // Shaded olive structural brackets & hubs
+    roughness: 0.55,
+    metalness: 0.45,
   });
-  const hazardMat = createFastLitMaterial({
-    color: 0xf59e0b,
-    emissive: 0xb45309,
+  const tireRubberMat = createFastLitMaterial({
+    color: 0x26282a, // Heavy-treaded artillery rubber tires
+    roughness: 0.72,
+    metalness: 0.15,
+  });
+  const redBreechMat = createFastLitMaterial({
+    color: 0x991b1b, // Signature crimson-red inner breech trough & tail reflectors (IMG_5395.webp!)
+    emissive: 0x7f1d1d,
     emissiveIntensity: 0.35,
   });
+  const reflectorOrangeMat = new THREE.MeshBasicMaterial({ color: 0xea580c });
+  const darkMetalMat = new THREE.MeshBasicMaterial({ color: 0x141712 });
 
-  // Heavy Armored Chitinous Base with Spiked Stabilization Outriggers
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.65, 2.6), chitinMat);
-  chassis.position.y = 0.35;
-  group.add(chassis);
+  // 1. Central Firing Jack Baseplate & Heavy Axle Beam
+  const firingPedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.62, 0.78, 0.34, 14),
+    oliveDrabDarkMat
+  );
+  firingPedestal.position.set(0, 0.17, -0.35);
+  group.add(firingPedestal);
 
-  [-1.25, 1.25].forEach((sx) => {
-    const outrigger = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.5, 2.4), darkSteelMat);
-    outrigger.position.set(sx, 0.3, 0);
-    group.add(outrigger);
+  const mainAxle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.16, 3.05, 12),
+    oliveDrabMidMat
+  );
+  mainAxle.rotateZ(Math.PI / 2);
+  mainAxle.position.set(0, 0.68, -0.45);
+  group.add(mainAxle);
 
-    // Hazard Stripes
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.1, 2.1), hazardMat);
-    stripe.position.set(sx, 0.48, 0);
-    group.add(stripe);
+  // Orange-Red Rectangular Tail Reflector Boxes on Left & Right Axle Ends (as seen in IMG_5395.webp!)
+  [-1.22, 1.22].forEach((rx) => {
+    const lightBracket = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.32), oliveDrabMidMat);
+    lightBracket.position.set(rx, 0.65, -0.82);
+    group.add(lightBracket);
+
+    const reflector = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.06), reflectorOrangeMat);
+    reflector.position.set(rx, 0.65, -0.97);
+    group.add(reflector);
   });
 
-  // Swivel Turret Ring
-  const turretBase = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.1, 0.45, 12), darkSteelMat);
-  turretBase.position.y = 0.85;
-  group.add(turretBase);
+  // 2. Two Large Heavy-Treaded Rubber Artillery Tires with Olive-Drab 6-Bolt Dish Hubs (IMG_5395.webp!)
+  [-1.52, 1.52].forEach((wx) => {
+    const wheelGroup = new THREE.Group();
+    wheelGroup.position.set(wx, 0.72, -0.32);
 
-  // Angled Spore Cannon Mortar Barrel (pointed ~48° upward toward distal bronchi)
+    // Main Thick Rubber Tire Torus/Cylinder
+    const tireMain = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.72, 0.72, 0.42, 20),
+      tireRubberMat
+    );
+    tireMain.rotateZ(Math.PI / 2);
+    wheelGroup.add(tireMain);
+
+    // 12 Radial Off-Road Tire Lug Treads around circumference
+    for (let tIdx = 0; tIdx < 12; tIdx++) {
+      const ang = (tIdx / 12) * Math.PI * 2;
+      const lug = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.08, 0.12), darkMetalMat);
+      lug.position.set(0, Math.cos(ang) * 0.71, Math.sin(ang) * 0.71);
+      lug.rotation.x = -ang;
+      wheelGroup.add(lug);
+    }
+
+    // Olive-Drab Concave Steel Wheel Rim + Central Axle Cap
+    const wheelRim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.42, 0.42, 0.45, 14),
+      oliveDrabMidMat
+    );
+    wheelRim.rotateZ(Math.PI / 2);
+    wheelGroup.add(wheelRim);
+
+    const wheelHub = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.16, 0.49, 10),
+      oliveDrabDarkMat
+    );
+    wheelHub.rotateZ(Math.PI / 2);
+    wheelGroup.add(wheelHub);
+
+    group.add(wheelGroup);
+  });
+
+  // 3. Long Split-Trail / Box-Beam Stabilizer Carriage Legs Extending Forward Under Barrel (IMG_5395.webp!)
+  [-0.48, 0.48].forEach((tx) => {
+    const trailBeam = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.32, 3.65), oliveDrabMidMat);
+    trailBeam.position.set(tx, 0.42, 1.15);
+    group.add(trailBeam);
+
+    const trailTopFlange = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 3.55), oliveDrabLightMat);
+    trailTopFlange.position.set(tx, 0.59, 1.15);
+    group.add(trailTopFlange);
+
+    // Side tie-down cleats along carriage beam
+    [-0.1, 0.8, 1.7, 2.4].forEach((cz) => {
+      const cleat = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.14), oliveDrabDarkMat);
+      cleat.position.set(tx + (tx < 0 ? -0.2 : 0.2), 0.42, cz);
+      group.add(cleat);
+    });
+
+    // Circular Ground-Spade Anchor Pad at End of Trail Beam
+    const spadePad = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.38, 0.44, 0.14, 12),
+      oliveDrabDarkMat
+    );
+    spadePad.position.set(tx, 0.18, 2.88);
+    group.add(spadePad);
+  });
+
+  // Forward Barrel Travel Lock A-Frame Bracket on Trail Beams
+  const travelLock = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.48, 0.16), oliveDrabDarkMat);
+  travelLock.position.set(0, 0.78, 2.15);
+  group.add(travelLock);
+
+  // 4. Angled Twin Gun-Shield Flaps (Left & Right) + Handwheel Crank + Optical Sight Mount (IMG_5395.webp!)
+  [-0.78, 0.78].forEach((sx) => {
+    const shieldLower = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.92, 0.08), oliveDrabMidMat);
+    shieldLower.position.set(sx, 1.12, -0.18);
+    shieldLower.rotation.x = -0.28;
+    shieldLower.rotation.y = sx < 0 ? 0.22 : -0.22;
+    group.add(shieldLower);
+
+    const shieldUpperFlap = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.42, 0.07), oliveDrabLightMat);
+    shieldUpperFlap.position.set(sx, 1.62, -0.02);
+    shieldUpperFlap.rotation.x = -0.62;
+    shieldUpperFlap.rotation.y = sx < 0 ? 0.22 : -0.22;
+    group.add(shieldUpperFlap);
+  });
+
+  // Left Elevation Handwheel Crank & Panoramic Artillery Sight Assembly (IMG_5395.webp!)
+  const handwheel = new THREE.Mesh(
+    new THREE.TorusGeometry(0.22, 0.03, 8, 16),
+    darkMetalMat
+  );
+  handwheel.position.set(-0.78, 1.18, -0.62);
+  handwheel.rotation.y = 0.45;
+  group.add(handwheel);
+
+  const sightMount = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.38, 0.26), darkMetalMat);
+  sightMount.position.set(-0.62, 1.48, -0.35);
+  group.add(sightMount);
+
+  // Twin Hydraulic Equilibrator Cylinders Flanking the Breech
+  [-0.44, 0.44].forEach((ex) => {
+    const eqCyl = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.1, 0.78, 10),
+      oliveDrabLightMat
+    );
+    eqCyl.position.set(ex, 1.05, -0.48);
+    eqCyl.rotation.z = ex < 0 ? -0.25 : 0.25;
+    eqCyl.rotation.x = 0.22;
+    group.add(eqCyl);
+  });
+
+  // 5. Elevating Howitzer Cradle, Open Breech Block with Red Inner Trough, Over-Barrel Recoil Recuperator & Long Barrel with Slotted Muzzle Brake (IMG_5395.webp!)
   const barrelGroup = new THREE.Group();
-  barrelGroup.position.set(0, 1.05, 0);
-  barrelGroup.rotation.x = -0.75; // Upward angle
+  barrelGroup.position.set(0, 1.18, -0.35);
+  barrelGroup.rotation.x = -0.18; // Slight upward field-artillery elevation
 
-  const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.32, 0.46, 2.6, 12),
-    darkSteelMat
-  );
-  barrel.position.set(0, 1.1, 0);
-  barrelGroup.add(barrel);
+  // Heavy Cast-Steel Breech Ring Hood at Rear
+  const breechHood = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.72, 0.82), oliveDrabLightMat);
+  breechHood.position.set(0, 0.06, -0.38);
+  barrelGroup.add(breechHood);
 
-  // Muzzle Brake Ring
-  const muzzle = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.44, 0.38, 0.32, 12),
-    chitinMat
-  );
-  muzzle.position.set(0, 2.35, 0);
-  barrelGroup.add(muzzle);
-
-  // Coiled Bioluminescent Spore Reactor Chamber
-  const sporeCore = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 10), sporeGlowMat);
-  sporeCore.position.set(0, 0.2, -0.35);
+  // Signature Crimson-Red Inner Breech Loading Trough Recess (Directly from IMG_5395.webp!)
+  const sporeCore = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.44, 0.56), redBreechMat);
+  sporeCore.position.set(0, -0.04, -0.52);
   barrelGroup.add(sporeCore);
 
+  // Swinging Breech Block Door on Left of Breech
+  const breechDoor = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.44, 0.42), oliveDrabMidMat);
+  breechDoor.position.set(-0.42, -0.04, -0.88);
+  breechDoor.rotation.y = 0.35;
+  barrelGroup.add(breechDoor);
+
+  // Thick Boxy-Rounded Hydro-Pneumatic Recoil Recuperator Housing Mounted ON TOP of Rear Barrel (IMG_5395.webp!)
+  const recuperatorHousing = new THREE.Mesh(
+    new THREE.BoxGeometry(0.52, 0.42, 2.35),
+    oliveDrabMidMat
+  );
+  recuperatorHousing.position.set(0, 0.34, 0.92);
+  barrelGroup.add(recuperatorHousing);
+
+  const recuperatorCap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.25, 0.25, 2.34, 12),
+    oliveDrabLightMat
+  );
+  recuperatorCap.rotateX(Math.PI / 2);
+  recuperatorCap.position.set(0, 0.52, 0.92);
+  barrelGroup.add(recuperatorCap);
+
+  // Long 152mm/155mm Olive-Drab Howitzer Cannon Barrel Extending Forward
+  const barrelGeo = new THREE.CylinderGeometry(0.16, 0.21, 4.45, 16);
+  barrelGeo.rotateX(Math.PI / 2);
+  const barrel = new THREE.Mesh(barrelGeo, oliveDrabLightMat);
+  barrel.position.set(0, 0.06, 2.05);
+
+  // Barrel Collar Band at Mid-Length
+  const midCollar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.22, 0.18, 16),
+    oliveDrabDarkMat
+  );
+  midCollar.rotateX(Math.PI / 2);
+  midCollar.position.set(0, 0, 0.35);
+  barrel.add(midCollar);
+
+  // Signature Rectangular Dual-Baffle Slotted Muzzle Brake + Front Tow-Eye Ring at Tip (IMG_5395.webp!)
+  const muzzleBrakeBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.46, 0.36, 0.68),
+    oliveDrabMidMat
+  );
+  muzzleBrakeBody.position.set(0, 0, 2.18);
+  barrel.add(muzzleBrakeBody);
+
+  // Dark Side Vent Slots on Muzzle Brake
+  [-0.235, 0.235].forEach((vx) => {
+    [-0.14, 0.14].forEach((vz) => {
+      const ventSlot = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.22, 0.18), darkMetalMat);
+      ventSlot.position.set(vx, 0, 2.18 + vz);
+      barrel.add(ventSlot);
+    });
+  });
+
+  // Circular Tow-Eye Ring at the Very Front Tip of the Muzzle Brake (IMG_5395.webp!)
+  const muzzleTowRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.11, 0.028, 8, 14),
+    oliveDrabLightMat
+  );
+  muzzleTowRing.rotation.x = Math.PI / 2;
+  muzzleTowRing.position.set(0, -0.02, 2.62);
+  barrel.add(muzzleTowRing);
+
+  barrelGroup.add(barrel);
   group.add(barrelGroup);
 
   return { group, barrel, sporeCore };
 }
+
+// 26b. TACTICAL C4 SATCHEL CHARGE WITH BLINKING LED BEACON (For Secret Spy Mission Timed Demolition!)
+export function createC4SatchelModel(): {
+  group: THREE.Group;
+  ledMesh: THREE.Mesh;
+} {
+  const group = new THREE.Group();
+
+  const packMat = createFastLitMaterial({
+    color: 0x3f4a3c, // Military olive-grey C4 brick wrapping
+    roughness: 0.6,
+  });
+  const strapMat = createFastLitMaterial({
+    color: 0x18181b,
+    roughness: 0.4,
+  });
+  const screenMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+
+  // Twin C4 Plastic Explosive Bricks
+  [-0.14, 0.14].forEach((bx) => {
+    const brick = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.42), packMat);
+    brick.position.set(bx, 0.08, 0);
+    group.add(brick);
+  });
+
+  // Binding Straps
+  [-0.12, 0.12].forEach((sz) => {
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.18, 0.06), strapMat);
+    strap.position.set(0, 0.08, sz);
+    group.add(strap);
+  });
+
+  // Central Digital Detonator Receiver + Blinking Red LED Beacon
+  const detonatorBox = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.24), strapMat);
+  detonatorBox.position.set(0, 0.19, 0);
+  group.add(detonatorBox);
+
+  const timerScreen = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 0.09), screenMat);
+  timerScreen.position.set(0, 0.245, 0.03);
+  group.add(timerScreen);
+
+  const ledMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.065, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xef4444 })
+  );
+  ledMesh.position.set(0, 0.26, -0.06);
+  group.add(ledMesh);
+
+  return { group, ledMesh };
+}
+
 
 export function createCiliaTreeModel(): {
   group: THREE.Group;
