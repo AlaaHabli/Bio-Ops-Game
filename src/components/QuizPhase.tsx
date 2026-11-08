@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LevelConfig, Question, Weapon } from '../types/game';
 import { sounds } from '../services/soundEffects';
-import { CheckCircle2, XCircle, Lightbulb, Zap, BookOpen } from 'lucide-react';
+import { CheckCircle2, XCircle, Lightbulb, Zap, BookOpen, Home } from 'lucide-react';
 
 interface QuizPhaseProps {
   level: LevelConfig;
@@ -11,6 +11,7 @@ interface QuizPhaseProps {
   onThreeCorrectAchieved: () => void;
   onOpenArmory: () => void;
   onOpenIntelGuide: () => void;
+  onBackToMenu?: () => void;
 }
 
 export const QuizPhase: React.FC<QuizPhaseProps> = ({
@@ -21,6 +22,7 @@ export const QuizPhase: React.FC<QuizPhaseProps> = ({
   onThreeCorrectAchieved,
   onOpenArmory,
   onOpenIntelGuide,
+  onBackToMenu,
 }) => {
   // Phase 1: questions 0, 1, 2. Phase 2: questions 3, 4, 5. Phase 3: questions 6, 7, 8.
   const phaseStartIndex = (phaseNumber - 1) * 3;
@@ -94,6 +96,18 @@ export const QuizPhase: React.FC<QuizPhaseProps> = ({
     setShowHint(false);
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onBackToMenu) {
+        e.preventDefault();
+        sounds.playRadioChirp();
+        onBackToMenu();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onBackToMenu]);
+
   return (
     <div className="relative w-full h-full flex flex-col justify-between p-3 sm:p-6 bg-[#080a0f] overflow-y-auto">
       {/* Background Military Scanlines */}
@@ -106,29 +120,42 @@ export const QuizPhase: React.FC<QuizPhaseProps> = ({
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
             <span className="text-xs font-mono text-amber-400 uppercase tracking-widest">
-              TACTICAL INTEL VERIFICATION
+              {level.stage === 'Grade 5' ? 'McGRAW HILL INSPIRE SCIENCE (GRADE 5)' : 'TACTICAL INTEL VERIFICATION (GRADE 7–8)'}
             </span>
           </div>
           <h2 className="text-lg sm:text-xl font-display font-bold text-white tracking-wider uppercase mt-0.5">
             {level.title} — {level.codename}
           </h2>
           <div className="text-xs font-mono text-slate-400">
-            CURRICULUM TOPIC: <span className="text-cyan-400 font-semibold">{level.topic} ({level.stage})</span>
+            CURRICULUM TOPIC: <span className="text-cyan-400 font-semibold">{level.topic} ({level.stage === 'Stage 7' ? 'Grade 7' : level.stage})</span>
           </div>
         </div>
 
-        {/* Action Quicklinks: Intel Archive & Armory */}
+        {/* Action Quicklinks: Back to Menu, Intel Archive & Armory */}
         <div className="flex items-center space-x-2">
+          {onBackToMenu && (
+            <button
+              onClick={() => {
+                sounds.playRadioChirp();
+                onBackToMenu();
+              }}
+              className="px-3 py-1.5 rounded bg-rose-950/70 border border-rose-500/70 hover:bg-rose-900 text-xs font-display font-bold text-rose-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Return to Main Menu [ESC]"
+            >
+              <Home className="w-3.5 h-3.5 text-rose-400" />
+              <span>BACK [ESC]</span>
+            </button>
+          )}
           <button
             onClick={onOpenIntelGuide}
-            className="px-3 py-1.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-xs font-display text-slate-300 flex items-center gap-1.5 transition-colors"
+            className="px-3 py-1.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-xs font-display text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">CAMBRIDGE</span> REVISION INTEL
+            <span className="hidden sm:inline">STUDY</span> GUIDE
           </button>
           <button
             onClick={onOpenArmory}
-            className="px-3 py-1.5 rounded bg-slate-900 border border-slate-700 hover:border-amber-500 text-xs font-display text-slate-300 flex items-center gap-1.5 transition-colors"
+            className="px-3 py-1.5 rounded bg-slate-900 border border-slate-700 hover:border-amber-500 text-xs font-display text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Zap className="w-3.5 h-3.5 text-amber-400" />
             <span>ARMORY</span>

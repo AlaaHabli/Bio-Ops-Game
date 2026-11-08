@@ -39,7 +39,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenLeaderboard,
   onOpenProfile,
 }) => {
-  const [stageFilter, setStageFilter] = useState<'ALL' | 'Stage 7' | 'Stage 8' | 'SECRET'>('ALL');
+  const [stageFilter, setStageFilter] = useState<'ALL' | 'Grade 5' | 'Stage 7' | 'Stage 8' | 'SECRET'>('ALL');
 
   const secretLevel = CURRICULUM_LEVELS.find((lvl) => lvl.isSecret) || CURRICULUM_LEVELS[CURRICULUM_LEVELS.length - 1];
 
@@ -182,7 +182,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             <div>
               <div className="flex items-center justify-between gap-4 mb-3">
                 <div className="text-xs sm:text-sm font-mono text-cyan-400">
-                  <span>Cambridge Science Stage 7 &amp; 8</span>
+                  <span>Grade 5 (McGraw Hill Inspire) &amp; Grade 7–8 Science</span>
                   <span aria-hidden="true" className="mx-2">·</span>
                   <span>Interactive 3D Game</span>
                 </div>
@@ -204,7 +204,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               <div className="mt-5 p-4 rounded-lg bg-slate-900 border border-slate-700/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <div className="text-xs font-mono text-amber-400">
-                    CURRENTLY SELECTED MISSION ({selectedLevel.stage})
+                    CURRENTLY SELECTED MISSION ({selectedLevel.stage === 'Grade 5' ? 'Grade 5 · McGraw Hill Inspire' : selectedLevel.stage === 'Stage 7' ? 'Grade 7 · Stage 7' : selectedLevel.stage})
                   </div>
                   <div className="text-lg sm:text-xl font-display font-bold text-white mt-0.5">
                     {selectedLevel.title}
@@ -422,27 +422,51 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 </span>
               </div>
 
-              {/* Interactive Stage Filter Tabs */}
-              <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg mb-4">
-                {(['ALL', 'Stage 7', 'Stage 8', 'SECRET'] as const).map((tab) => (
+              {/* Interactive Grade & Stage Filter Tabs */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg mb-4">
+                {(['ALL', 'Grade 5', 'Stage 7', 'Stage 8', 'SECRET'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => {
                       sounds.unlockAudio();
                       sounds.playRadioChirp();
                       setStageFilter(tab);
+                      if (tab === 'Grade 5' && selectedLevel.stage !== 'Grade 5') {
+                        const firstG5 = CURRICULUM_LEVELS.find((l) => l.stage === 'Grade 5');
+                        if (firstG5) onSelectLevel(firstG5);
+                      } else if (tab === 'Stage 7' && selectedLevel.stage !== 'Stage 7') {
+                        const firstG7 = CURRICULUM_LEVELS.find((l) => l.stage === 'Stage 7' && !l.isSecret);
+                        if (firstG7) onSelectLevel(firstG7);
+                      } else if (tab === 'Stage 8' && (selectedLevel.stage !== 'Stage 8' || selectedLevel.isSecret)) {
+                        const firstG8 = CURRICULUM_LEVELS.find((l) => l.stage === 'Stage 8' && !l.isSecret);
+                        if (firstG8) onSelectLevel(firstG8);
+                      } else if (tab === 'SECRET' && secretLevel) {
+                        onSelectLevel(secretLevel);
+                      }
                     }}
-                    className={`flex-1 py-1.5 px-2.5 rounded-md text-xs font-display font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                    className={`py-1.5 px-2 rounded-md text-[11px] sm:text-xs font-display font-bold transition-colors cursor-pointer whitespace-nowrap text-center ${
                       stageFilter === tab
                         ? tab === 'SECRET'
                           ? 'bg-purple-500 text-slate-950 shadow-xs'
+                          : tab === 'Grade 5'
+                          ? 'bg-amber-400 text-slate-950 shadow-xs'
                           : 'bg-cyan-500 text-slate-950 shadow-xs'
                         : tab === 'SECRET'
                         ? 'text-purple-300 hover:text-purple-200'
+                        : tab === 'Grade 5'
+                        ? 'text-amber-300 hover:text-amber-200'
                         : 'text-slate-300 hover:text-white'
                     }`}
                   >
-                    {tab === 'ALL' ? 'All Topics' : tab === 'SECRET' ? '★ Secret Op' : tab}
+                    {tab === 'ALL'
+                      ? 'All Grades'
+                      : tab === 'Grade 5'
+                      ? 'Grade 5 (Inspire)'
+                      : tab === 'Stage 7'
+                      ? 'Grade 7'
+                      : tab === 'SECRET'
+                      ? '★ Secret Op'
+                      : 'Grade 8'}
                   </button>
                 ))}
               </div>
@@ -466,6 +490,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                         isSelected
                           ? lvl.isSecret
                             ? 'bg-purple-950/80 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.35)]'
+                            : lvl.stage === 'Grade 5'
+                            ? 'bg-amber-950/70 border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.28)]'
                             : 'bg-cyan-950/70 border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.25)]'
                           : lvl.isSecret
                           ? 'bg-purple-950/30 border-purple-800/80 hover:border-purple-500'
@@ -474,8 +500,22 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                          <span className={lvl.isSecret ? 'text-purple-300 font-bold' : 'text-cyan-400 font-bold'}>
-                            {lvl.isSecret ? '★ CLASSIFIED SECRET' : lvl.stage}
+                          <span
+                            className={
+                              lvl.isSecret
+                                ? 'text-purple-300 font-bold'
+                                : lvl.stage === 'Grade 5'
+                                ? 'text-amber-400 font-bold'
+                                : 'text-cyan-400 font-bold'
+                            }
+                          >
+                            {lvl.isSecret
+                              ? '★ CLASSIFIED SECRET'
+                              : lvl.stage === 'Grade 5'
+                              ? 'GRADE 5 (INSPIRE)'
+                              : lvl.stage === 'Stage 7'
+                              ? 'GRADE 7 (STAGE 7)'
+                              : 'GRADE 8 (STAGE 8)'}
                           </span>
                           <span aria-hidden="true">·</span>
                           <span className="truncate">{lvl.topic}</span>
@@ -526,9 +566,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         {/* SIMPLE 3-STEP STUDENT GUIDE STRIP */}
         <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-950/80 border border-slate-800/90 rounded-xl p-4 sm:p-5">
           <div>
-            <div className="text-xs font-mono text-cyan-400 font-bold">STEP 1 · PICK A TOPIC</div>
+            <div className="text-xs font-mono text-cyan-400 font-bold">STEP 1 · PICK YOUR GRADE &amp; TOPIC</div>
             <div className="text-sm text-slate-200 mt-1">
-              Select any Stage 7 or Stage 8 Science topic from the mission list on the right.
+              Choose <strong>Grade 5 (McGraw Hill Inspire)</strong> or <strong>Grade 7 / 8</strong> from the mission tabs on the right.
             </div>
           </div>
           <div>

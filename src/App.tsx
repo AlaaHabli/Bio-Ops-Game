@@ -267,7 +267,7 @@ export default function App() {
         />
       )}
 
-      {/* 3. CAMBRIDGE CHECKPOINT QUIZ PHASE */}
+      {/* 3. SCIENCE QUIZ PHASE (GRADE 5 INSPIRE & GRADE 7-8) */}
       {gameState === 'QUIZ' && (
         <QuizPhase
           level={selectedLevel}
@@ -277,6 +277,7 @@ export default function App() {
           onThreeCorrectAchieved={handleDeployCombat}
           onOpenArmory={() => setIsArmoryOpen(true)}
           onOpenIntelGuide={() => setIsIntelOpen(true)}
+          onBackToMenu={handleMainMenu}
         />
       )}
 

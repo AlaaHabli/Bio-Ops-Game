@@ -386,6 +386,55 @@ export function getOrganThemeForLevel(levelId: string, phaseNumber: number): Org
       ? getOrganThemeById('alveoli')
       : getOrganThemeById('brain');
   }
+  if (levelId === 'level_g5_matter_properties') {
+    return phaseNumber === 1
+      ? getOrganThemeById('capillary')
+      : phaseNumber === 2
+      ? getOrganThemeById('alveoli')
+      : getOrganThemeById('stomach');
+  }
+  if (levelId === 'level_g5_particles_states') {
+    return phaseNumber === 1
+      ? getOrganThemeById('alveoli')
+      : phaseNumber === 2
+      ? getOrganThemeById('capillary')
+      : getOrganThemeById('brain');
+  }
+  if (levelId === 'level_g5_physical_chemical_change') {
+    return phaseNumber === 1
+      ? getOrganThemeById('stomach')
+      : phaseNumber === 2
+      ? getOrganThemeById('intestine')
+      : getOrganThemeById('capillary');
+  }
+  if (levelId === 'level_g5_survival_plants') {
+    return phaseNumber === 1
+      ? getOrganThemeById('alveoli')
+      : phaseNumber === 2
+      ? getOrganThemeById('intestine')
+      : getOrganThemeById('brain');
+  }
+  if (levelId === 'level_g5_matter_ecosystems') {
+    return phaseNumber === 1
+      ? getOrganThemeById('intestine')
+      : phaseNumber === 2
+      ? getOrganThemeById('stomach')
+      : getOrganThemeById('alveoli');
+  }
+  if (levelId === 'level_g5_earth_systems') {
+    return phaseNumber === 1
+      ? getOrganThemeById('brain')
+      : phaseNumber === 2
+      ? getOrganThemeById('capillary')
+      : getOrganThemeById('stomach');
+  }
+  if (levelId === 'level_g5_water_space_systems') {
+    return phaseNumber === 1
+      ? getOrganThemeById('capillary')
+      : phaseNumber === 2
+      ? getOrganThemeById('brain')
+      : getOrganThemeById('alveoli');
+  }
   return ORGAN_THEMES[(phaseNumber - 1) % ORGAN_THEMES.length];
 }
 

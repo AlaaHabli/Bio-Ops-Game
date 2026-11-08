@@ -1790,6 +1790,133 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                   }}
                 />
 
+                {/* CURVED PERIMETER HUD ARCS ROUNDING LEFT & RIGHT LENS EDGES */}
+                <svg
+                  viewBox="0 0 200 200"
+                  className="absolute -inset-[6%] w-[112%] h-[112%] pointer-events-none overflow-visible"
+                >
+                  {/* Left Curved Health Track */}
+                  <path
+                    d="M 35 165 A 92 92 0 0 1 35 35"
+                    fill="none"
+                    stroke="rgba(24, 24, 27, 0.85)"
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                  />
+                  {/* Left Curved Health Fill Arc */}
+                  <path
+                    d="M 35 165 A 92 92 0 0 1 35 35"
+                    fill="none"
+                    stroke={hp < 35 ? '#f43f5e' : hp < 65 ? '#f59e0b' : '#10b981'}
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray="145"
+                    strokeDashoffset={145 - (145 * Math.max(0, Math.min(100, (hp / maxHp) * 100))) / 100}
+                    style={{
+                      filter:
+                        hp < 35
+                          ? 'drop-shadow(0 0 8px rgba(244,63,94,0.9))'
+                          : 'drop-shadow(0 0 6px rgba(16,185,129,0.75))',
+                      transition: 'stroke-dashoffset 150ms ease-out',
+                    }}
+                  />
+
+                  {/* Right Curved Cloak / Ammo Track */}
+                  <path
+                    d="M 165 165 A 92 92 0 0 0 165 35"
+                    fill="none"
+                    stroke="rgba(24, 24, 27, 0.85)"
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                  />
+                  {/* Right Curved Ammo Fill Arc */}
+                  <path
+                    d="M 165 165 A 92 92 0 0 0 165 35"
+                    fill="none"
+                    stroke={isReloading ? '#f59e0b' : ammo === 0 ? '#f43f5e' : '#22d3ee'}
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray="145"
+                    strokeDashoffset={145 - 145 * Math.max(0, Math.min(1, ammo / Math.max(1, maxAmmo)))}
+                    style={{
+                      filter: 'drop-shadow(0 0 6px rgba(34,211,238,0.75))',
+                      transition: 'stroke-dashoffset 120ms ease-out',
+                    }}
+                  />
+                </svg>
+
+                {/* LEFT ROUNDED SCOPE TELEMETRY: HEALTH & CLOAK */}
+                <div className="absolute top-1/2 -left-3 sm:-left-6 -translate-x-full -translate-y-1/2 flex flex-col items-end gap-1.5 pointer-events-none font-mono">
+                  <div className="px-2 py-1 bg-zinc-950/90 border-r-2 border-emerald-400 border-y border-l border-emerald-500/30 rounded-l-xl shadow-[0_0_14px_rgba(0,0,0,0.85)] flex flex-col items-end">
+                    <span className="text-[8px] tracking-widest text-zinc-400 uppercase">VITALITY</span>
+                    <div className="flex items-center gap-1">
+                      <Shield className={`w-3.5 h-3.5 ${hp < 35 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`} />
+                      <span className={`text-xs sm:text-sm font-black tabular-nums ${hp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
+                        {hp}%
+                      </span>
+                    </div>
+                  </div>
+                  <div className={`px-2 py-0.5 bg-zinc-950/90 border-r-2 rounded-l-lg text-[9px] font-bold tracking-wider uppercase shadow-md ${
+                    stealthCloakActive ? 'border-cyan-400 text-cyan-300' : isBehindCover ? 'border-emerald-400 text-emerald-300' : 'border-amber-500/70 text-amber-400'
+                  }`}>
+                    {stealthCloakActive ? `CLOAK ${stealthEnergy}%` : isBehindCover ? 'IN COVER' : isCrouching ? 'LOW PROFILE' : 'EXPOSED'}
+                  </div>
+                </div>
+
+                {/* RIGHT ROUNDED SCOPE TELEMETRY: SPY ABILITIES & AMMO ARC */}
+                <div className="absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 pointer-events-auto font-mono">
+                  <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
+                    <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
+                    <span className={`text-xs font-black tabular-nums ${ammo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
+                      {isReloading ? 'RLD' : `${ammo}/${maxAmmo}`}
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(12, 0.4);
+                      toggleCloak();
+                    }}
+                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
+                      stealthCloakActive
+                        ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300'
+                        : 'bg-zinc-950/90 border-cyan-500/50 text-slate-200 hover:bg-cyan-950/60'
+                    }`}
+                  >
+                    <EyeOff className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span>CLK {stealthEnergy}% [V]</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(12, 0.4);
+                      handleHeal();
+                    }}
+                    className="px-2 py-0.5 rounded-r-lg border-l-2 border-emerald-400 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all"
+                  >
+                    <Shield className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span>STIM [SPC]</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(10, 0.3);
+                      toggleCrouch();
+                    }}
+                    className={`-ml-2 px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-all ${
+                      isCrouching
+                        ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300'
+                        : 'bg-zinc-950/90 border-amber-400/60 text-amber-300'
+                    }`}
+                  >
+                    <ArrowDownToLine className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span>{isCrouching ? 'LOW [C]' : 'CROUCH [C]'}</span>
+                  </button>
+                </div>
+
                 {/* Luminous Holographic Laser Reticle System */}
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_10px_#f59e0b,0_0_4px_#ffffff] flex items-center justify-center">
@@ -1907,16 +2034,34 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           CALL OF DUTY: BLACK OPS COVERT INFILTRATION HUD — TOP TELEMETRY BAR
           (Angled chamfered dark-carbon military frames, 92%+ unobstructed 3D view)
          ===================================================================== */}
-      <div className="absolute top-1.5 left-2 right-2 flex items-center justify-between gap-2 pointer-events-none z-10 font-mono">
-        {/* Left: Pause Button + Covert Operative Vitality + Optical Cloak Telemetry */}
-        <div className="flex items-center gap-1.5 pointer-events-auto">
+      <div className="absolute top-1.5 left-2 right-2 flex items-center justify-between gap-2 pointer-events-none z-40 font-mono">
+        {/* Left: Direct Back Button + Pause [ESC] Button + Covert Operative Vitality + Optical Cloak Telemetry */}
+        <div className="flex items-center gap-1 sm:gap-1.5 pointer-events-auto">
+          <button
+            onClick={() => {
+              sounds.unlockAudio();
+              sounds.triggerHaptic(16, 0.45);
+              if (onExitToMenu) {
+                onExitToMenu();
+              } else {
+                setIsGamePaused(true);
+              }
+            }}
+            className="h-9 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-rose-950/80 border-l-2 border-rose-500 border-t border-r border-b border-rose-500/50 text-rose-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(244,63,94,0.25)] cursor-pointer whitespace-nowrap"
+            style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
+            title="Back to Main Menu"
+          >
+            <Home className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span>BACK</span>
+          </button>
+
           <button
             onClick={() => {
               sounds.unlockAudio();
               sounds.triggerHaptic(14, 0.4);
               setIsGamePaused(true);
             }}
-            className="h-9 px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-xs tracking-wider uppercase flex items-center gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
+            className="h-9 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
             style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
             title="Pause Infiltration [ESC]"
           >
@@ -2074,7 +2219,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           CALL OF DUTY: BLACK OPS SPEC-OPS BOTTOM CONTROL DECK & WEAPON HUB
           (Chunky tactile buttons, prominent weapon switcher, Safari-safe)
          ===================================================================== */}
-      <div className="absolute bottom-2.5 sm:bottom-4 left-1.5 right-1.5 pb-[max(1rem,env(safe-area-inset-bottom))] px-[max(0.35rem,env(safe-area-inset-left))] pr-[max(0.35rem,env(safe-area-inset-right))] flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2 z-20 pointer-events-none font-mono">
+      <div className="absolute bottom-2.5 sm:bottom-4 left-1.5 right-1.5 pb-[max(1rem,env(safe-area-inset-bottom))] px-[max(0.35rem,env(safe-area-inset-left))] pr-[max(0.35rem,env(safe-area-inset-right))] flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2 z-40 pointer-events-none font-mono">
         {/* Left/Center: Chunky Tactical Action Buttons */}
         <div
           className="bg-black/90 border-l-4 border-amber-500 border-y border-r border-amber-500/40 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 pointer-events-auto overflow-x-auto max-w-full no-scrollbar shadow-[0_4px_25px_rgba(0,0,0,0.9)]"

@@ -12,13 +12,13 @@ interface StudentProfileModalProps {
 }
 
 const COMMON_CLASSES = [
+  'Grade 5-A',
+  'Grade 5-B',
   'Grade 7-A',
   'Grade 7-B',
   'Grade 8-A',
   'Grade 8-B',
-  'Science Class 1',
-  'Science Class 2',
-  'Biology Lab A',
+  'Inspire Science 5',
 ];
 
 export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({

@@ -8,7 +8,7 @@ interface IntelArchiveProps {
 
 interface TopicIntel {
   id: string;
-  stage: 'Stage 7' | 'Stage 8';
+  stage: 'Grade 5' | 'Stage 7' | 'Stage 8';
   title: string;
   summary: string;
   keyConcepts: { label: string; desc: string }[];
@@ -17,6 +17,91 @@ interface TopicIntel {
 }
 
 const CAMBRIDGE_TOPICS: TopicIntel[] = [
+  {
+    id: 'g5_matter_properties',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 1: Properties of Matter',
+    summary: 'McGraw Hill Inspire Science (Grade 5): Matter is anything that has mass and takes up space (volume). Substances are identified by their physical and chemical properties.',
+    keyConcepts: [
+      { label: 'Physical Properties', desc: 'Characteristics observed or measured without changing the substance into something new (mass, volume, color, hardness, reflectivity, magnetism, solubility, conductivity).' },
+      { label: 'Mass vs. Volume', desc: 'Mass is the amount of matter in an object (grams/kg). Volume is the amount of space it occupies (mL or cm³).' },
+      { label: 'Density & Buoyancy', desc: 'How tightly packed matter is in a given volume. Objects less dense than water float; objects more dense than water sink.' },
+      { label: 'Conductors vs. Insulators', desc: 'Metals (like copper and aluminum) conduct heat and electricity easily; rubber, wood, and plastic are insulators.' },
+      { label: 'Solubility', desc: 'The ability of a solute (like sugar or salt) to dissolve evenly into a solvent (like water) to form a solution.' },
+      { label: 'Chemical Properties', desc: 'Describe how a substance reacts to form a new substance, such as Flammability (ability to burn) and Reactivity (with acid or oxygen to form rust).' },
+    ],
+    tacticalNote: 'Observing a physical property never changes the identity of the matter; testing a chemical property produces a new substance.',
+  },
+  {
+    id: 'g5_particles_states',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 1: Particles & Changes in State',
+    summary: 'McGraw Hill Inspire Science (Grade 5): All matter is made of microscopic particles too small to be seen. Adding or removing thermal energy changes particle speed and spacing.',
+    keyConcepts: [
+      { label: 'Solids', desc: 'Particles are tightly packed in a fixed arrangement and vibrate in place. Definite shape and definite volume.' },
+      { label: 'Liquids', desc: 'Particles stay close together but slide past one another freely. Definite volume, but takes the shape of its container.' },
+      { label: 'Gases', desc: 'Particles move rapidly in all directions and spread far apart to fill the entire shape and volume of any closed container.' },
+      { label: 'Adding Thermal Energy', desc: 'Particles move faster and spread apart: Melting (solid → liquid at 0°C for ice) and Evaporation/Boiling (liquid → gas at 100°C for water).' },
+      { label: 'Removing Thermal Energy', desc: 'Particles slow down and move closer together: Condensation (gas → liquid, like dew on a cold glass) and Freezing (liquid → solid).' },
+    ],
+    tacticalNote: 'All changes of state (melting, freezing, boiling, condensation) are PHYSICAL changes because H₂O remains H₂O.',
+  },
+  {
+    id: 'g5_physical_chemical_change',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 1: Physical & Chemical Changes',
+    summary: 'McGraw Hill Inspire Science (Grade 5): Physical changes do not create new substances, while chemical reactions rearrange atoms into new substances. Matter is always conserved.',
+    keyConcepts: [
+      { label: 'Physical Change', desc: 'Changes size, shape, state, or mixes substances without forming a new substance (cutting paper, melting ice, dissolving salt in water).' },
+      { label: 'Chemical Change (Reaction)', desc: 'Forms one or more brand-new substances with different properties (burning wood, rusting iron, baking a cake, vinegar + baking soda).' },
+      { label: 'Signs of Chemical Change', desc: 'Unexpected color change, fizzing gas bubbles, formation of a solid precipitate, new odor, or release of heat/light.' },
+      { label: 'Law of Conservation of Matter', desc: 'Matter is neither created nor destroyed during heating, cooling, dissolving, or chemical reactions in a closed system—total mass stays exactly the same!' },
+    ],
+    equation: '20g Salt + 100g Water = 120g Saltwater Solution (Mass is Conserved)',
+    tacticalNote: 'To separate dissolved salt from water, evaporate the water so solid salt crystals are left behind.',
+  },
+  {
+    id: 'g5_survival_plants',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 2: Survival of Plants',
+    summary: 'McGraw Hill Inspire Science (Grade 5): Plants acquire the matter they need to grow primarily from AIR and WATER (not soil), using sunlight energy to make sugar via photosynthesis.',
+    keyConcepts: [
+      { label: 'Where Plant Mass Comes From', desc: 'Plants build their stems, leaves, and roots chiefly from carbon dioxide (air) and water—proven by Van Helmont’s willow tree experiment and hydroponics!' },
+      { label: 'Stomata', desc: 'Microscopic pores on the underside of leaves that open to take in CO₂ gas and release O₂ and water vapor (transpiration).' },
+      { label: 'Xylem & Phloem', desc: 'Xylem tubes carry water and minerals UP from roots to leaves; Phloem tubes carry sugar food from leaves to the rest of the plant.' },
+      { label: 'Hydroponics', desc: 'Growing plants in nutrient-rich water without soil, proving soil is only for anchorage and trace minerals.' },
+    ],
+    equation: 'Carbon Dioxide (from Air) + Water (from Roots) --(Sunlight)--> Sugar (Glucose) + Oxygen',
+    tacticalNote: 'If a plant’s stomata are blocked, it cannot take in carbon dioxide to make food.',
+  },
+  {
+    id: 'g5_matter_ecosystems',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 2: Matter in Ecosystems',
+    summary: 'McGraw Hill Inspire Science (Grade 5): Energy flows one way from the Sun through food webs, while matter is continuously recycled between producers, consumers, decomposers, and the environment.',
+    keyConcepts: [
+      { label: 'Energy Source & Producers', desc: 'The Sun is the primary energy source; producers (plants/algae) capture sunlight to make chemical food.' },
+      { label: 'Consumers', desc: 'Herbivores eat only plants; Carnivores eat only animals; Omnivores eat both plants and animals.' },
+      { label: 'Decomposers (Nature’s Recyclers)', desc: 'Fungi (mushrooms), bacteria, and earthworms break down dead organisms and waste, returning vital nutrients to soil and air.' },
+      { label: 'Biotic vs. Abiotic Factors', desc: 'Biotic = living things (trees, animals, bacteria); Abiotic = nonliving parts (sunlight, water, air, soil, rocks, temperature).' },
+      { label: 'Invasive Species', desc: 'Non-native organisms introduced to an ecosystem that spread rapidly and outcompete native species for resources.' },
+    ],
+    tacticalNote: 'Energy flows ONE WAY (Sun → organisms → heat), whereas Matter CYCLES over and over!',
+  },
+  {
+    id: 'g5_earth_space_systems',
+    stage: 'Grade 5',
+    title: 'Inspire Unit 3 & 4: Earth & Space Systems',
+    summary: 'McGraw Hill Inspire Science (Grade 5): Earth’s 4 spheres interact continuously; 97% of Earth’s water is saltwater; gravity pulls toward Earth’s center; rotation & orbit cause sky patterns.',
+    keyConcepts: [
+      { label: 'Earth’s 4 Major Spheres', desc: 'Geosphere (rock, soil, core), Hydrosphere (all water & ice), Atmosphere (78% N₂, 21% O₂, trace gases), and Biosphere (all living things).' },
+      { label: 'Earth’s Water Distribution', desc: '97% is ocean salt water; only ~3% is fresh water (most fresh water—~69%—is frozen in glaciers and polar ice caps, ~30% is groundwater, <1% is surface rivers/lakes).' },
+      { label: 'Weathering vs. Erosion', desc: 'Weathering breaks rock into sediment; Erosion moves sediment via wind, water, or ice; Rain Shadow Effect makes leeward mountain sides dry.' },
+      { label: 'Gravity, Rotation & Orbit', desc: 'Gravity pulls toward Earth’s center. 24-hour rotation causes day/night and shadow changes (shortest at noon). 365-day orbit causes seasonal constellations.' },
+      { label: 'Star Brightness', desc: 'The Sun appears much brighter and larger than other stars because it is vastly closer to Earth.' },
+    ],
+    tacticalNote: 'Sun thermal energy + Earth’s gravity drive the entire Water Cycle (evaporation, condensation, precipitation, runoff).',
+  },
   {
     id: 'cells',
     stage: 'Stage 7',

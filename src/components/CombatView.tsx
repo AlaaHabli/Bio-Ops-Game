@@ -1839,8 +1839,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       const levelIndex = levelNumber - 1;
       const phaseIndex = phaseNumber - 1;
-      const bossPhaseMultiplier = 1 + phaseIndex * 0.2;
-      const bossLevelBonusHits = Math.round(levelIndex * 2.8);
+      const bossPhaseMultiplier = 1 + phaseIndex * 0.06;
+      const bossLevelBonusHits = Math.round(levelIndex * 1.2);
       if (bossType === 'helicopter') {
         const heli = prebuiltBosses.helicopter || (() => {
           const h = createBacteriaHelicopter();
@@ -1854,8 +1854,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         mainRotor = heli.mainRotor;
         tailRotor = heli.tailRotor;
         name = 'Apache Attack Helicopter';
-        hits = Math.round((18 + bossLevelBonusHits) * bossPhaseMultiplier);
-        hp = hits * 45;
+        hits = Math.round((12 + bossLevelBonusHits) * bossPhaseMultiplier);
+        hp = hits * 38;
         speed = 3.1 + levelIndex * 0.22 + phaseIndex * 0.25;
         value = 950 + levelIndex * 120 + phaseIndex * 150;
         bossMesh.position.set(0, 1.15, -21);
@@ -1878,8 +1878,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         gatling = robot.gatling;
         coreMesh = robot.coreMesh;
         name = 'Huge Cyber-Robot Titan';
-        hits = Math.round((21 + bossLevelBonusHits) * bossPhaseMultiplier);
-        hp = hits * 45;
+        hits = Math.round((14 + bossLevelBonusHits) * bossPhaseMultiplier);
+        hp = hits * 38;
         speed = 2.75 + levelIndex * 0.2 + phaseIndex * 0.22;
         value = 1350 + levelIndex * 140 + phaseIndex * 200;
         bossMesh.position.set(0, -1.5, -23);
@@ -1899,8 +1899,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         bossMesh.visible = true;
         afterburnerMesh = jet.afterburnerMesh;
         name = 'Rogue Bio-Jet F-16';
-        hits = Math.round((23 + bossLevelBonusHits) * bossPhaseMultiplier);
-        hp = hits * 45;
+        hits = Math.round((15 + bossLevelBonusHits) * bossPhaseMultiplier);
+        hp = hits * 38;
         speed = 4.2 + levelIndex * 0.22 + phaseIndex * 0.25;
         value = 1700 + levelIndex * 160 + phaseIndex * 250;
         bossMesh.position.set(0, 1.25, -34);
@@ -1976,8 +1976,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const phaseIndex = phaseNumber - 1; // 0..2
       const diffScale = (levelIndex * 3 + phaseIndex) / 26;
 
-      const phaseHpMultiplier = 1 + phaseIndex * 0.26;
-      const levelHpMultiplier = 1 + levelIndex * 0.14;
+      const phaseHpMultiplier = 1 + phaseIndex * 0.05;
+      const levelHpMultiplier = 1 + levelIndex * 0.04;
 
       const activeTanks = activeSoldiersRef.current.filter((s) => s.isTank).length;
       const maxTanksAllowed =
@@ -2008,8 +2008,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const waveSpeedBase = wave === 1 ? 4.3 : wave === 2 ? 4.95 : 5.5;
       const difficultySpeedBonus = levelIndex * 0.22 + phaseIndex * 0.36;
 
-      let hp = 160;
-      let hitsLeft = 4;
+      let hp = 96;
+      let hitsLeft = 2;
       let speed = waveSpeedBase + difficultySpeedBonus;
       let value = 100;
       let name = 'Strepto Soldier';
@@ -2018,23 +2018,23 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       if (shouldSpawnTank) {
         type = 'tank';
-        hitsLeft = Math.round(9 * levelHpMultiplier * phaseHpMultiplier);
-        hp = hitsLeft * 55;
+        hitsLeft = Math.max(4, Math.round(4.5 * levelHpMultiplier * phaseHpMultiplier));
+        hp = hitsLeft * 42;
         speed = 2.7 + wave * 0.26 + levelIndex * 0.11 + phaseIndex * 0.2;
         value = 750 + levelIndex * 65 + phaseIndex * 80;
         name = 'Heavy Bio-Battle Tank';
         isTank = true;
       } else if (forceType === 'bacillus' || (!forceType && Math.random() < bacillusChance)) {
         type = 'bacillus';
-        hitsLeft = Math.round(5.5 * levelHpMultiplier * phaseHpMultiplier);
-        hp = hitsLeft * 44;
+        hitsLeft = Math.max(2, Math.round(2.4 * levelHpMultiplier * phaseHpMultiplier));
+        hp = hitsLeft * 36;
         speed = waveSpeedBase + difficultySpeedBonus - 0.2;
         value = 150 + levelIndex * 18 + phaseIndex * 25;
         name = 'Bacillus Heavy Gunner';
       } else {
         type = 'strep';
-        hitsLeft = Math.round(4 * levelHpMultiplier * phaseHpMultiplier);
-        hp = hitsLeft * 42;
+        hitsLeft = Math.max(1, Math.round(1.6 * levelHpMultiplier * phaseHpMultiplier));
+        hp = hitsLeft * 32;
         speed = waveSpeedBase + difficultySpeedBonus + 0.35;
         value = 110 + levelIndex * 12 + phaseIndex * 18;
         name = 'Streptococcus Trooper';
@@ -2838,25 +2838,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }, 680);
 
         const isBossVehicle = Boolean(hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet);
-        const weaponHitPower =
+        const scopedPowerMult = isScopedRef.current ? 1.35 : 1.0;
+        const baseWeaponHitPower =
           activeWpn.id === 'bolt_sniper'
             ? criticalHit
-              ? 3.2
-              : 2.2
+              ? 3.5
+              : 2.4
             : activeWpn.id === 'pump_shotgun'
             ? criticalHit
-              ? 2.2
-              : 1.65
+              ? 2.6
+              : 1.85
             : activeWpn.id === 'drum_gun'
             ? criticalHit
-              ? 1.15
-              : 0.85
+              ? 1.55
+              : 1.05
             : criticalHit
-            ? 1.35
-            : 1.0;
+            ? 2.0
+            : 1.15;
+        const weaponHitPower = baseWeaponHitPower * scopedPowerMult;
         hitSoldier.hitsLeft = Math.max(
           0,
-          Number((hitSoldier.hitsLeft - (isBossVehicle ? (criticalHit ? 1.5 : 1.0) : weaponHitPower)).toFixed(2))
+          Number((hitSoldier.hitsLeft - (isBossVehicle ? (criticalHit ? 1.8 : 1.15) * scopedPowerMult : weaponHitPower)).toFixed(2))
         );
 
         if (isBossVehicle) {
@@ -2867,7 +2869,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         if (hitSoldier.hpBarFill) {
-          const pct = Math.max(0.01, hitSoldier.hitsLeft / hitSoldier.maxHits);
+          const pct = Math.max(
+            0.01,
+            Math.min(hitSoldier.hitsLeft / hitSoldier.maxHits, hitSoldier.hp / hitSoldier.maxHp)
+          );
           hitSoldier.hpBarFill.scale.x = pct;
           hitSoldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
         }
@@ -2879,7 +2884,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         }
 
-        const isDefeated = hitSoldier.hitsLeft <= 0;
+        const isDefeated = hitSoldier.hitsLeft <= 0 || hitSoldier.hp <= 0;
 
         if (isDefeated) {
           eliminatedSoldier = hitSoldier;
@@ -5326,6 +5331,156 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   }}
                 />
 
+                {/* CURVED PERIMETER HUD ARCS ROUNDING LEFT & RIGHT LENS EDGES */}
+                <svg
+                  viewBox="0 0 200 200"
+                  className="absolute -inset-[6%] w-[112%] h-[112%] pointer-events-none overflow-visible"
+                >
+                  {/* Left Curved Health Track (135° to 225°) */}
+                  <path
+                    d="M 35 165 A 92 92 0 0 1 35 35"
+                    fill="none"
+                    stroke="rgba(24, 24, 27, 0.85)"
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                  />
+                  {/* Left Curved Health Fill Arc */}
+                  <path
+                    d="M 35 165 A 92 92 0 0 1 35 35"
+                    fill="none"
+                    stroke={playerHp < 35 ? '#f43f5e' : playerHp < 65 ? '#f59e0b' : '#10b981'}
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray="145"
+                    strokeDashoffset={145 - (145 * Math.max(0, Math.min(100, playerHp))) / 100}
+                    style={{
+                      filter:
+                        playerHp < 35
+                          ? 'drop-shadow(0 0 8px rgba(244,63,94,0.9))'
+                          : 'drop-shadow(0 0 6px rgba(16,185,129,0.75))',
+                      transition: 'stroke-dashoffset 150ms ease-out, stroke 150ms ease-out',
+                    }}
+                  />
+
+                  {/* Right Curved Magazine / Ability Energy Track (45° to -45°) */}
+                  <path
+                    d="M 165 165 A 92 92 0 0 0 165 35"
+                    fill="none"
+                    stroke="rgba(24, 24, 27, 0.85)"
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                  />
+                  {/* Right Curved Magazine Fill Arc */}
+                  <path
+                    d="M 165 165 A 92 92 0 0 0 165 35"
+                    fill="none"
+                    stroke={isReloading ? '#f59e0b' : currentAmmo === 0 ? '#f43f5e' : '#22d3ee'}
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeDasharray="145"
+                    strokeDashoffset={
+                      145 -
+                      (145 *
+                        Math.max(
+                          0,
+                          Math.min(
+                            1,
+                            isReloading
+                              ? reloadProgress / 100
+                              : currentAmmo / Math.max(1, currentWeapon.magSize)
+                          )
+                        ))
+                    }
+                    style={{
+                      filter: 'drop-shadow(0 0 6px rgba(34,211,238,0.75))',
+                      transition: 'stroke-dashoffset 120ms ease-out',
+                    }}
+                  />
+                </svg>
+
+                {/* LEFT ROUNDED SCOPE TELEMETRY: HEALTH & COVER STATUS */}
+                <div className="absolute top-1/2 -left-3 sm:-left-6 -translate-x-full -translate-y-1/2 flex flex-col items-end gap-1.5 pointer-events-none font-mono">
+                  <div className="px-2 py-1 bg-zinc-950/90 border-r-2 border-emerald-400 border-y border-l border-emerald-500/30 rounded-l-xl shadow-[0_0_14px_rgba(0,0,0,0.85)] flex flex-col items-end">
+                    <span className="text-[8px] tracking-widest text-zinc-400 uppercase">VITALITY</span>
+                    <div className="flex items-center gap-1">
+                      <Shield className={`w-3.5 h-3.5 ${playerHp < 35 ? 'text-rose-500 animate-pulse' : 'text-emerald-400'}`} />
+                      <span className={`text-xs sm:text-sm font-black tabular-nums ${playerHp < 35 ? 'text-rose-400 animate-pulse' : 'text-emerald-300'}`}>
+                        {playerHp}%
+                      </span>
+                    </div>
+                  </div>
+                  <div className={`px-2 py-0.5 bg-zinc-950/90 border-r-2 rounded-l-lg text-[9px] font-bold tracking-wider uppercase shadow-md ${
+                    isPlayerInCover ? 'border-cyan-400 text-cyan-300' : 'border-amber-500/70 text-amber-400'
+                  }`}>
+                    {isPlayerInCover ? `BUNKER ${activeCoverHp}%` : 'EXPOSED'}
+                  </div>
+                </div>
+
+                {/* RIGHT ROUNDED SCOPE TELEMETRY: ABILITIES & AMMO ARC */}
+                <div className="absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 pointer-events-auto font-mono">
+                  {/* Top of Right Curve: Live Ammo Badge */}
+                  <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
+                    <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
+                    <span className={`text-xs font-black tabular-nums ${currentAmmo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
+                      {isReloading ? `${reloadProgress}%` : `${currentAmmo}/${reserveAmmo}`}
+                    </span>
+                  </div>
+
+                  {/* Upper-Mid Right Curve: STIM [E] */}
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic([20, 30, 20], 'medium');
+                      handleStimpack();
+                    }}
+                    disabled={stimCooldown > 0 || playerHp >= 100}
+                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                      stimCooldown === 0 && playerHp < 100
+                        ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300 cursor-pointer hover:bg-emerald-900'
+                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                    }`}
+                  >
+                    <Zap className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span>STIM {stimCooldown > 0 ? `${stimCooldown}S` : '[E]'}</span>
+                  </button>
+
+                  {/* Lower-Mid Right Curve: FRAG [G] */}
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic([25, 20], 'medium');
+                      handleThrowGrenade();
+                    }}
+                    disabled={grenadeCooldown > 0}
+                    className={`px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                      grenadeCooldown === 0
+                        ? 'bg-amber-950/90 border-amber-400 text-amber-300 cursor-pointer hover:bg-amber-900'
+                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                    }`}
+                  >
+                    <Bomb className="w-3 h-3 text-amber-400 shrink-0" />
+                    <span>FRAG {grenadeCooldown > 0 ? `${grenadeCooldown}S` : '[G]'}</span>
+                  </button>
+
+                  {/* Bottom of Right Curve: AIRDROP [T] */}
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic([35, 25, 45], 'heavy');
+                      handleAirdropReinforcements();
+                    }}
+                    disabled={reinforceCooldown > 0 || isAirdropActive}
+                    className={`-ml-2 px-2 py-0.5 rounded-r-lg border-l-2 text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md transition-all ${
+                      reinforceCooldown === 0 && !isAirdropActive
+                        ? 'bg-cyan-950/90 border-cyan-400 text-cyan-300 cursor-pointer hover:bg-cyan-900'
+                        : 'bg-zinc-950/85 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                    }`}
+                  >
+                    <Plane className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span>{isAirdropActive ? 'ACTIVE' : reinforceCooldown > 0 ? `AIR ${reinforceCooldown}S` : 'AIR [T]'}</span>
+                  </button>
+                </div>
+
                 {/* Luminous Holographic Laser Reticle System */}
                 <div className="absolute inset-0 flex items-center justify-center">
                   {/* Center Glowing Dot */}
@@ -5353,7 +5508,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
               {/* Tactical HUD Telemetry Badge under the lens */}
               <div className="absolute bottom-[14%] left-1/2 -translate-x-1/2 px-3 py-0.5 bg-zinc-950/90 border border-amber-500/40 text-[9px] font-mono tracking-widest text-amber-400 uppercase whitespace-nowrap shadow-md">
-                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC // LOCK: ACTIVE' : 'HOLO REFLEX SIGHT // +20% CRIT'}
+                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC // LOCK: ACTIVE' : 'HOLO REFLEX SIGHT // +35% POWER'}
               </div>
             </div>
           </div>
@@ -5423,19 +5578,37 @@ export const CombatView: React.FC<CombatViewProps> = ({
           High-contrast military telemetry pinned strictly to extreme top/bottom edges
           so 92%+ of the 3D battlefield remains completely open!
          ===================================================================== */}
-      <div className="absolute inset-0 flex flex-col justify-between p-1.5 sm:p-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pointer-events-none z-20 font-mono">
+      <div className="absolute inset-0 flex flex-col justify-between p-1.5 sm:p-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pointer-events-none z-40 font-mono">
         
         {/* TOP BLACK OPS TELEMETRY BAR */}
         <div className="flex items-start justify-between w-full gap-1.5">
-          {/* Top-Left: Pause Button + Black Ops Biometric Plate Carrier Telemetry */}
-          <div className="flex items-center gap-1.5 pointer-events-auto">
+          {/* Top-Left: Direct Back Button + Pause [ESC] Button + Biometric Plate Carrier Telemetry */}
+          <div className="flex items-center gap-1 sm:gap-1.5 pointer-events-auto">
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.triggerHaptic(16, 'medium');
+                if (onExitToMenu) {
+                  onExitToMenu();
+                } else {
+                  setIsGamePaused(true);
+                }
+              }}
+              className="h-9 sm:h-10 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-rose-950/80 border-l-2 border-rose-500 border-t border-r border-b border-rose-500/50 text-rose-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(244,63,94,0.25)] cursor-pointer whitespace-nowrap"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
+              title="Back to Main Menu"
+            >
+              <Home className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>BACK</span>
+            </button>
+
             <button
               onClick={() => {
                 sounds.unlockAudio();
                 sounds.triggerHaptic(14, 'medium');
                 setIsGamePaused(true);
               }}
-              className="h-10 px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-xs tracking-wider uppercase flex items-center gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
+              className="h-9 sm:h-10 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
               style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
               title="Pause Operation [ESC]"
             >

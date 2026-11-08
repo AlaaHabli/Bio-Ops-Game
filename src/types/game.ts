@@ -1,7 +1,7 @@
 export interface Question {
   id: string;
   topic: string;
-  stage: 'Stage 7' | 'Stage 8';
+  stage: 'Grade 5' | 'Stage 7' | 'Stage 8';
   question: string;
   options: string[];
   correctIndex: number;
@@ -14,7 +14,7 @@ export interface LevelConfig {
   id: string;
   title: string;
   codename: string;
-  stage: 'Stage 7' | 'Stage 8';
+  stage: 'Grade 5' | 'Stage 7' | 'Stage 8';
   topic: string;
   organSector: string;
   description: string;
