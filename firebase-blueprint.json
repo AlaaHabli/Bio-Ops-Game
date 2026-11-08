@@ -52,12 +52,117 @@
         }
       },
       "required": ["studentName", "className", "score", "kills", "levelTitle", "stage", "timestamp"]
+    },
+    "MultiplayerRoom": {
+      "title": "MultiplayerRoom",
+      "description": "Live student deathmatch arena room synchronizing quiz freezes and battle rounds",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "4-character code for students to join",
+          "minLength": 4,
+          "maxLength": 8
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Name of the student or teacher who created the room",
+          "maxLength": 64
+        },
+        "stage": {
+          "type": "string",
+          "description": "Grade 5, Stage 7, or Stage 8",
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["lobby", "quiz", "combat", "podium"],
+          "description": "Current room game state"
+        },
+        "currentRound": {
+          "type": "number",
+          "description": "Current round number (1 to 5)"
+        },
+        "totalRounds": {
+          "type": "number",
+          "description": "Total rounds in this deathmatch match"
+        },
+        "currentQuestionIndex": {
+          "type": "number",
+          "description": "Index of active question"
+        },
+        "questionStartTime": {
+          "type": "number",
+          "description": "Epoch timestamp when quiz freeze started"
+        },
+        "combatStartTime": {
+          "type": "number",
+          "description": "Epoch timestamp when combat round started"
+        },
+        "lastUpdated": {
+          "type": "number",
+          "description": "Epoch timestamp of last update"
+        }
+      },
+      "required": ["roomCode", "hostName", "stage", "status", "currentRound", "totalRounds", "lastUpdated"]
+    },
+    "ArenaPlayer": {
+      "title": "ArenaPlayer",
+      "description": "Individual student state inside a multiplayer deathmatch arena room",
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "studentName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "className": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "score": {
+          "type": "number"
+        },
+        "kills": {
+          "type": "number"
+        },
+        "hp": {
+          "type": "number"
+        },
+        "isReady": {
+          "type": "boolean"
+        },
+        "hasAnswered": {
+          "type": "boolean"
+        },
+        "isCorrect": {
+          "type": "boolean"
+        },
+        "selectedAnswer": {
+          "type": "number"
+        },
+        "lastPing": {
+          "type": "number"
+        }
+      },
+      "required": ["playerId", "studentName", "score", "kills", "hp", "isReady", "lastPing"]
     }
   },
   "firestore": {
     "/leaderboard/{entryId}": {
       "schema": "LeaderboardEntry",
       "description": "Classroom-wide shared real-time student leaderboard entries"
+    },
+    "/multiplayer_rooms/{roomId}": {
+      "schema": "MultiplayerRoom",
+      "description": "Active multiplayer deathmatch quiz & battle arena rooms"
+    },
+    "/multiplayer_rooms/{roomId}/players/{playerId}": {
+      "schema": "ArenaPlayer",
+      "description": "Live participating students in a multiplayer room"
     }
   }
 }

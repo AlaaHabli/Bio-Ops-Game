@@ -1150,7 +1150,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       }
       bulletMesh.position.copy(muzzleWorldPos);
 
-      let shootDir = convergencePoint.sub(muzzleWorldPos).normalize();
+      const shootDir = convergencePoint.sub(muzzleWorldPos).normalize();
 
       // Soft Auto-Aim Assist toward nearest General or Guard TORSO (helps move closer without auto-headshotting!)
       if (stateRef.current.autoAim) {
@@ -1158,7 +1158,8 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         let bestScore = Infinity;
         for (const t of targets) {
           if (t.hp <= 0 || t.sabotaged) continue;
-          _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 1.25, 0));
+          _v1.copy(t.mesh.position);
+          _v1.y += 1.25;
           const dist = _v1.distanceTo(camera.position);
           if (dist > 65) continue;
           _v2.copy(_v1).sub(camera.position).normalize();
@@ -1174,12 +1175,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           }
         }
         if (bestTarget) {
-          const torsoPos = bestTarget.mesh.position.clone().add(
-            new THREE.Vector3(0, bestTarget.kind === 'GENERAL' ? 1.35 : 1.15, 0)
-          );
-          const torsoDir = torsoPos.sub(muzzleWorldPos).normalize();
+          _v1.copy(bestTarget.mesh.position);
+          _v1.y += bestTarget.kind === 'GENERAL' ? 1.35 : 1.15;
+          _v2.copy(_v1).sub(muzzleWorldPos).normalize();
           // Gently blend 42% toward torso center so auto-aim assists without auto-headshotting
-          shootDir.lerp(torsoDir, 0.42).normalize();
+          shootDir.lerp(_v2, 0.42).normalize();
         }
       }
 
@@ -2073,11 +2073,9 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         d.position.y += Math.sin(now * 0.002 + idx) * 0.003;
       });
 
-      // Update talking squads dialogue, audible bacterial chatter & 2D speech bubble projection
-      const currentDialogues: Array<{ id: string; x: number; y: number; text: string }> = [];
+      // Update talking squads dialogue, audible bacterial chatter & 2D speech bubble projection (throttled to avoid 60Hz React re-renders)
       const camPos = camera.position;
       talkingSquads.forEach((sq) => {
-        // Check if at least one member of the squad is still alive and unalerted
         const hasActiveTalker = targets.some(
           (t) => sq.memberIds.includes(t.id) && t.hp > 0 && !t.alerted
         );
@@ -2098,49 +2096,65 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           sounds.playBacteriaChatter(false);
           sq.chatterCooldown = 4.0;
         }
-
-        if (dist < 34 && sq.pos.z < camPos.z) {
-          _v1.copy(sq.pos).add(new THREE.Vector3(0, 2.8, 0));
-          _v1.project(camera);
-          if (_v1.z < 1) {
-            const screenX = (_v1.x * 0.5 + 0.5) * 100;
-            const screenY = (-(_v1.y * 0.5) + 0.5) * 100;
-            if (screenX >= 5 && screenX <= 95 && screenY >= 5 && screenY <= 95) {
-              currentDialogues.push({
-                id: sq.id,
-                x: screenX,
-                y: screenY,
-                text: sq.lines[sq.currentLineIndex]
-              });
-            }
-          }
-        }
       });
 
-      // Project Door-Defending NPC Sentry speech bubbles when player approaches a guarded door
-      for (const t of targets) {
-        if (t.npcRole === 'DOOR_GUARD' && t.hp > 0 && t.guardLine) {
-          const dist = t.mesh.position.distanceTo(camPos);
-          if (dist < 28 && t.mesh.position.z < camPos.z) {
-            _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 2.75, 0));
+      if (now - (stateRef.current as any).lastDialogueSyncTime > 240 || !(stateRef.current as any).lastDialogueSyncTime) {
+        (stateRef.current as any).lastDialogueSyncTime = now;
+        const currentDialogues: Array<{ id: string; x: number; y: number; text: string }> = [];
+
+        talkingSquads.forEach((sq) => {
+          const hasActiveTalker = targets.some(
+            (t) => sq.memberIds.includes(t.id) && t.hp > 0 && !t.alerted
+          );
+          if (!hasActiveTalker) return;
+          const dist = sq.pos.distanceTo(camPos);
+          if (dist < 34 && sq.pos.z < camPos.z) {
+            _v1.copy(sq.pos);
+            _v1.y += 2.8;
             _v1.project(camera);
             if (_v1.z < 1) {
-              const screenX = (_v1.x * 0.5 + 0.5) * 100;
-              const screenY = (-(_v1.y * 0.5) + 0.5) * 100;
+              const screenX = Math.round((_v1.x * 0.5 + 0.5) * 100);
+              const screenY = Math.round((-(_v1.y * 0.5) + 0.5) * 100);
               if (screenX >= 5 && screenX <= 95 && screenY >= 5 && screenY <= 95) {
                 currentDialogues.push({
-                  id: t.id,
+                  id: sq.id,
                   x: screenX,
                   y: screenY,
-                  text: t.alerted ? 'INTRUDER AT THE GATE! OPEN FIRE!' : t.guardLine
+                  text: sq.lines[sq.currentLineIndex]
                 });
               }
             }
           }
+        });
+
+        for (const t of targets) {
+          if (t.npcRole === 'DOOR_GUARD' && t.hp > 0 && t.guardLine) {
+            const dist = t.mesh.position.distanceTo(camPos);
+            if (dist < 28 && t.mesh.position.z < camPos.z) {
+              _v1.copy(t.mesh.position);
+              _v1.y += 2.75;
+              _v1.project(camera);
+              if (_v1.z < 1) {
+                const screenX = Math.round((_v1.x * 0.5 + 0.5) * 100);
+                const screenY = Math.round((-(_v1.y * 0.5) + 0.5) * 100);
+                if (screenX >= 5 && screenX <= 95 && screenY >= 5 && screenY <= 95) {
+                  currentDialogues.push({
+                    id: t.id,
+                    x: screenX,
+                    y: screenY,
+                    text: t.alerted ? 'INTRUDER AT THE GATE! OPEN FIRE!' : t.guardLine
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        if (currentDialogues.length > 0 || (stateRef.current as any).hadDialoguesLastSync) {
+          (stateRef.current as any).hadDialoguesLastSync = currentDialogues.length > 0;
+          setSquadDialogues(currentDialogues);
         }
       }
-
-      setSquadDialogues(currentDialogues);
 
       renderer.render(scene, camera);
     };

@@ -1,4 +1,4 @@
-import { collection, doc, limit, onSnapshot, orderBy, query, setDoc } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, setDoc, deleteDoc } from 'firebase/firestore';
 import { LeaderboardEntry, PlayerStats, StudentProfile } from '../types/game';
 import { db, handleFirestoreError, OperationType } from './firebase';
 
@@ -307,6 +307,39 @@ export async function recordScoreToLeaderboard(
   }
 
   return newEntry;
+}
+
+export async function deleteLeaderboardEntry(entryId: string, studentName?: string): Promise<boolean> {
+  // 1. Immediately remove from local storage cache
+  const current = loadLeaderboard();
+  const filtered = current.filter((e) => {
+    if (e.id === entryId) return false;
+    if (studentName && e.studentName.trim().toLowerCase() === studentName.trim().toLowerCase()) return false;
+    return true;
+  });
+  try {
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(filtered));
+  } catch {
+    // ignore
+  }
+
+  // 2. Synchronously delete from Firestore
+  try {
+    await deleteDoc(doc(db, 'leaderboard', entryId));
+    if (studentName) {
+      const safeSlug = studentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
+      await deleteDoc(doc(db, 'leaderboard', `best_${safeSlug}`)).catch(() => {});
+    }
+    return true;
+  } catch (error) {
+    console.warn('Could not delete leaderboard entry from cloud Firestore:', error);
+    try {
+      handleFirestoreError(error, OperationType.DELETE, `leaderboard/${entryId}`);
+    } catch {
+      // ignore
+    }
+    return false;
+  }
 }
 
 export function resetLeaderboardToDefaults(): LeaderboardEntry[] {

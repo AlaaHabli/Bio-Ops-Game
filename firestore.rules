@@ -37,10 +37,24 @@ service cloud.firestore {
       // Students can record their verified combat scores
       allow create: if isValidId(entryId) && isValidLeaderboardEntry(incoming());
 
-      // Allow updating personal best record only if the new score is higher or equal
-      allow update: if isValidId(entryId) && isValidLeaderboardEntry(incoming()) && incoming().score >= resource.data.score;
+      // Allow updating personal best record only if valid
+      allow update: if isValidId(entryId) && isValidLeaderboardEntry(incoming());
 
-      allow delete: if false;
+      // Allow deleting records (e.g. teachers clearing test scores or students resetting personal records)
+      allow delete: if isValidId(entryId);
+    }
+
+    // Live Multiplayer Quiz & Battle Deathmatch Arena
+    match /multiplayer_rooms/{roomId} {
+      allow read: if true;
+      allow create, update: if isValidId(roomId);
+      allow delete: if isValidId(roomId);
+
+      match /players/{playerId} {
+        allow read: if true;
+        allow create, update: if isValidId(playerId);
+        allow delete: if isValidId(playerId);
+      }
     }
   }
 }

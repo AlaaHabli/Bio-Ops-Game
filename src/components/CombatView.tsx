@@ -377,8 +377,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [isPlayerInCover, setIsPlayerInCover] = useState<boolean>(false);
   const [barricadeHps, setBarricadeHps] = useState<number[]>([100, 100, 100]);
   const [activeCoverHp, setActiveCoverHp] = useState<number>(100);
-  const [isFiring, setIsFiring] = useState<boolean>(false);
-  const [operatorMood, setOperatorMood] = useState<'normal' | 'shooting' | 'hit'>('normal');
   const [bleriotAlert, setBleriotAlert] = useState<string | null>(null);
   const [enemyAirdropAlert, setEnemyAirdropAlert] = useState<string | null>(null);
   const [hazardAlert, setHazardAlert] = useState<string | null>(null);
@@ -418,7 +416,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     isPausedForConceptRef.current = true;
     renderedPausedFrameRef.current = false;
     isPointerDownRef.current = false;
-    setIsFiring(false);
     keysDownRef.current = {};
     moveInputRef.current = { x: 0, z: 0 };
     sounds.playRadioChirp();
@@ -467,10 +464,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [isTargetLocked, setIsTargetLocked] = useState<boolean>(false);
   const lastDamageTakenTimeRef = useRef<number>(0);
 
-  // Dynamic Screen Shake & Directional Damage Indicator HUD State (Scales in intensity as HP lowers!)
-  const [damageIndicators, setDamageIndicators] = useState<DirectionalDamageIndicator[]>([]);
+  // Dynamic Screen Shake state
   const cameraRollShakeRef = useRef<number>(0);
-  const nextDamageIndicatorIdRef = useRef<number>(1);
 
   useEffect(() => {
     autoAimEnabledRef.current = autoAimEnabled;
@@ -485,6 +480,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
     if (crosshairDomRef.current) {
       crosshairDomRef.current.style.left = `${screenX}%`;
       crosshairDomRef.current.style.top = `${screenY}%`;
+    }
+  };
+
+  // Zero-lag direct DOM updater for live ammo counters during rapid fire (avoids full React VDOM re-renders on every bullet!)
+  const syncLiveAmmoDom = () => {
+    const ammo = currentAmmoRef.current;
+    const reserve = reserveAmmoRef.current;
+    const magSize = Math.max(1, currentWeaponRef.current.magSize);
+    if (scopeAmmoArcDomRef.current && !isReloadingRef.current) {
+      const ratio = Math.max(0, Math.min(1, ammo / magSize));
+      scopeAmmoArcDomRef.current.setAttribute('stroke-dashoffset', String(145 - 145 * ratio));
+      scopeAmmoArcDomRef.current.setAttribute('stroke', ammo === 0 ? '#f43f5e' : '#38bdf8');
+    }
+    if (scopeAmmoTextDomRef.current && !isReloadingRef.current) {
+      scopeAmmoTextDomRef.current.textContent = `${ammo}/${reserve}`;
+    }
+    if (hotbarAmmoTextDomRef.current && !isReloadingRef.current) {
+      hotbarAmmoTextDomRef.current.textContent = String(ammo);
     }
   };
 
@@ -679,6 +692,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const joystickKnobDomRef = useRef<HTMLDivElement | null>(null);
   const crosshairDomRef = useRef<HTMLDivElement | null>(null);
   const scopeReticleDomRef = useRef<HTMLDivElement | null>(null);
+  const scopeAmmoArcDomRef = useRef<SVGPathElement | null>(null);
+  const scopeAmmoTextDomRef = useRef<HTMLSpanElement | null>(null);
+  const hotbarAmmoTextDomRef = useRef<HTMLSpanElement | null>(null);
+  const lastHitmarkerUiTimeRef = useRef<number>(0);
 
   // Mutable Game State in Refs (ensures WebGL never unmounts on state updates!)
   const playerPosRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
@@ -741,12 +758,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
   // Sound state & hardware activation tracking
   const [audioSuspended, setAudioSuspended] = useState<boolean>(() => sounds.isAudioSuspended());
+  const audioSuspendedRef = useRef<boolean>(audioSuspended);
+  audioSuspendedRef.current = audioSuspended;
 
   useEffect(() => {
     sounds.setEnabled(soundEnabled);
     if (soundEnabled) {
       sounds.unlockAudio();
-      setAudioSuspended(sounds.isAudioSuspended());
+      const susp = sounds.isAudioSuspended();
+      audioSuspendedRef.current = susp;
+      setAudioSuspended(susp);
     }
   }, [soundEnabled]);
 
@@ -757,6 +778,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     } else {
       sounds.setEnabled(!soundEnabled);
     }
+    audioSuspendedRef.current = false;
     setAudioSuspended(false);
     sounds.playRadioChirp();
   };
@@ -862,7 +884,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
               isPausedForConceptRef.current = true;
               renderedPausedFrameRef.current = false;
               isPointerDownRef.current = false;
-              setIsFiring(false);
               keysDownRef.current = {};
               moveInputRef.current = { x: 0, z: 0 };
               sounds.playRadioChirp();
@@ -979,6 +1000,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setIsReloading(false);
     reloadProgressRef.current = 0;
     setReloadProgress(0);
+    syncLiveAmmoDom();
     if (grantBonusBullets) {
       setActiveReloadBonus(true);
       setTimeout(() => setActiveReloadBonus(false), 1800);
@@ -1207,11 +1229,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const frontLight = new THREE.DirectionalLight(0xffffff, 1.2);
     frontLight.position.set(0, 2, 2);
     scene.add(frontLight);
-
-    const muzzleLight = new THREE.PointLight(0x38bdf8, 0, 18);
-    muzzleLight.position.set(0.3, -0.2, -1.2);
-    scene.add(muzzleLight);
-    muzzleFlashRef.current = muzzleLight;
 
     // 3D Tactical Muzzle Flash Starburst Mesh
     const flashGeo = new THREE.PlaneGeometry(0.42, 0.42);
@@ -2593,7 +2610,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
 
       currentAmmoRef.current -= 1;
-      setCurrentAmmo(currentAmmoRef.current);
+      syncLiveAmmoDom();
+      if (currentAmmoRef.current === 0 || currentAmmoRef.current === 5) {
+        setCurrentAmmo(currentAmmoRef.current);
+      }
       lastShotTimeRef.current = now;
       if (currentAmmoRef.current === 0 && reserveAmmoRef.current > 0) {
         setTimeout(() => {
@@ -2618,17 +2638,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         setTimeout(() => {
           if (pumpSlideRef.current) pumpSlideRef.current.position.z = -0.45;
         }, 220);
-      }
-
-      if (muzzleFlashRef.current) {
-        muzzleFlashRef.current.intensity = 5.2;
-        if (visionModeRef.current === 'nvg') {
-          muzzleFlashRef.current.color.setHex(0x22c55e);
-        } else if (visionModeRef.current === 'thermal') {
-          muzzleFlashRef.current.color.setHex(0xffffff);
-        } else {
-          muzzleFlashRef.current.color.setHex(0x38bdf8);
-        }
       }
 
       if (muzzleSpriteRef.current) {
@@ -2895,30 +2904,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (hitRegistered && hitSoldier) {
         sounds.playHitmarker(criticalHit);
 
-        // Spawn Fortnite-Style Floating Damage Number + HEADSHOT! banner at exact 3D impact projection!
-        const markerId = now + Math.random();
-        const isArmoredTarget = Boolean(
-          hitSoldier.type === 'tank' || hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet
-        );
-        const scatterX = Math.round((Math.random() - 0.5) * 34);
-        const scatterY = Math.round((Math.random() - 0.5) * 18);
-        setHitmarkers((prev) => [
-          ...prev.slice(-9),
-          {
-            id: markerId,
-            x: Math.max(12, Math.min(88, (hitVector.x + 1) * 50)),
-            y: Math.max(14, Math.min(82, (-hitVector.y + 1) * 50)),
-            offsetX: scatterX,
-            offsetY: scatterY,
-            isCritical: criticalHit,
-            isHeadshot: criticalHit,
-            isArmored: isArmoredTarget,
-            damage: Math.round(totalDamage),
-          },
-        ]);
-        window.setTimeout(() => {
-          setHitmarkers((prev) => prev.filter((m) => m.id !== markerId));
-        }, 750);
+        // Spawn Fortnite-Style Floating Damage Number + HEADSHOT! banner (throttled during rapid fire to prevent React VDOM stutter)
+        if (criticalHit || now - lastHitmarkerUiTimeRef.current >= 140) {
+          lastHitmarkerUiTimeRef.current = now;
+          const markerId = now + Math.random();
+          const isArmoredTarget = Boolean(
+            hitSoldier.type === 'tank' || hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet
+          );
+          const scatterX = Math.round((Math.random() - 0.5) * 34);
+          const scatterY = Math.round((Math.random() - 0.5) * 18);
+          setHitmarkers((prev) => [
+            ...prev.slice(-4),
+            {
+              id: markerId,
+              x: Math.max(12, Math.min(88, (hitVector.x + 1) * 50)),
+              y: Math.max(14, Math.min(82, (-hitVector.y + 1) * 50)),
+              offsetX: scatterX,
+              offsetY: scatterY,
+              isCritical: criticalHit,
+              isHeadshot: criticalHit,
+              isArmored: isArmoredTarget,
+              damage: Math.round(totalDamage),
+            },
+          ]);
+          window.setTimeout(() => {
+            setHitmarkers((prev) => prev.filter((m) => m.id !== markerId));
+          }, 680);
+        }
 
         const isBossVehicle = Boolean(hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet);
         // Exact 3:1 Headshot-to-Normal Hit Scale:
@@ -3068,7 +3080,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const handleTouchStart = (e: TouchEvent) => {
       if (e.cancelable) e.preventDefault(); // Prevents mobile OS long-press magnifying glass ("zooming lens")!
       sounds.unlockAudio();
-      cachedRect = container.getBoundingClientRect();
+      if (cachedRect.width === 0 || cachedRect.height === 0) {
+        cachedRect = container.getBoundingClientRect();
+      }
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         const clientX = touch.clientX;
@@ -3141,7 +3155,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         if (touch.identifier === firingTouchIdRef.current) {
           firingTouchIdRef.current = null;
           isPointerDownRef.current = false;
-          setIsFiring(false);
+          setCurrentAmmo(currentAmmoRef.current);
           cancelHoldShootScope();
         }
       }
@@ -3154,7 +3168,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     const handleMouseDown = (e: MouseEvent) => {
       sounds.unlockAudio();
-      setAudioSuspended(false);
+      if (audioSuspendedRef.current) {
+        audioSuspendedRef.current = false;
+        setAudioSuspended(false);
+      }
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       if (e.button === 2) {
         e.preventDefault();
@@ -3162,7 +3179,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         return;
       }
       isPointerDownRef.current = true;
-      setIsFiring(true);
       startHoldShootScopeTimer();
       updateAimPosition(e.clientX, e.clientY, false);
       aimPosRef.current.x = targetAimPosRef.current.x;
@@ -3178,7 +3194,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const handleMouseUp = (e: MouseEvent) => {
       if (e.button === 2) return;
       isPointerDownRef.current = false;
-      setIsFiring(false);
+      setCurrentAmmo(currentAmmoRef.current);
       cancelHoldShootScope();
     };
 
@@ -3266,17 +3282,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let prevPlayerX = 0;
     let smoothedPlayerVelX = 0;
 
-    // Helper: Trigger Dynamic Screen Shake, Haptics & Directional Damage HUD Indicator (scales up as HP lowers!)
+    // Helper: Trigger Dynamic Screen Shake & Haptics (scales up as HP lowers, zero React state re-render overhead!)
     const triggerDirectionalDamageFeedback = (
       sourceX: number,
-      sourceZ: number,
+      _sourceZ: number,
       damageAmount: number,
       sourceType: DirectionalDamageIndicator['sourceType'],
-      isSplash: boolean
+      _isSplash: boolean
     ) => {
       sounds.triggerHaptic([45, 25, 50], 'heavy');
       const currentHp = Math.max(0, playerHpRef.current);
-      // Missing HP multiplier: 1.0x at full health up to 2.25x at critical low HP (< 20%)
       const lowHpMultiplier = 1 + ((100 - currentHp) / 100) * 1.25;
       const baseTrauma =
         sourceType === 'BOSS MISSILE'
@@ -3289,40 +3304,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const shakePower = Math.min(1.45, (baseTrauma + (damageAmount / 100) * 0.45) * lowHpMultiplier);
       cameraShakeRef.current = Math.max(cameraShakeRef.current, shakePower);
 
-      // Directional roll impulse based on which side the blast came from
       const relX = sourceX - playerPosRef.current.x;
-      const relZ = sourceZ - playerPosRef.current.z;
       const sideSign = relX < -0.25 ? -1 : relX > 0.25 ? 1 : (Math.random() < 0.5 ? -1 : 1);
       cameraRollShakeRef.current = sideSign * shakePower * 0.085;
-
-      // Compute angle in degrees relative to forward (-Z is 0 deg, -X is -45 deg, +X is +45 deg)
-      const rawAngleDeg = Math.atan2(relX, Math.max(1.5, -relZ)) * (180 / Math.PI);
-      const clampedAngleDeg = Math.max(-78, Math.min(78, rawAngleDeg * 1.65));
-      const sector: 'left' | 'center' | 'right' =
-        relX < -0.75 ? 'left' : relX > 0.75 ? 'right' : 'center';
-
-      // Intensity scales with both the blast severity and how low the player's HP is
-      const intensity = Math.min(
-        1.0,
-        0.42 + ((100 - currentHp) / 100) * 0.48 + (isSplash ? 0.15 : 0.08)
-      );
-
-      const indId = nextDamageIndicatorIdRef.current++;
-      setDamageIndicators((prev) => [
-        ...prev.slice(-3),
-        {
-          id: indId,
-          angleDeg: Math.round(clampedAngleDeg),
-          sector,
-          sourceType,
-          intensity,
-          isSplash,
-        },
-      ]);
-
-      setTimeout(() => {
-        setDamageIndicators((prev) => prev.filter((item) => item.id !== indId));
-      }, 1350);
     };
 
     function animate() {
@@ -4347,8 +4331,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
           cameraShakeRef.current = 0.55;
           comboStreakRef.current = 0;
           setComboStreak(0);
-          setOperatorMood('hit');
-          setTimeout(() => setOperatorMood('normal'), 400);
           sounds.playQuizWrong();
 
           if (playerHpRef.current <= 0) {
@@ -4420,9 +4402,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           lastDamageTakenTime = elapsed;
           playerHpRef.current = Math.max(0, playerHpRef.current - splashDamage);
           setPlayerHp(playerHpRef.current);
-          setOperatorMood('hit');
           triggerDirectionalDamageFeedback(bar.x, bar.z, splashDamage, sourceType, true);
-          setTimeout(() => setOperatorMood('normal'), 450);
           if (playerHpRef.current <= 0) {
             onPhaseDefeat(scoreRef.current, killsRef.current);
           }
@@ -4498,7 +4478,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
               lastDamageTakenTime = elapsed;
               playerHpRef.current = Math.max(0, playerHpRef.current - r.damage);
               setPlayerHp(playerHpRef.current);
-              setOperatorMood('hit');
               triggerDirectionalDamageFeedback(
                 r.mesh.position.x,
                 r.mesh.position.z - 4,
@@ -4506,7 +4485,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 'BOSS MISSILE',
                 false
               );
-              setTimeout(() => setOperatorMood('normal'), 450);
               if (playerHpRef.current <= 0) {
                 onPhaseDefeat(scoreRef.current, killsRef.current);
               }
@@ -4934,7 +4912,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
             playerHpRef.current = Math.max(0, playerHpRef.current - b.damage);
             setPlayerHp(playerHpRef.current);
-            setOperatorMood('hit');
             triggerDirectionalDamageFeedback(
               b.mesh.position.x - b.vx * 0.15,
               b.mesh.position.z - 6,
@@ -4942,7 +4919,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
               b.isTank ? 'TANK SHELL' : 'BALLISTIC HIT',
               false
             );
-            setTimeout(() => setOperatorMood('normal'), 400);
 
             if (typeof navigator !== 'undefined' && navigator.vibrate) {
               navigator.vibrate([40, 30, 40]);
@@ -5408,10 +5384,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         weaponMeshRef.current.rotation.z = THREE.MathUtils.damp(weaponMeshRef.current.rotation.z, targetRotZ, 18, delta);
       }
 
-      if (muzzleFlashRef.current && muzzleFlashRef.current.intensity > 0) {
-        muzzleFlashRef.current.intensity = THREE.MathUtils.damp(muzzleFlashRef.current.intensity, 0, 24, delta);
-      }
-
       if (muzzleSpriteRef.current && muzzleSpriteRef.current.material) {
         muzzleSpriteRef.current.visible = !isScopedRef.current;
         const mat = muzzleSpriteRef.current.material as THREE.MeshBasicMaterial;
@@ -5574,6 +5546,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 />
                 {/* Right Curved Magazine Fill Arc */}
                 <path
+                  ref={scopeAmmoArcDomRef}
                   d="M 162 162 A 88 88 0 0 0 162 38"
                   fill="none"
                   stroke={isReloading ? '#f59e0b' : currentAmmo === 0 ? '#f43f5e' : '#38bdf8'}
@@ -5623,7 +5596,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 {/* Live Ammo Badge */}
                 <div className="px-1.5 sm:px-2.5 py-0.5 bg-zinc-950/95 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1">
                   <span className="text-[7px] sm:text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
-                  <span className={`text-[10px] sm:text-xs font-black tabular-nums ${currentAmmo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
+                  <span
+                    ref={scopeAmmoTextDomRef}
+                    className={`text-[10px] sm:text-xs font-black tabular-nums ${currentAmmo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}
+                  >
                     {isReloading ? `${reloadProgress}%` : `${currentAmmo}/${reserveAmmo}`}
                   </span>
                 </div>
@@ -6270,6 +6246,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                         {/* Bottom-Right Ammo Readout inside tile (matches Fortnite "21", "88", "107") */}
                         <div className="flex items-center justify-end gap-0.5 w-full leading-none">
                           <span
+                            ref={isSelected ? hotbarAmmoTextDomRef : undefined}
                             className={`text-[9px] sm:text-xs font-black tabular-nums ${
                               isSelected && currentAmmo <= 5 ? 'text-rose-300 animate-pulse' : 'text-white'
                             }`}

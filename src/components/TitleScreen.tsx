@@ -3,7 +3,7 @@ import { LevelConfig, PlayerStats, Weapon } from '../types/game';
 import { CURRICULUM_LEVELS } from '../data/curriculumData';
 import { sounds } from '../services/soundEffects';
 import { Zap, BookOpen, Volume2, VolumeX, Star, Play, Crosshair, CheckCircle2 } from 'lucide-react';
-import { Trophy, UserCheck, Shield } from 'lucide-react';
+import { Trophy, UserCheck, Shield, Swords, Film } from 'lucide-react';
 import { RankBadge } from './RankBadge';
 
 interface TitleScreenProps {
@@ -21,6 +21,8 @@ interface TitleScreenProps {
   onToggleAutoAim: () => void;
   onOpenLeaderboard: () => void;
   onOpenProfile: () => void;
+  onOpenMultiplayer?: () => void;
+  onOpenTrailer?: () => void;
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
@@ -38,6 +40,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onToggleAutoAim,
   onOpenLeaderboard,
   onOpenProfile,
+  onOpenMultiplayer,
+  onOpenTrailer,
 }) => {
   const [stageFilter, setStageFilter] = useState<'ALL' | 'Grade 5' | 'Stage 7' | 'Stage 8' | 'SECRET'>('ALL');
 
@@ -78,7 +82,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           </span>
 
           {/* Zone 2: Clean single-line navigation links */}
-          <nav className="hidden md:flex items-center gap-5 text-sm font-medium text-slate-300">
+          <nav className="hidden md:flex items-center gap-4 text-sm font-medium text-slate-300">
+            {onOpenMultiplayer && (
+              <button
+                onClick={() => {
+                  sounds.unlockAudio();
+                  sounds.playCombatAlarm();
+                  onOpenMultiplayer();
+                }}
+                className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer font-bold px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-400/60 shadow-[0_0_12px_rgba(6,182,212,0.3)]"
+              >
+                <Swords className="w-4 h-4 text-cyan-400" />
+                <span>Multiplayer Arena</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 sounds.unlockAudio();
@@ -90,6 +107,19 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               <Trophy className="w-4 h-4 text-amber-400" />
               <span>Leaderboard</span>
             </button>
+            {onOpenTrailer && (
+              <button
+                onClick={() => {
+                  sounds.unlockAudio();
+                  sounds.playRadioChirp();
+                  onOpenTrailer();
+                }}
+                className="text-purple-300 hover:text-purple-200 flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Film className="w-4 h-4 text-purple-400" />
+                <span>Trailer &amp; Banner</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 sounds.unlockAudio();
@@ -108,7 +138,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               }}
               className="hover:text-cyan-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              Science Study Guide
+              Science Guide
             </button>
             <button
               onClick={() => {
@@ -312,6 +342,61 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                   </button>
                 )}
               </div>
+
+              {/* LIVE MULTIPLAYER DEATHMATCH ARENA CARD (STUDENTS CAN START IT!) */}
+              {onOpenMultiplayer && (
+                <div className="p-3.5 rounded-lg bg-cyan-950/70 border border-cyan-400/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_0_20px_rgba(6,182,212,0.25)]">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-mono font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                      <span>⚔️ MULTIPLAYER ARENA: WAYGROUND DEATHMATCH</span>
+                    </div>
+                    <div className="text-sm sm:text-base font-display font-extrabold text-white truncate">
+                      Students can start &amp; join online! Answer quiz freezes to buff attacks, then unfreeze &amp; battle!
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.playCombatAlarm();
+                      onOpenMultiplayer();
+                    }}
+                    className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-display font-black text-xs sm:text-sm uppercase tracking-wider cursor-pointer transition-all shadow-[0_0_15px_rgba(6,182,212,0.5)] whitespace-nowrap shrink-0 flex items-center gap-1.5"
+                  >
+                    <Swords className="w-4 h-4" />
+                    <span>START MULTIPLAYER MATCH</span>
+                  </button>
+                </div>
+              )}
+
+              {/* WEBSITE PROMOTIONAL BANNER & ANIMATED TRAILER CARD */}
+              {onOpenTrailer && (
+                <div className="p-3 rounded-lg bg-gradient-to-r from-purple-950/70 to-slate-950 border border-purple-500/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-purple-500/20 border border-purple-400 flex items-center justify-center text-purple-300 shrink-0">
+                      <Film className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-display font-bold text-white truncate">
+                        Website Banner Trailer &amp; Hyperlink Code
+                      </div>
+                      <div className="text-[10px] font-mono text-purple-300 truncate">
+                        Shooting grenades, airdrops &amp; Blériot boss · Copy ready-to-paste website hyperlink!
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.playRadioChirp();
+                      onOpenTrailer();
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-mono font-bold text-xs whitespace-nowrap cursor-pointer shrink-0"
+                  >
+                    Open Trailer &amp; Embed Code »
+                  </button>
+                </div>
+              )}
 
               {/* CLASSIFIED SECRET SPY ATTACK DIRECT LAUNCH BANNER */}
               {secretLevel && (
