@@ -19,6 +19,8 @@ import {
   Play,
   Home,
   Repeat,
+  Heart,
+  RotateCcw,
 } from 'lucide-react';
 import {
   createBacillusSoldier,
@@ -406,6 +408,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     const renderer = new THREE.WebGLRenderer({ antialias: window.innerWidth >= 900, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 900 ? 1.25 : 1.5));
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.inset = '0';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.zIndex = '0';
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
@@ -955,20 +963,20 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
 
       let shootDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
 
-      // Smart Auto-Aim toward nearest General or Guard in front of player
+      // Soft Auto-Aim Assist toward nearest General or Guard TORSO (helps move closer without auto-headshotting!)
       if (stateRef.current.autoAim) {
         let bestTarget: SpyTarget | null = null;
         let bestScore = Infinity;
         for (const t of targets) {
           if (t.hp <= 0 || t.sabotaged) continue;
-          _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 2.0, 0));
+          _v1.copy(t.mesh.position).add(new THREE.Vector3(0, 1.25, 0));
           const dist = _v1.distanceTo(camera.position);
           if (dist > 65) continue;
           _v2.copy(_v1).sub(camera.position).normalize();
           const angle = shootDir.angleTo(_v2);
-          const maxCone = stateRef.current.isScoped ? 0.38 : 0.28;
+          const maxCone = stateRef.current.isScoped ? 0.26 : 0.22;
           if (angle < maxCone) {
-            const priorityWeight = t.kind === 'GENERAL' ? 0.5 : 1.0;
+            const priorityWeight = t.kind === 'GENERAL' ? 0.65 : 1.0;
             const score = angle * dist * priorityWeight;
             if (score < bestScore) {
               bestScore = score;
@@ -977,10 +985,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           }
         }
         if (bestTarget) {
-          const aimPos = bestTarget.mesh.position.clone().add(
-            new THREE.Vector3(0, bestTarget.kind === 'GENERAL' ? 2.3 : 1.7, 0)
+          const torsoPos = bestTarget.mesh.position.clone().add(
+            new THREE.Vector3(0, bestTarget.kind === 'GENERAL' ? 1.35 : 1.15, 0)
           );
-          shootDir = aimPos.sub(muzzleWorldPos).normalize();
+          const torsoDir = torsoPos.sub(muzzleWorldPos).normalize();
+          // Gently blend 42% toward torso center so auto-aim assists without auto-headshotting
+          shootDir.lerp(torsoDir, 0.42).normalize();
         }
       }
 
@@ -1332,11 +1342,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         setCoverObjectName(foundCoverName);
       }
 
-      // Camera aim rotation based on mouse / touch aim (smooth full-range pitch up/down & yaw left/right)
-      const targetRotY = -mouseRef.current.x * (stateRef.current.isScoped ? 0.65 : 0.45);
-      const targetRotX = mouseRef.current.y * (stateRef.current.isScoped ? 0.52 : 0.35);
-      camera.rotation.y += (targetRotY - camera.rotation.y) * 0.18;
-      camera.rotation.x += (targetRotX - camera.rotation.x) * 0.18;
+      // Camera aim rotation based on mouse / touch aim (smooth frame-rate-independent damping like Fortnite / Black Ops)
+      const targetRotY = -mouseRef.current.x * (stateRef.current.isScoped ? 0.58 : 0.44);
+      const targetRotX = mouseRef.current.y * (stateRef.current.isScoped ? 0.46 : 0.34);
+      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetRotY, 22, dt);
+      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetRotX, 22, dt);
 
       // 3D Silenced Pistol Scope-In (ADS) & Recoil Recovery
       if (stateRef.current.isScoped) {
@@ -1546,20 +1556,26 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
             const hitRadius = t.kind === 'BASE' ? 3.5 : t.kind === 'TANK' ? 2.8 : 1.9;
             if (b.mesh.position.distanceTo(_v1) < hitRadius) {
               hit = true;
+              const headHeightY = t.mesh.position.y + (t.kind === 'GENERAL' ? 2.35 : 1.85);
+              const isHeadshot =
+                (t.kind === 'GUARD' || t.kind === 'GENERAL' || t.kind === 'TANK') &&
+                b.mesh.position.y >= headHeightY - 0.35;
               const stealthMultiplier =
-                !t.alerted || stateRef.current.isCrouching || stateRef.current.stealthCloakActive ? 3.0 : 1.25;
-              const finalDmg = Math.round(b.damage * stealthMultiplier);
+                isHeadshot || !t.alerted || stateRef.current.isCrouching || stateRef.current.stealthCloakActive
+                  ? 3.0
+                  : 1.0;
+              const finalDmg = isHeadshot && t.kind === 'GUARD' ? Math.max(t.hp, Math.round(b.damage * 3)) : Math.round(b.damage * stealthMultiplier);
               t.hp -= finalDmg;
               stateRef.current.score += finalDmg * 2;
               sounds.playHitmarker(true);
               spawnParticles(b.mesh.position, 0x38bdf8, 6);
 
-              // Project 3D hit position to screen & spawn Fortnite-style floating damage number!
+              // Project 3D hit position to screen & spawn Fortnite-style floating damage number + HEADSHOT!
               const proj = _v1.clone().project(camera);
               const screenX = Math.max(15, Math.min(85, (proj.x + 1) * 50));
               const screenY = Math.max(15, Math.min(82, (-proj.y + 1) * 50));
               const dmgId = performance.now() + Math.random();
-              const isCritStealth = stealthMultiplier >= 3.0;
+              const isCritStealth = isHeadshot || stealthMultiplier >= 3.0;
               setSpyDamageNumbers(prev => [
                 ...prev.slice(-8),
                 {
@@ -1569,13 +1585,14 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                   offsetX: Math.round((Math.random() - 0.5) * 30),
                   offsetY: Math.round((Math.random() - 0.5) * 16),
                   isCritical: isCritStealth,
+                  isHeadshot,
                   isArmored: t.kind === 'TANK' || t.kind === 'BASE',
                   damage: finalDmg,
                 },
               ]);
               window.setTimeout(() => {
                 setSpyDamageNumbers(prev => prev.filter(m => m.id !== dmgId));
-              }, 680);
+              }, 750);
 
               if (t.hp <= 0) {
                 t.hp = 0;
@@ -1732,10 +1749,10 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     <div
       onTouchStart={() => sounds.unlockAudio()}
       onPointerDown={() => sounds.unlockAudio()}
-      className="relative w-full h-screen bg-slate-950 overflow-hidden select-none font-sans"
+      className="fixed inset-0 w-full h-full bg-slate-950 overflow-hidden select-none font-sans"
     >
       {/* 3D WebGL Viewport */}
-      <div ref={mountRef} className="absolute inset-0 w-full h-full cursor-crosshair" />
+      <div ref={mountRef} className="fixed inset-0 w-full h-full z-0 cursor-crosshair" />
 
       {/* Stealth Posture & Cloak Vignette */}
       {(stealthCloakActive || isCrouching) && (
@@ -1748,9 +1765,12 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         />
       )}
 
-      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (MATCHING USER REFERENCE IMG_5388) */}
-      {isScoped ? (
-        <div className="fixed inset-0 pointer-events-none z-30 select-none overflow-hidden animate-ads-snap font-mono">
+      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (PRE-MOUNTED IN DOM FOR INSTANT FIRST-TIME RENDERING) */}
+      <div
+        className={`fixed inset-0 pointer-events-none z-30 select-none overflow-hidden font-mono transition-opacity duration-100 ${
+          isScoped ? 'opacity-100 visible animate-ads-snap' : 'opacity-0 invisible'
+        }`}
+      >
           {/* Tactical Peripheral Tunnel Vignette */}
           <div
             className="absolute inset-0 pointer-events-none"
@@ -1766,6 +1786,8 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
               <img
                 src="/assets/scope_optic_clean.png"
                 alt="Tactical Optic Scope"
+                loading="eager"
+                decoding="sync"
                 className="w-full h-full object-contain filter drop-shadow-[0_12px_32px_rgba(0,0,0,0.9)] pointer-events-none"
                 draggable={false}
               />
@@ -1864,7 +1886,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                 </div>
 
                 {/* RIGHT ROUNDED SCOPE TELEMETRY: SPY ABILITIES & AMMO ARC */}
-                <div className="absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 pointer-events-auto font-mono">
+                <div className={`absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono ${isScoped ? 'pointer-events-auto' : 'pointer-events-none'}`}>
                   <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
                     <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
                     <span className={`text-xs font-black tabular-nums ${ammo === 0 ? 'text-rose-400 animate-pulse' : 'text-white'}`}>
@@ -1947,9 +1969,10 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
               </div>
             </div>
           </div>
-        </div>
-      ) : (
-        /* Sleek Covert Suppressed Hipfire Crosshair */
+      </div>
+
+      {/* Sleek Covert Suppressed Hipfire Crosshair */}
+      {!isScoped && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
           <div className="relative transition-all duration-150 flex items-center justify-center rounded-full border w-7 h-7 border-amber-400/55">
             <span className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-[1.5px] h-2 bg-amber-400/80" />
@@ -1965,7 +1988,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       {squadDialogues.map((sq) => (
         <div
           key={sq.id}
-          className="absolute transform -translate-x-1/2 -translate-y-full pointer-events-none z-25 transition-all duration-150"
+          className="absolute transform -translate-x-1/2 -translate-y-full pointer-events-none z-20 transition-all duration-150"
           style={{ left: `${sq.x}%`, top: `${sq.y}%` }}
         >
           <div className="relative bg-zinc-950/90 border border-amber-400/70 text-amber-200 text-[10px] sm:text-xs font-mono font-medium px-2.5 py-1.5 rounded shadow-[0_0_12px_rgba(0,0,0,0.85)] max-w-[210px] sm:max-w-[260px] text-center leading-snug">
@@ -1979,16 +2002,21 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         </div>
       ))}
 
-      {/* FORTNITE-STYLE FLOATING DAMAGE NUMBERS (Secret Spy Mode) */}
+      {/* FORTNITE-STYLE FLOATING DAMAGE NUMBERS + HEADSHOT BANNER (Secret Spy Mode) */}
       {spyDamageNumbers.map((marker) => (
         <div
           key={marker.id}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30 flex flex-col items-center"
           style={{
             left: `calc(${marker.x}% + ${marker.offsetX || 0}px)`,
             top: `calc(${marker.y}% + ${marker.offsetY || 0}px)`,
           }}
         >
+          {marker.isHeadshot && (
+            <div className="animate-fortnite-dmg mb-0.5 px-1.5 py-0.5 bg-rose-600/95 border border-yellow-300 rounded text-[10px] sm:text-xs font-black tracking-widest text-yellow-200 uppercase shadow-[0_0_12px_rgba(244,63,94,0.95)] whitespace-nowrap">
+              🎯 HEADSHOT!
+            </div>
+          )}
           <div
             className={`animate-fortnite-dmg fortnite-dmg-text select-none whitespace-nowrap text-center leading-none ${
               marker.isCritical
@@ -2031,425 +2059,497 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       )}
 
       {/* =====================================================================
-          CALL OF DUTY: BLACK OPS COVERT INFILTRATION HUD — TOP TELEMETRY BAR
-          (Angled chamfered dark-carbon military frames, 92%+ unobstructed 3D view)
+          FORTNITE-STYLE COVERT SPY HUD OVERLAY (NETLIFY-SAFE HARDWARE COMPOSITED)
+          Matches the Fortnite HUD layout without building materials on Phone & PC.
          ===================================================================== */}
-      <div className="absolute top-1.5 left-2 right-2 flex items-center justify-between gap-2 pointer-events-none z-40 font-mono">
-        {/* Left: Direct Back Button + Pause [ESC] Button + Covert Operative Vitality + Optical Cloak Telemetry */}
-        <div className="flex items-center gap-1 sm:gap-1.5 pointer-events-auto">
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(16, 0.45);
-              if (onExitToMenu) {
-                onExitToMenu();
-              } else {
-                setIsGamePaused(true);
-              }
-            }}
-            className="h-9 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-rose-950/80 border-l-2 border-rose-500 border-t border-r border-b border-rose-500/50 text-rose-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(244,63,94,0.25)] cursor-pointer whitespace-nowrap"
-            style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
-            title="Back to Main Menu"
-          >
-            <Home className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-            <span>BACK</span>
-          </button>
-
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(14, 0.4);
-              setIsGamePaused(true);
-            }}
-            className="h-9 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
-            style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
-            title="Pause Infiltration [ESC]"
-          >
-            <Pause className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
-            <span>PAUSE [ESC]</span>
-          </button>
-
-          <div
-            className="bg-black/80 border-l-2 border-amber-500 border-y border-r border-white/10 px-2.5 py-1 flex items-center gap-2.5 text-[10px] sm:text-xs text-slate-100 shadow-[0_4px_16px_rgba(0,0,0,0.75)]"
-            style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%)' }}
-          >
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[8px] tracking-widest text-amber-400 font-bold uppercase">VIT</span>
-                <div className="flex gap-0.5">
-                  {[0, 1, 2, 3, 4].map(seg => {
-                    const active = (hp / maxHp) * 5 > seg;
-                    const low = hp < 35;
-                    return (
-                      <span
-                        key={seg}
-                        className={`w-2 h-2.5 ${
-                          active
-                            ? low
-                              ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.9)]'
-                              : 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]'
-                            : 'bg-white/10'
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
-                <span className={`font-bold tabular-nums ${hp < 35 ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}>
-                  {hp}%
-                </span>
-              </div>
-            </div>
-
-            <span className="text-white/15">|</span>
-
-            {/* Cloak Energy Segmented Bar */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[8px] tracking-widest text-cyan-400 font-bold uppercase">CLK</span>
-              <div className="w-10 h-2 bg-white/10 overflow-hidden border border-cyan-500/30">
-                <div
-                  className="h-full bg-cyan-400 transition-all duration-150"
-                  style={{ width: `${stealthEnergy}%` }}
-                />
-              </div>
-              <span className="text-cyan-300 font-bold tabular-nums">{stealthEnergy}%</span>
-            </div>
-
-            <span className="text-white/15 hidden sm:inline">|</span>
-
-            {/* Cover / Stealth Posture Status */}
-            <span
-              className={`px-1.5 py-0.5 text-[9px] font-bold tracking-wider uppercase border ${
-                stealthCloakActive
-                  ? 'bg-cyan-950/80 border-cyan-400/60 text-cyan-300'
-                  : isBehindCover
-                  ? 'bg-emerald-950/80 border-emerald-400/60 text-emerald-300'
-                  : 'bg-amber-950/80 border-amber-400/60 text-amber-300'
-              }`}
-            >
-              {stealthCloakActive
-                ? 'OPTIC CLOAK'
-                : coverObjectName
-                ? 'IN COVER'
-                : isCrouching
-                ? 'STEALTH CROUCH'
-                : 'EXPOSED'}
-            </span>
-          </div>
-        </div>
-
-        {/* Right: Classified Black Ops HVT & Sabotage Telemetry */}
-        <div
-          className="bg-black/80 border-r-2 border-amber-500 border-y border-l border-white/10 px-2.5 py-1 flex items-center gap-2.5 text-[10px] sm:text-xs text-slate-100 tabular-nums shadow-[0_4px_16px_rgba(0,0,0,0.75)]"
-          style={{ clipPath: 'polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px)' }}
-        >
-          <span className="hidden md:inline text-[9px] text-amber-400 font-bold tracking-widest uppercase">
-            OP: BLACKLIGHT
-          </span>
-          <span className="hidden md:inline text-white/15">|</span>
-          <span className="flex items-center gap-1" title="Generals Eliminated">
-            <Skull className="w-3 h-3 text-amber-400" />
-            <strong className={generalsEliminated >= totalGenerals ? 'text-emerald-400' : 'text-white'}>
-              {generalsEliminated}/{totalGenerals}
-            </strong>
-          </span>
-          <span className="flex items-center gap-1" title="Bio-Tanks Sabotaged">
-            <Bomb className="w-3 h-3 text-cyan-400" />
-            <strong className={tanksSabotaged >= totalTanks ? 'text-emerald-400' : 'text-white'}>
-              {tanksSabotaged}/{totalTanks}
-            </strong>
-          </span>
-          <span className="flex items-center gap-1" title="Spore Artillery Sabotaged">
-            <Target className="w-3 h-3 text-red-400" />
-            <strong className={artillerySabotaged >= totalArtillery ? 'text-emerald-400' : 'text-white'}>
-              {artillerySabotaged}/{totalArtillery}
-            </strong>
-          </span>
-          <span className="flex items-center gap-1" title="Enemy Bases Sabotaged">
-            <Shield className="w-3 h-3 text-emerald-400" />
-            <strong className={basesSabotaged >= totalBases ? 'text-emerald-400' : 'text-white'}>
-              {basesSabotaged}/{totalBases}
-            </strong>
-          </span>
-          <span className="text-white/15">|</span>
-          <span className="text-amber-300 font-bold">
-            {Math.floor(timeElapsed / 60)}:{(timeElapsed % 60).toString().padStart(2, '0')}
-          </span>
-        </div>
-      </div>
-
-      {/* Slim Tactical Directive Feed Strip */}
-      {alertMessage && (
-        <div className="absolute top-10 left-1/2 -translate-x-1/2 pointer-events-none z-10 max-w-[92vw] font-mono">
-          <div
-            className="bg-black/80 border-l-2 border-amber-500 border-y border-r border-white/15 px-3 py-0.5 text-[10px] text-amber-300 tracking-wider uppercase truncate shadow-md"
-            style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
-          >
-            {alertMessage}
-          </div>
-        </div>
-      )}
-
-      {/* Tactical Context Action Prompt for Bio-Security Doors or C4 Sabotage */}
-      {(nearbyDoorName || nearbySabotageTarget) && (
-        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-20 font-mono">
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              handleInteractOrSabotage();
-            }}
-            className="bg-black/90 hover:bg-amber-950/90 border border-amber-400 text-amber-300 font-bold px-4 py-1.5 shadow-[0_0_20px_rgba(245,158,11,0.35)] flex items-center gap-2 text-[11px] uppercase tracking-widest cursor-pointer whitespace-nowrap"
-            style={{ clipPath: 'polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px)' }}
-          >
-            {nearbyDoorName ? (
-              <>
-                <DoorOpen className="w-3.5 h-3.5 text-emerald-400" />
-                <span>BREACH {nearbyDoorName} [E]</span>
-              </>
-            ) : (
-              <>
-                <Bomb className="w-3.5 h-3.5 text-amber-400" />
-                <span>PLANT C4: {nearbySabotageTarget} [E]</span>
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* =====================================================================
-          CALL OF DUTY: BLACK OPS SPEC-OPS BOTTOM CONTROL DECK & WEAPON HUB
-          (Chunky tactile buttons, prominent weapon switcher, Safari-safe)
-         ===================================================================== */}
-      <div className="absolute bottom-2.5 sm:bottom-4 left-1.5 right-1.5 pb-[max(1rem,env(safe-area-inset-bottom))] px-[max(0.35rem,env(safe-area-inset-left))] pr-[max(0.35rem,env(safe-area-inset-right))] flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2 z-40 pointer-events-none font-mono">
-        {/* Left/Center: Chunky Tactical Action Buttons */}
-        <div
-          className="bg-black/90 border-l-4 border-amber-500 border-y border-r border-amber-500/40 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 pointer-events-auto overflow-x-auto max-w-full no-scrollbar shadow-[0_4px_25px_rgba(0,0,0,0.9)]"
-          style={{ clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)' }}
-        >
-          {/* CROUCH Button */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(10, 0.3);
-              toggleCrouch();
-            }}
-            className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap border transition-all select-none ${
-              isCrouching
-                ? 'bg-emerald-950 border-emerald-400 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.4)]'
-                : 'bg-zinc-900 hover:bg-zinc-800 border-white/20 text-slate-100 hover:border-amber-400/60'
-            }`}
-            title="Toggle Crouch / Stealth Low Profile [C]"
-          >
-            <ArrowDownToLine className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-            <div className="flex flex-col text-left leading-tight">
-              <span>{isCrouching ? 'LOW' : 'CROUCH'}</span>
-              <span className="text-[8px] sm:text-[9px] opacity-60 font-sans">[C]</span>
-            </div>
-          </button>
-
-          {/* C4 / BREACH Context Action */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(14, 0.45);
-              handleInteractOrSabotage();
-            }}
-            disabled={!nearbyDoorName && !nearbySabotageTarget}
-            className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap border transition-all select-none ${
-              nearbyDoorName || nearbySabotageTarget
-                ? 'bg-amber-500/30 border-amber-400 text-amber-300 animate-pulse shadow-[0_0_15px_rgba(245,158,11,0.45)]'
-                : 'bg-zinc-950/70 border-white/10 text-zinc-600 cursor-not-allowed'
-            }`}
-            title="Interact or Detonate C4 [E]"
-          >
-            {nearbyDoorName ? <DoorOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" /> : <Bomb className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />}
-            <div className="flex flex-col text-left leading-tight">
-              <span>{nearbyDoorName ? 'BREACH' : 'PLANT C4'}</span>
-              <span className="text-[8px] sm:text-[9px] opacity-60 font-sans">[E]</span>
-            </div>
-          </button>
-
-          {/* STEALTH CLOAK */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(12, 0.4);
-              toggleCloak();
-            }}
-            className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap border transition-all select-none ${
-              stealthCloakActive
-                ? 'bg-cyan-950 border-cyan-400 text-cyan-300 shadow-[0_0_15px_rgba(34,211,238,0.4)]'
-                : 'bg-zinc-900 hover:bg-zinc-800 border-white/20 text-slate-100 hover:border-cyan-400/60'
-            }`}
-            title="Toggle Active Camouflage Cloak [V]"
-          >
-            <EyeOff className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${stealthCloakActive ? 'text-cyan-300 animate-pulse' : 'text-cyan-400'}`} />
-            <div className="flex flex-col text-left leading-tight">
-              <span>CLOAK</span>
-              <span className="text-[8px] sm:text-[9px] opacity-60 font-sans">{stealthEnergy}%</span>
-            </div>
-          </button>
-
-          {/* ADS / SCOPE */}
-          <button
-            onClick={() => {
-              if (holdShootTimerRef.current) {
-                clearTimeout(holdShootTimerRef.current);
-                holdShootTimerRef.current = null;
-              }
-              autoScopedByHoldRef.current = false;
-              sounds.unlockAudio();
-              sounds.triggerHaptic(10, 0.35);
-              setIsScoped(prev => {
-                const next = !prev;
-                stateRef.current.isScoped = next;
-                return next;
-              });
-            }}
-            className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap border transition-all select-none ${
-              isScoped
-                ? 'bg-cyan-950 border-cyan-400 text-cyan-300 shadow-[0_0_15px_rgba(34,211,238,0.4)]'
-                : 'bg-zinc-900 hover:bg-zinc-800 border-white/20 text-slate-100 hover:border-amber-400/60'
-            }`}
-            title="Toggle Optic Sight Scope [F] or Right-Click"
-          >
-            <Crosshair className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
-            <div className="flex flex-col text-left leading-tight">
-              <span>{isScoped ? 'SCOPED' : 'SCOPE'}</span>
-              <span className="text-[8px] sm:text-[9px] opacity-60 font-sans">[F]</span>
-            </div>
-          </button>
-
-          {/* RELOAD */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(10, 0.3);
-              handleReload();
-            }}
-            className="h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider bg-zinc-900 hover:bg-zinc-800 border border-white/20 text-slate-100 hover:border-amber-400/60 cursor-pointer flex items-center gap-1 sm:gap-1.5 whitespace-nowrap transition-all select-none"
-            title="Reload Weapon [R]"
-          >
-            <div className="flex flex-col text-left leading-tight">
-              <span>RLD</span>
-              <span className="text-[8px] sm:text-[9px] opacity-60 font-sans">[R]</span>
-            </div>
-          </button>
-
-          {/* STIM HEAL */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(12, 0.4);
-              handleHeal();
-            }}
-            className="h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black uppercase tracking-wider bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 cursor-pointer flex items-center gap-1 sm:gap-1.5 whitespace-nowrap transition-all select-none shadow-[0_0_10px_rgba(16,185,129,0.25)]"
-            title="Inject Medical Bio-Stim [SPACE]"
-          >
-            <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-            <div className="flex flex-col text-left leading-tight">
-              <span>STIM</span>
-              <span className="text-[8px] sm:text-[9px] opacity-75 font-sans">[SPACE]</span>
-            </div>
-          </button>
-
-          {/* AUTO-LOCK TOGGLE */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(10, 0.3);
-              onToggleAutoAim();
-            }}
-            className={`h-9 sm:h-11 px-2 sm:px-2.5 text-[10px] sm:text-[11px] font-black uppercase tracking-wider cursor-pointer whitespace-nowrap border transition-all flex items-center gap-1 select-none ${
-              autoAimEnabled
-                ? 'bg-amber-950/90 border-amber-400/80 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
-                : 'bg-zinc-900 border-white/15 text-zinc-500'
-            }`}
-            title="Toggle Target Lock-On Assist"
-          >
-            <Target className={`w-3.5 h-3.5 ${autoAimEnabled ? 'text-amber-400' : 'text-zinc-600'}`} />
-            <span>{autoAimEnabled ? 'LOCK' : 'OFF'}</span>
-          </button>
-
-          {/* AUDIO MUTE TOGGLE */}
-          <button
-            onClick={() => {
-              sounds.unlockAudio();
-              sounds.triggerHaptic(8, 0.25);
-              onToggleSound();
-            }}
-            className="h-9 sm:h-11 px-2 sm:px-2.5 bg-zinc-900 hover:bg-zinc-800 border border-white/20 text-slate-200 cursor-pointer flex items-center justify-center transition-all select-none"
-            title="Toggle Tactical Audio"
-          >
-            {!soundEnabled ? <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />}
-          </button>
-        </div>
-
-        {/* Right: Prominent Tactical Weapon Hub & Weapon Switcher */}
-        <div
-          className="bg-black/90 border-r-4 border-amber-500 border-y border-l border-amber-500/40 p-1.5 sm:p-2 flex items-center gap-2 sm:gap-2.5 pointer-events-auto shadow-[0_4px_25px_rgba(0,0,0,0.9)] max-w-full"
-          style={{ clipPath: 'polygon(10px 0, 100% 0, 100% 100%, 0 100%, 0 10px)' }}
-        >
-          {/* Active Weapon Card */}
-          <div className="flex flex-col text-left leading-tight min-w-[90px] sm:min-w-[130px]">
-            <div className="flex items-center gap-1 sm:gap-1.5">
-              <span className="text-[7px] sm:text-[8px] px-1 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold uppercase tracking-widest">
-                [SPEC-OPS]
-              </span>
-              <span className="text-[8px] sm:text-[9px] text-zinc-400 uppercase">SLOT {activeSpyWeaponIdx + 1}</span>
-            </div>
-            <span className="text-[10px] sm:text-xs font-black text-amber-400 tracking-wide truncate max-w-[90px] sm:max-w-[150px] uppercase">
-              {activeSpyWeapon.name}
-            </span>
-            <div className="flex items-baseline gap-1 mt-0.5">
-              <span className="text-sm sm:text-lg font-black text-white tabular-nums tracking-tight">
-                {isReloading ? 'RELOAD' : ammo.toString().padStart(2, '0')}
-              </span>
-              <span className="text-[9px] sm:text-[10px] text-zinc-500 font-bold">/ {maxAmmo}</span>
-            </div>
-          </div>
-
-          {/* Quick Swap & Slot Buttons */}
-          <div className="flex flex-col gap-1">
-            {/* Cycle / Swap Weapon Button */}
+      <div
+        className="hud-layer-fixed fixed inset-0 z-40 pointer-events-none flex flex-col justify-between select-none"
+        style={{
+          zIndex: 40,
+          transform: 'translate3d(0, 0, 0)',
+          WebkitTransform: 'translate3d(0, 0, 0)',
+          paddingTop: 'max(0.4rem, env(safe-area-inset-top, 0px))',
+          paddingLeft: 'max(0.5rem, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(0.5rem, env(safe-area-inset-right, 0px))',
+          paddingBottom: 'max(0.25rem, env(safe-area-inset-bottom, 0px))',
+        }}
+      >
+        {/* TOP ROW: TOP-LEFT NAV/UTILITY | TOP-CENTER ALERTS | TOP-RIGHT MINIMAP */}
+        <div className="flex items-start justify-between w-full gap-1.5 sm:gap-2">
+          {/* Top-Left: Back, Pause [ESC], Audio & Auto-Aim */}
+          <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 pointer-events-auto">
             <button
               onClick={() => {
                 sounds.unlockAudio();
-                sounds.triggerHaptic(12, 0.4);
-                handleSwapSpyWeapon();
+                sounds.triggerHaptic(16, 0.45);
+                if (onExitToMenu) {
+                  onExitToMenu();
+                } else {
+                  setIsGamePaused(true);
+                }
               }}
-              className="h-7 sm:h-8 px-2 sm:px-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-[10px] sm:text-[11px] uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer transition-all shadow-[0_0_12px_rgba(245,158,11,0.4)] select-none"
-              style={{ clipPath: 'polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px)' }}
-              title="Swap Weapon Mode [Q]"
+              className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-md bg-slate-950/90 hover:bg-rose-950/90 border-2 border-rose-500/80 text-white font-black text-[10px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.85)] cursor-pointer whitespace-nowrap"
+              title="Back to Main Menu"
             >
-              <span>SWAP</span>
-              <span className="text-[8px] sm:text-[9px] font-sans opacity-75">[Q]</span>
+              <Home className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>BACK</span>
             </button>
 
-            {/* Quick Slots [1], [2], [3] */}
-            <div className="flex items-center gap-0.5 sm:gap-1">
-              {SPY_WEAPONS.map((wpn, idx) => {
-                const isActive = idx === activeSpyWeaponIdx;
-                return (
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.triggerHaptic(14, 0.4);
+                setIsGamePaused(true);
+              }}
+              className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-md bg-slate-950/90 hover:bg-slate-900 border-2 border-amber-400/85 text-amber-300 font-black text-[10px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.85)] cursor-pointer whitespace-nowrap"
+              title="Pause Infiltration [ESC]"
+            >
+              <Pause className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
+              <span>PAUSE</span>
+            </button>
+
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.triggerHaptic(8, 0.25);
+                onToggleSound();
+              }}
+              className="h-8 sm:h-9 w-8 sm:w-9 rounded-md bg-slate-950/85 hover:bg-slate-900 border border-white/25 text-white flex items-center justify-center shadow-md cursor-pointer"
+              title="Toggle Audio"
+            >
+              {!soundEnabled ? (
+                <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400" />
+              )}
+            </button>
+
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.triggerHaptic(10, 0.3);
+                onToggleAutoAim();
+              }}
+              className={`h-8 sm:h-9 px-2 sm:px-2.5 rounded-md font-black text-[9px] sm:text-[11px] tracking-wider uppercase border flex items-center gap-1 shadow-md cursor-pointer ${
+                autoAimEnabled
+                  ? 'bg-sky-600/85 border-sky-300 text-white'
+                  : 'bg-slate-950/85 border-white/20 text-slate-400'
+              }`}
+              title="Toggle Soft Target Assist"
+            >
+              <Target className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+              <span>{autoAimEnabled ? 'ASSIST: ON' : 'ASSIST: OFF'}</span>
+            </button>
+          </div>
+
+          {/* Top-Center: Alert Banner & Context Breach/Sabotage Prompt */}
+          <div className="flex flex-col items-center gap-1 max-w-[46vw] sm:max-w-md">
+            {alertMessage && (
+              <div className="bg-slate-950/90 border border-amber-400 rounded-md px-3 py-0.5 text-[9px] sm:text-xs font-black text-amber-300 tracking-wider uppercase truncate max-w-full shadow-lg">
+                {alertMessage}
+              </div>
+            )}
+
+            {(nearbyDoorName || nearbySabotageTarget) && (
+              <button
+                onClick={() => {
+                  sounds.unlockAudio();
+                  handleInteractOrSabotage();
+                }}
+                className="pointer-events-auto bg-gradient-to-r from-amber-400 to-yellow-300 hover:from-amber-300 hover:to-yellow-200 border-2 border-white text-slate-950 font-black px-3.5 py-1 rounded-md shadow-[0_0_18px_rgba(250,204,21,0.75)] flex items-center gap-1.5 text-[10px] sm:text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap"
+              >
+                {nearbyDoorName ? (
+                  <>
+                    <DoorOpen className="w-3.5 h-3.5 text-slate-950" />
+                    <span>BREACH {nearbyDoorName} [E]</span>
+                  </>
+                ) : (
+                  <>
+                    <Bomb className="w-3.5 h-3.5 text-slate-950" />
+                    <span>PLANT C4: {nearbySabotageTarget} [E]</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* Top-Right: Fortnite Square Minimap + Spy Objectives Row Below */}
+          <div className="flex flex-col items-end gap-1 pointer-events-auto shrink-0">
+            <div
+              className="w-20 h-20 sm:w-28 sm:h-28 rounded-md border-2 border-slate-900/95 shadow-[0_6px_20px_rgba(0,0,0,0.85)] overflow-hidden relative"
+              style={{
+                background: 'radial-gradient(circle at 50% 45%, rgba(244,63,94,0.3) 0%, #0f172a 68%, #020617 100%)',
+              }}
+            >
+              <div
+                className="absolute inset-0 opacity-30 pointer-events-none"
+                style={{
+                  backgroundImage:
+                    'linear-gradient(to right, rgba(255,255,255,0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.12) 1px, transparent 1px)',
+                  backgroundSize: '25% 25%',
+                }}
+              />
+              <div className="absolute inset-2 rounded-full border border-white/15 pointer-events-none" />
+              <div className="absolute inset-x-1 top-1/2 -translate-y-1/2 text-center pointer-events-none">
+                <span
+                  className="text-[8px] sm:text-[10px] font-black uppercase tracking-wider text-white block truncate"
+                  style={{
+                    textShadow:
+                      '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.95)',
+                  }}
+                >
+                  TRACHEA LUMEN
+                </span>
+              </div>
+              <div className="absolute bottom-[14%] left-1/2 -translate-x-1/2 pointer-events-none">
+                <div
+                  className="w-0 h-0"
+                  style={{
+                    borderLeft: '4px solid transparent',
+                    borderRight: '4px solid transparent',
+                    borderBottom: '8px solid #ffffff',
+                    filter: 'drop-shadow(0 0 4px rgba(56,189,248,0.95))',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Spy Objectives Telemetry Strip Below Minimap */}
+            <div className="flex items-center justify-end gap-1.5 bg-slate-950/85 border border-white/15 rounded-md px-2 py-0.5 shadow-lg text-[10px] sm:text-xs font-black tabular-nums">
+              <span className="flex items-center gap-0.5 text-amber-300" title="Generals Eliminated">
+                <Skull className="w-3 h-3 text-amber-400" />
+                {generalsEliminated}/{totalGenerals}
+              </span>
+              <span className="flex items-center gap-0.5 text-sky-300" title="Bio-Tanks Sabotaged">
+                <Bomb className="w-3 h-3 text-sky-400" />
+                {tanksSabotaged}/{totalTanks}
+              </span>
+              <span className="flex items-center gap-0.5 text-rose-300" title="Spore Artillery Sabotaged">
+                <Target className="w-3 h-3 text-rose-400" />
+                {artillerySabotaged}/{totalArtillery}
+              </span>
+              <span className="flex items-center gap-0.5 text-emerald-300" title="Bases Sabotaged">
+                <Shield className="w-3 h-3 text-emerald-400" />
+                {basesSabotaged}/{totalBases}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* BOTTOM SECTION: SLANTED CLOAK/HEALTH BARS + FORTNITE HOTBAR + 10-SEGMENT XP BAR */}
+        <div className="flex flex-col w-full gap-1 sm:gap-1.5">
+          <div className="flex items-end justify-between w-full gap-2">
+            {/* Bottom-Left: Fortnite Slanted Blue Cloak Energy Bar + Green Health Bar */}
+            <div className="flex flex-col gap-1 pointer-events-auto pl-1 sm:pl-2">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md ${
+                    stealthCloakActive
+                      ? 'bg-sky-950/90 border-sky-400 text-sky-200'
+                      : isBehindCover
+                      ? 'bg-emerald-950/90 border-emerald-400 text-emerald-200'
+                      : 'bg-slate-950/85 border-amber-400/60 text-amber-300'
+                  }`}
+                >
+                  {stealthCloakActive
+                    ? '👻 OPTIC CLOAK ACTIVE'
+                    : coverObjectName
+                    ? `🛡️ IN COVER (${coverObjectName})`
+                    : isCrouching
+                    ? '🥷 STEALTH CROUCH'
+                    : '⚠️ EXPOSED'}
+                </span>
+              </div>
+
+              {/* Top Slanted Bar: Blue Cloak Shield Energy */}
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                  <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400 fill-sky-400/30" />
+                </div>
+                <div
+                  className="relative w-28 sm:w-48 md:w-56 h-3 sm:h-4 bg-slate-950/85 border-2 border-white/85 shadow-md overflow-hidden"
+                  style={{ transform: 'skewX(-16deg)' }}
+                >
+                  <div
+                    className="h-full transition-all duration-150"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, stealthEnergy))}%`,
+                      background: 'linear-gradient(90deg, #0284c7 0%, #00b4d8 55%, #38bdf8 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-end pr-2 text-[8px] sm:text-[10px] font-black text-white tabular-nums"
+                    style={{ transform: 'skewX(16deg)', textShadow: '0 1px 3px rgba(0,0,0,0.95)' }}
+                  >
+                    {stealthEnergy} | 100
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Slanted Bar: Vibrant Green Health Bar */}
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                  <Heart
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                      hp < 35 ? 'text-rose-500 fill-rose-500 animate-pulse' : 'text-lime-400 fill-lime-400'
+                    }`}
+                  />
+                </div>
+                <div
+                  className="relative w-32 sm:w-52 md:w-64 h-4 sm:h-5 bg-slate-950/90 border-2 border-white/95 shadow-lg overflow-hidden"
+                  style={{ transform: 'skewX(-16deg)' }}
+                >
+                  <div
+                    className="h-full transition-all duration-150"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, hp))}%`,
+                      background:
+                        hp < 35
+                          ? 'linear-gradient(90deg, #dc2626 0%, #ef4444 60%, #f87171 100%)'
+                          : 'linear-gradient(90deg, #16a34a 0%, #22c55e 55%, #84cc16 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-between px-2 text-[9px] sm:text-xs font-black text-white tabular-nums"
+                    style={{ transform: 'skewX(16deg)', textShadow: '0 1px 3px rgba(0,0,0,0.95)' }}
+                  >
+                    <span>HP</span>
+                    <span>{hp} | {maxHp}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom-Right: Fortnite Spy Weapons + Covert Equipment Hotbar */}
+            <div className="flex flex-col items-end gap-1 pointer-events-auto">
+              {/* Action Utility Row Above Hotbar */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    if (holdShootTimerRef.current) {
+                      clearTimeout(holdShootTimerRef.current);
+                      holdShootTimerRef.current = null;
+                    }
+                    autoScopedByHoldRef.current = false;
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(10, 0.35);
+                    setIsScoped((prev) => {
+                      const next = !prev;
+                      stateRef.current.isScoped = next;
+                      return next;
+                    });
+                  }}
+                  className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-md text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-md cursor-pointer ${
+                    isScoped
+                      ? 'bg-amber-400 text-slate-950 border-white'
+                      : 'bg-slate-950/85 hover:bg-slate-900 border-white/30 text-white'
+                  }`}
+                >
+                  <Crosshair className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>SCOPE [F]</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(10, 0.3);
+                    handleReload();
+                  }}
+                  className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-md bg-slate-950/85 hover:bg-slate-900 border border-white/30 text-[9px] sm:text-[11px] font-black uppercase tracking-wider text-white flex items-center gap-1 shadow-md cursor-pointer"
+                >
+                  <RotateCcw className={`w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 ${isReloading ? 'animate-spin' : ''}`} />
+                  <span>RLD [R]</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(10, 0.3);
+                    toggleCrouch();
+                  }}
+                  className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-md text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-md cursor-pointer ${
+                    isCrouching
+                      ? 'bg-emerald-500 text-slate-950 border-white'
+                      : 'bg-slate-950/85 hover:bg-slate-900 border-white/30 text-white'
+                  }`}
+                >
+                  <ArrowDownToLine className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>{isCrouching ? 'LOW [C]' : 'CROUCH [C]'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(12, 0.4);
+                    handleSwapSpyWeapon();
+                  }}
+                  className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 border border-white text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer"
+                >
+                  <Repeat className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>SWAP [Q]</span>
+                </button>
+              </div>
+
+              {/* Fortnite Square Hotbar Tiles: 3 Spy Weapons + Gap + Cloak / C4 / Medkit */}
+              <div className="flex items-end gap-1 sm:gap-1.5">
+                {SPY_WEAPONS.map((wpn, idx) => {
+                  const isActive = idx === activeSpyWeaponIdx;
+                  const rarityBg =
+                    idx === 0
+                      ? 'from-sky-500/90 via-blue-700/90 to-slate-950/95 border-sky-300'
+                      : idx === 1
+                      ? 'from-purple-500/90 via-purple-800/90 to-slate-950/95 border-purple-300'
+                      : 'from-amber-400/90 via-orange-700/90 to-slate-950/95 border-yellow-200';
+                  return (
+                    <div key={wpn.id} className="flex flex-col items-center gap-0.5">
+                      <button
+                        onClick={() => {
+                          sounds.unlockAudio();
+                          sounds.triggerHaptic(10, 0.3);
+                          handleSwapSpyWeapon(idx);
+                        }}
+                        className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b ${rarityBg} relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                          isActive
+                            ? '-translate-y-1.5 border-2 border-white ring-2 ring-white/80 shadow-[0_6px_18px_rgba(56,189,248,0.65)]'
+                            : 'border border-white/40 opacity-90 hover:opacity-100'
+                        }`}
+                      >
+                        <span
+                          className="text-[7px] sm:text-[8px] font-black uppercase text-white truncate max-w-full leading-none"
+                          style={{ textShadow: '0 1px 2px #000' }}
+                        >
+                          {wpn.name.split(' ')[0]}
+                        </span>
+                        <div className="flex items-center justify-center my-auto">
+                          <Crosshair className="w-4 h-4 sm:w-5 sm:h-5 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]" />
+                        </div>
+                        <span
+                          className="text-[9px] sm:text-xs font-black text-white text-right w-full leading-none tabular-nums"
+                          style={{ textShadow: '0 1px 3px #000' }}
+                        >
+                          {isActive ? (isReloading ? 'RLD' : ammo) : wpn.magSize}
+                        </span>
+                      </button>
+                      <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-white leading-tight">
+                        {idx + 1}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                <div className="w-1 sm:w-2 shrink-0" />
+
+                {/* Cloak Tile [V] */}
+                <div className="flex flex-col items-center gap-0.5">
                   <button
-                    key={wpn.id}
                     onClick={() => {
                       sounds.unlockAudio();
-                      sounds.triggerHaptic(10, 0.3);
-                      handleSwapSpyWeapon(idx);
+                      sounds.triggerHaptic(12, 0.4);
+                      toggleCloak();
                     }}
-                    className={`h-5 sm:h-6 px-1 sm:px-1.5 text-[8px] sm:text-[9px] font-bold uppercase tracking-wider cursor-pointer border flex items-center gap-0.5 select-none transition-all ${
-                      isActive
-                        ? 'bg-amber-500 border-amber-300 text-black shadow-[0_0_8px_rgba(245,158,11,0.5)]'
-                        : 'bg-zinc-900 hover:bg-zinc-800 border-white/20 text-zinc-300'
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-cyan-400/95 via-sky-800/95 to-slate-950/95 relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                      stealthCloakActive
+                        ? '-translate-y-1.5 border-2 border-white ring-2 ring-cyan-300'
+                        : 'border border-cyan-300/60'
                     }`}
-                    title={`Equip ${wpn.name} [${idx + 1}]`}
                   >
-                    <span className="text-[7px] opacity-75">[{idx + 1}]</span>
-                    <span className="truncate max-w-[36px] sm:max-w-[44px] leading-none">{wpn.name.split(' ')[0]}</span>
+                    <span className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none">
+                      CLOAK
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      <EyeOff className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                    </div>
+                    <span className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none tabular-nums">
+                      {stealthEnergy}%
+                    </span>
                   </button>
-                );
-              })}
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-cyan-300 leading-tight">
+                    V
+                  </span>
+                </div>
+
+                {/* C4 / Breach Tile [E] */}
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(14, 0.45);
+                      handleInteractOrSabotage();
+                    }}
+                    disabled={!nearbyDoorName && !nearbySabotageTarget}
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-orange-500/95 via-rose-800/95 to-slate-950/95 relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                      nearbyDoorName || nearbySabotageTarget
+                        ? '-translate-y-1 border-2 border-amber-300 animate-pulse'
+                        : 'border border-white/30 opacity-75'
+                    }`}
+                  >
+                    <span className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none">
+                      {nearbyDoorName ? 'DOOR' : 'C4'}
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      {nearbyDoorName ? (
+                        <DoorOpen className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      ) : (
+                        <Bomb className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                      )}
+                    </div>
+                    <span className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none">
+                      ACT
+                    </span>
+                  </button>
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-amber-300 leading-tight">
+                    E
+                  </span>
+                </div>
+
+                {/* Stim Medkit Tile [SPC] */}
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(12, 0.4);
+                      handleHeal();
+                    }}
+                    className="w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-lime-500/95 via-emerald-700/95 to-slate-950/95 border-2 border-lime-300 relative flex flex-col justify-between p-1 cursor-pointer transition-all hover:-translate-y-1"
+                  >
+                    <span className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none">
+                      STIM
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      <div className="w-5 h-4 sm:w-6 sm:h-5 rounded-sm bg-white flex items-center justify-center shadow-md border border-rose-500">
+                        <span className="text-rose-600 font-black text-xs sm:text-sm leading-none">+</span>
+                      </div>
+                    </div>
+                    <span className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none">
+                      +35
+                    </span>
+                  </button>
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-lime-300 leading-tight">
+                    SPC
+                  </span>
+                </div>
+              </div>
             </div>
+          </div>
+
+          {/* Bottom-Edge Full-Width 10-Segment Fortnite Gold XP Bar */}
+          <div className="grid grid-cols-10 gap-1 w-full h-1.5 sm:h-2 pt-0.5 pointer-events-none">
+            {Array.from({ length: 10 }).map((_, segIdx) => {
+              const totalDone = generalsEliminated + tanksSabotaged + artillerySabotaged + basesSabotaged;
+              const totalReq = Math.max(1, totalGenerals + totalTanks + totalArtillery + totalBases);
+              const filledCount = Math.max(2, Math.round((totalDone / totalReq) * 10));
+              const isFilled = segIdx < filledCount;
+              return (
+                <div
+                  key={segIdx}
+                  className={`h-full rounded-xs transition-all duration-300 ${
+                    isFilled
+                      ? 'bg-gradient-to-r from-amber-400 to-yellow-300 shadow-[0_0_6px_rgba(250,204,21,0.75)]'
+                      : 'bg-slate-800/80 border border-white/15'
+                  }`}
+                />
+              );
+            })}
           </div>
         </div>
       </div>

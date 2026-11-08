@@ -21,6 +21,8 @@
     overflow: hidden;
     margin: 0;
     padding: 0;
+    position: fixed;
+    inset: 0;
   }
 
   body {
@@ -32,6 +34,20 @@
     -webkit-touch-callout: none !important;
     overscroll-behavior: none;
   }
+}
+
+/* Force GPU layer promotion for HUD overlays over WebGL canvas on Netlify / Safari / Chrome */
+.hud-layer-fixed {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  pointer-events: none;
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  will-change: transform;
 }
 
 .font-tactical {

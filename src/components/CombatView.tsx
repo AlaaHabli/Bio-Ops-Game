@@ -336,8 +336,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const isGamePausedRef = useRef<boolean>(false);
   isGamePausedRef.current = isGamePaused;
 
-  // Level number (1 to 9) for progressive difficulty scaling across both levels and phases
-  const levelNumber = Math.max(1, CURRICULUM_LEVELS.findIndex((l) => l.id === level.id) + 1);
+  // Stage-relative level number (1 to 5) so adding new grades/missions never inflates difficulty
+  const stageLevels = CURRICULUM_LEVELS.filter((l) => l.stage === level.stage && !l.isSecret);
+  const stageIdx = stageLevels.findIndex((l) => l.id === level.id);
+  const levelNumber = Math.max(1, Math.min(5, (stageIdx !== -1 ? stageIdx : 0) + 1));
 
   // Dynamic Organ Theme mapped from the curriculum level & phase (with live HUD cycling support!)
   const [organTheme, setOrganTheme] = useState<OrganTheme>(() =>
@@ -476,6 +478,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
   // Scope is available on SCAR-H Bio-Rifle (Holo), Bolt-Action Sniper (8x Scope), and Drum LMG (Reflex), but NOT Pump Shotgun
   const weaponSupportsScope = (wpn: Weapon) => wpn.category !== 'SHOTGUN';
 
+  const syncCrosshairDom = (nx: number, ny: number) => {
+    const screenX = Math.max(4, Math.min(96, (nx + 1) * 50));
+    const screenY = Math.max(5, Math.min(94, (-ny + 1) * 50));
+    if (crosshairDomRef.current) {
+      crosshairDomRef.current.style.left = `${screenX}%`;
+      crosshairDomRef.current.style.top = `${screenY}%`;
+    }
+    if (scopeReticleDomRef.current) {
+      scopeReticleDomRef.current.style.left = `${screenX}%`;
+      scopeReticleDomRef.current.style.top = `${screenY}%`;
+    }
+  };
+
   const handleToggleScope = () => {
     if (!weaponSupportsScope(currentWeaponRef.current)) {
       isScopedRef.current = false;
@@ -488,6 +503,35 @@ export const CombatView: React.FC<CombatViewProps> = ({
     if (holdShootTimerRef.current) {
       clearTimeout(holdShootTimerRef.current);
       holdShootTimerRef.current = null;
+    }
+    if (next) {
+      // Center the scope optic directly on the exact 3D direction the player was aiming!
+      baseAimYawRef.current = THREE.MathUtils.clamp(
+        baseAimYawRef.current - aimPosRef.current.x * 0.42,
+        -0.55,
+        0.55
+      );
+      baseAimPitchRef.current = THREE.MathUtils.clamp(
+        baseAimPitchRef.current + aimPosRef.current.y * 0.34,
+        -0.38,
+        0.38
+      );
+      aimPosRef.current.x = 0;
+      aimPosRef.current.y = 0;
+      targetAimPosRef.current.x = 0;
+      targetAimPosRef.current.y = 0;
+      syncCrosshairDom(0, 0);
+    } else {
+      // Restore hipfire crosshair cleanly from scoped camera angle
+      const restoredX = THREE.MathUtils.clamp(-baseAimYawRef.current / 0.42, -0.85, 0.85);
+      const restoredY = THREE.MathUtils.clamp(baseAimPitchRef.current / 0.34, -0.85, 0.85);
+      aimPosRef.current.x = restoredX;
+      aimPosRef.current.y = restoredY;
+      targetAimPosRef.current.x = restoredX;
+      targetAimPosRef.current.y = restoredY;
+      baseAimYawRef.current = 0;
+      baseAimPitchRef.current = 0;
+      syncCrosshairDom(restoredX, restoredY);
     }
     isScopedRef.current = next;
     manualScopeLockRef.current = next;
@@ -508,10 +552,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
     holdShootTimerRef.current = setTimeout(() => {
       if (!isScopedRef.current && weaponSupportsScope(currentWeaponRef.current)) {
         // Center the camera aim on the target the player was aiming at when scoping in!
-        baseAimYawRef.current += -aimPosRef.current.x * 0.18;
-        baseAimPitchRef.current += aimPosRef.current.y * 0.30;
+        baseAimYawRef.current = THREE.MathUtils.clamp(
+          baseAimYawRef.current - aimPosRef.current.x * 0.42,
+          -0.55,
+          0.55
+        );
+        baseAimPitchRef.current = THREE.MathUtils.clamp(
+          baseAimPitchRef.current + aimPosRef.current.y * 0.34,
+          -0.38,
+          0.38
+        );
         aimPosRef.current.x = 0;
         aimPosRef.current.y = 0;
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        syncCrosshairDom(0, 0);
 
         isScopedRef.current = true;
         autoScopedByHoldRef.current = true;
@@ -528,6 +583,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
       holdShootTimerRef.current = null;
     }
     if (autoScopedByHoldRef.current && !manualScopeLockRef.current) {
+      const restoredX = THREE.MathUtils.clamp(-baseAimYawRef.current / 0.42, -0.85, 0.85);
+      const restoredY = THREE.MathUtils.clamp(baseAimPitchRef.current / 0.34, -0.85, 0.85);
+      aimPosRef.current.x = restoredX;
+      aimPosRef.current.y = restoredY;
+      targetAimPosRef.current.x = restoredX;
+      targetAimPosRef.current.y = restoredY;
+      baseAimYawRef.current = 0;
+      baseAimPitchRef.current = 0;
+      syncCrosshairDom(restoredX, restoredY);
+
       isScopedRef.current = false;
       autoScopedByHoldRef.current = false;
       setIsScoped(false);
@@ -677,9 +742,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const killsRef = useRef<number>(0);
   const comboStreakRef = useRef<number>(0);
   const aimPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const targetAimPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const baseAimYawRef = useRef<number>(0);
   const baseAimPitchRef = useRef<number>(0);
   const lastFiringTouchPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastMouseClientPosRef = useRef<{ x: number; y: number } | null>(null);
   const isPointerDownRef = useRef<boolean>(false);
   const lastShotTimeRef = useRef<number>(0);
   const nextEnemyIdRef = useRef<number>(1);
@@ -822,7 +889,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     sounds.playCombatAlarm();
     timeLeftRef.current = 60;
     const timer = setInterval(() => {
-      if (isPausedForConceptRef.current) return;
+      if (isPausedForConceptRef.current || isGamePausedRef.current) return;
 
       // Show at most 1 queued biology concept in this phase after 3.2s warmup
       const nowCheck = performance.now();
@@ -1162,6 +1229,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.35;
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.inset = '0';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.zIndex = '0';
+    container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
     // 3. Lighting Rig
@@ -1839,8 +1913,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       const levelIndex = levelNumber - 1;
       const phaseIndex = phaseNumber - 1;
-      const bossPhaseMultiplier = 1 + phaseIndex * 0.06;
-      const bossLevelBonusHits = Math.round(levelIndex * 1.2);
       if (bossType === 'helicopter') {
         const heli = prebuiltBosses.helicopter || (() => {
           const h = createBacteriaHelicopter();
@@ -1854,9 +1926,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         mainRotor = heli.mainRotor;
         tailRotor = heli.tailRotor;
         name = 'Apache Attack Helicopter';
-        hits = Math.round((12 + bossLevelBonusHits) * bossPhaseMultiplier);
+        // 12 normal SCAR shots or 4 headshots (3:1 headshot scale)
+        hits = 12;
         hp = hits * 38;
-        speed = 3.1 + levelIndex * 0.22 + phaseIndex * 0.25;
+        speed = 2.9 + levelIndex * 0.18 + phaseIndex * 0.2;
         value = 950 + levelIndex * 120 + phaseIndex * 150;
         bossMesh.position.set(0, 1.15, -21);
         hpBarFill = heli.hpBarFill;
@@ -1878,9 +1951,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         gatling = robot.gatling;
         coreMesh = robot.coreMesh;
         name = 'Huge Cyber-Robot Titan';
-        hits = Math.round((14 + bossLevelBonusHits) * bossPhaseMultiplier);
+        // 15 normal SCAR shots or 5 headshots (3:1 headshot scale)
+        hits = 15;
         hp = hits * 38;
-        speed = 2.75 + levelIndex * 0.2 + phaseIndex * 0.22;
+        speed = 2.6 + levelIndex * 0.16 + phaseIndex * 0.18;
         value = 1350 + levelIndex * 140 + phaseIndex * 200;
         bossMesh.position.set(0, -1.5, -23);
         hpBarFill = robot.hpBarFill;
@@ -1899,9 +1973,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         bossMesh.visible = true;
         afterburnerMesh = jet.afterburnerMesh;
         name = 'Rogue Bio-Jet F-16';
-        hits = Math.round((15 + bossLevelBonusHits) * bossPhaseMultiplier);
+        // 18 normal SCAR shots or 6 headshots (3:1 headshot scale)
+        hits = 18;
         hp = hits * 38;
-        speed = 4.2 + levelIndex * 0.22 + phaseIndex * 0.25;
+        speed = 3.9 + levelIndex * 0.18 + phaseIndex * 0.2;
         value = 1700 + levelIndex * 160 + phaseIndex * 250;
         bossMesh.position.set(0, 1.25, -34);
         hpBarFill = jet.hpBarFill;
@@ -1972,44 +2047,41 @@ export const CombatView: React.FC<CombatViewProps> = ({
       isParachuteDrop: boolean = false
     ) {
       const wave = getWaveNumber();
-      const levelIndex = levelNumber - 1; // 0..8
+      const levelIndex = levelNumber - 1; // 0..4
       const phaseIndex = phaseNumber - 1; // 0..2
       const diffScale = (levelIndex * 3 + phaseIndex) / 26;
-
-      const phaseHpMultiplier = 1 + phaseIndex * 0.05;
-      const levelHpMultiplier = 1 + levelIndex * 0.04;
 
       const activeTanks = activeSoldiersRef.current.filter((s) => s.isTank).length;
       const maxTanksAllowed =
         wave === 1
           ? phaseNumber >= 2 || levelNumber >= 2
-            ? 1 + (levelNumber >= 6 ? 1 : 0)
+            ? 1
             : 0
           : wave === 2
           ? 1 + (levelNumber >= 4 || phaseNumber >= 2 ? 1 : 0)
-          : 1 + (levelNumber >= 3 ? 1 : 0) + (levelNumber >= 7 ? 1 : 0);
+          : 1 + (levelNumber >= 3 ? 1 : 0);
       const tankChance =
         wave === 1
           ? phaseNumber >= 2 || levelNumber >= 2
-            ? 0.18 + levelIndex * 0.015
+            ? 0.16 + levelIndex * 0.015
             : 0
           : wave === 2
-          ? 0.25 + diffScale * 0.16
-          : 0.32 + diffScale * 0.18;
+          ? 0.22 + diffScale * 0.14
+          : 0.28 + diffScale * 0.15;
       const shouldSpawnTank =
         forceType === 'tank' ||
         (!forceType && activeTanks < maxTanksAllowed && Math.random() < tankChance);
 
       const bacillusChance = Math.min(
-        0.82,
-        (wave === 1 ? 0.28 : wave === 2 ? 0.45 : 0.58) + levelIndex * 0.03 + phaseIndex * 0.06
+        0.78,
+        (wave === 1 ? 0.28 : wave === 2 ? 0.44 : 0.55) + levelIndex * 0.03 + phaseIndex * 0.05
       );
 
-      const waveSpeedBase = wave === 1 ? 4.3 : wave === 2 ? 4.95 : 5.5;
-      const difficultySpeedBonus = levelIndex * 0.22 + phaseIndex * 0.36;
+      const waveSpeedBase = wave === 1 ? 4.0 : wave === 2 ? 4.55 : 5.0;
+      const difficultySpeedBonus = levelIndex * 0.16 + phaseIndex * 0.24;
 
-      let hp = 96;
-      let hitsLeft = 2;
+      let hp = 114;
+      let hitsLeft = 3;
       let speed = waveSpeedBase + difficultySpeedBonus;
       let value = 100;
       let name = 'Strepto Soldier';
@@ -2018,24 +2090,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       if (shouldSpawnTank) {
         type = 'tank';
-        hitsLeft = Math.max(4, Math.round(4.5 * levelHpMultiplier * phaseHpMultiplier));
-        hp = hitsLeft * 42;
-        speed = 2.7 + wave * 0.26 + levelIndex * 0.11 + phaseIndex * 0.2;
+        // 6 normal SCAR shots or 2 headshots!
+        hitsLeft = 6;
+        hp = 6 * 38;
+        speed = 2.5 + wave * 0.22 + levelIndex * 0.09 + phaseIndex * 0.15;
         value = 750 + levelIndex * 65 + phaseIndex * 80;
         name = 'Heavy Bio-Battle Tank';
         isTank = true;
       } else if (forceType === 'bacillus' || (!forceType && Math.random() < bacillusChance)) {
         type = 'bacillus';
-        hitsLeft = Math.max(2, Math.round(2.4 * levelHpMultiplier * phaseHpMultiplier));
-        hp = hitsLeft * 36;
+        // 3 normal SCAR shots or 1 headshot (instant kill)!
+        hitsLeft = 3;
+        hp = 3 * 38;
         speed = waveSpeedBase + difficultySpeedBonus - 0.2;
         value = 150 + levelIndex * 18 + phaseIndex * 25;
         name = 'Bacillus Heavy Gunner';
       } else {
         type = 'strep';
-        hitsLeft = Math.max(1, Math.round(1.6 * levelHpMultiplier * phaseHpMultiplier));
-        hp = hitsLeft * 32;
-        speed = waveSpeedBase + difficultySpeedBonus + 0.35;
+        // 3 normal SCAR shots or 1 headshot (instant kill)!
+        hitsLeft = 3;
+        hp = 3 * 38;
+        speed = waveSpeedBase + difficultySpeedBonus + 0.25;
         value = 110 + levelIndex * 12 + phaseIndex * 18;
         name = 'Streptococcus Trooper';
       }
@@ -2121,7 +2196,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     let nextDynamicSpawnAt = performance.now() + getDynamicSpawnDelayMs();
     const spawnInterval = window.setInterval(() => {
-      if (isPausedForConceptRef.current) return;
+      if (isPausedForConceptRef.current || isGamePausedRef.current) return;
       const nowMs = performance.now();
       if (nowMs < nextDynamicSpawnAt) return;
       nextDynamicSpawnAt = nowMs + getDynamicSpawnDelayMs();
@@ -2630,38 +2705,51 @@ export const CombatView: React.FC<CombatViewProps> = ({
         sounds.playBrassShellDrop();
       }
 
+      // 1:1 True Crosshair Aim Vector (when scoped, center reticle is (0, 0); in hipfire, exact crosshair NDC)
       if (isScopedRef.current) {
         hitVector.set(0, 0);
       } else {
         hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
       }
 
+      // Save the player's true unassisted aim point BEFORE any auto-aim torso nudge!
+      // Headshots are ONLY awarded if the player's true unassisted aim is on the head!
+      const rawAimX = hitVector.x;
+      const rawAimY = hitVector.y;
+
       const soldiers = activeSoldiersRef.current;
 
-      // If AUTO-AIM is enabled, magnetize shot vector toward nearest enemy within auto-aim lock cone (zero Vector3 allocation!)
+      // If AUTO-AIM is enabled, gently nudge shot vector PARTWAY closer toward nearest enemy's TORSO/CHEST (NEVER the head!)
       if (autoAimEnabledRef.current && soldiers.length > 0) {
-        let bestDist = 0.55;
-        let lockedNdcX = 0;
-        let lockedNdcY = 0;
+        let bestDist = 0.36;
+        let lockedBodyNdcX = 0;
+        let lockedBodyNdcY = 0;
         let hasLock = false;
         for (let i = 0; i < soldiers.length; i++) {
           const s = soldiers[i];
           if (s.mesh.position.z >= -2) continue;
-          _v1.copy(s.mesh.position);
-          _v1.y += s.isRobot ? 2.24 : s.isTank ? 0.5 : 0.25;
-          _v1.project(camera);
-          const d = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
-          if (d < bestDist) {
-            bestDist = d;
-            lockedNdcX = _v1.x;
-            lockedNdcY = _v1.y;
+
+          // Project ONLY Enemy Torso / Center-of-Mass (never snap to head!)
+          const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
+          _v2.copy(s.mesh.position);
+          _v2.y += bodyYOffset;
+          _v2.project(camera);
+          const bodyNdcX = _v2.x;
+          const bodyNdcY = _v2.y;
+          const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
+
+          if (dBody < bestDist) {
+            bestDist = dBody;
+            lockedBodyNdcX = bodyNdcX;
+            lockedBodyNdcY = bodyNdcY;
             hasLock = true;
           }
         }
         if (hasLock) {
+          // Soft 42% pull toward torso center-of-mass so auto-aim helps you move closer to the enemy without playing for you or auto-headshotting!
           hitVector.set(
-            THREE.MathUtils.lerp(hitVector.x, lockedNdcX, 0.85),
-            THREE.MathUtils.lerp(hitVector.y, lockedNdcY, 0.85)
+            THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
+            THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
           );
         }
       }
@@ -2703,106 +2791,121 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let eliminatedSoldier: ActiveSoldier | null = null;
       let totalDamage = 0;
 
-      // Sight Scope (ADS) grants a +20% precision damage bonus!
-      const scopeBonus = isScopedRef.current ? 1.2 : 1.0;
+      const baseNormalShotDamage =
+        activeWpn.category === 'SHOTGUN'
+          ? activeWpn.damage * (activeWpn.pellets || 8)
+          : activeWpn.damage;
 
       for (let i = soldiers.length - 1; i >= 0; i--) {
         const soldier = soldiers[i];
         if (soldier.mesh.position.z >= -2) continue;
 
-        // Fast 2D NDC bounding check before running analytical 3D ray-sphere checks!
+        const headYOffset = soldier.isRobot
+          ? 2.62
+          : soldier.isTank
+          ? 0.82
+          : soldier.isHelicopter || soldier.isJet
+          ? 0.48
+          : 0.65;
+        const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
+
+        // Project Head & Body to 2D NDC
         _v1.copy(soldier.mesh.position);
-        _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.45 : 0.25;
+        _v1.y += headYOffset;
+        const distSqHead3D = raycaster.ray.distanceSqToPoint(_v1);
         _v1.project(camera);
-        const ndcDist = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
-        const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.48;
-        if (ndcDist > maxNdc) continue;
+        // Measure headshot precision strictly against the player's TRUE unassisted aim (rawAimX, rawAimY)!
+        const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
+        const headNdcY = _v1.y;
 
-        // 1. Tank Turret / Commander WEAK POINT (3.2x Critical Damage!) via analytical 3D ray-sphere check
-        if (soldier.isTank && soldier.turret) {
-          _v1.copy(soldier.mesh.position);
-          _v1.y += 0.72;
-          if (raycaster.ray.distanceSqToPoint(_v1) <= 0.34) {
-            criticalHit = true;
-            hitRegistered = true;
-            hitSoldier = soldier;
-            totalDamage =
-              (activeWpn.category === 'SHOTGUN'
-                ? activeWpn.damage * (activeWpn.pellets || 8) * 1.8
-                : activeWpn.damage * 3.2) * scopeBonus;
-            soldier.hp -= totalDamage;
-            soldier.mesh.position.z -= 0.5;
-            break;
-          }
+        _v2.copy(soldier.mesh.position);
+        _v2.y += bodyYOffset;
+        const distSqBody3D = raycaster.ray.distanceSqToPoint(_v2);
+        _v2.project(camera);
+        const rawBodyNdcDist = Math.hypot(_v2.x - rawAimX, _v2.y - rawAimY);
+        const bodyNdcDist = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+
+        const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.52;
+        if (Math.min(rawHeadNdcDist, bodyNdcDist) > maxNdc) continue;
+
+        // 1. PRECISION HEADSHOT DETECTION (Requires genuine manual aim on the head — never triggered by auto-aim pull!)
+        const headRadiusSq3D = soldier.isRobot
+          ? 0.42
+          : soldier.isTank
+          ? 0.18
+          : soldier.isBoss
+          ? 0.22
+          : 0.11;
+        const headPrecisionNdc = isScopedRef.current ? 0.082 : 0.064;
+        const isTrueHeadAim =
+          rawHeadNdcDist <= headPrecisionNdc &&
+          rawHeadNdcDist < rawBodyNdcDist * 0.85 &&
+          rawAimY >= headNdcY - 0.025;
+        const isHeadshot3D =
+          distSqHead3D <= headRadiusSq3D &&
+          rawHeadNdcDist <= headPrecisionNdc * 1.15 &&
+          rawAimY >= _v2.y + 0.02;
+
+        if (isTrueHeadAim || isHeadshot3D) {
+          criticalHit = true;
+          hitRegistered = true;
+          hitSoldier = soldier;
+          totalDamage = baseNormalShotDamage * 3;
+          soldier.hp -= totalDamage;
+          soldier.mesh.position.z -= soldier.isTank ? 0.35 : soldier.isBoss ? 0.25 : 0.5;
+          break;
         }
 
-        // 2. Cyber-Robot Core / Boss / Amoeba Nucleus Critical Hit via analytical 3D ray-sphere check
-        if (soldier.coreMesh || soldier.nucleusMesh || soldier.isBoss) {
-          _v1.copy(soldier.mesh.position);
-          _v1.y += soldier.isRobot ? 2.48 : 0.52;
-          const critRadiusSq = soldier.isRobot ? 0.95 : 0.28;
-          if (raycaster.ray.distanceSqToPoint(_v1) <= critRadiusSq) {
-            criticalHit = true;
-            hitRegistered = true;
-            hitSoldier = soldier;
-            totalDamage = activeWpn.damage * 2.4 * scopeBonus;
-            soldier.hp -= totalDamage;
-            soldier.mesh.position.z -= 0.6;
-            break;
-          }
-        }
-
-        // 3. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-sphere check (zero triangle traversal!)
-        _v1.copy(soldier.mesh.position);
-        _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.42 : 0.25;
+        // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-sphere check
         const bodyRadiusSq = soldier.isRobot
           ? 4.8
           : soldier.isTank
-          ? 1.55
+          ? 1.65
           : soldier.isBoss
-          ? 2.2
-          : 0.72;
-        if (raycaster.ray.distanceSqToPoint(_v1) <= bodyRadiusSq) {
+          ? 2.35
+          : 0.85;
+        if (distSqBody3D <= bodyRadiusSq) {
           hitRegistered = true;
           hitSoldier = soldier;
-          totalDamage =
-            (activeWpn.category === 'SHOTGUN'
-              ? activeWpn.damage * (activeWpn.pellets || 8)
-              : activeWpn.damage) * scopeBonus;
+          totalDamage = baseNormalShotDamage;
           soldier.hp -= totalDamage;
           soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
           break;
         }
       }
 
-      // Proximity assist: generous when AUTO-AIM is ON; tight precision hitbox when MANUAL AIM is selected!
+      // 2D Hitbox & Assist Check: clean, responsive body hitboxes for both Manual Aim and Auto-Aim (never grants free headshots!)
       if (!hitRegistered) {
         for (let i = soldiers.length - 1; i >= 0; i--) {
           const soldier = soldiers[i];
           if (soldier.mesh.position.z >= -2) continue;
-          _v1.copy(soldier.mesh.position);
-          _v1.y += soldier.isRobot ? 2.24 : soldier.isTank ? 0.45 : 0.25;
-          _v1.project(camera);
-          const dist2D = Math.hypot(_v1.x - hitVector.x, _v1.y - hitVector.y);
+
+          const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
+          _v2.copy(soldier.mesh.position);
+          _v2.y += bodyYOffset;
+          _v2.project(camera);
+          const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+
           const assistRadius = autoAimEnabledRef.current
             ? soldier.isRobot
-              ? 0.62
+              ? 0.42
               : soldier.isTank
-              ? 0.44
+              ? 0.28
               : soldier.isBoss
-              ? 0.46
-              : 0.28
+              ? 0.32
+              : 0.19
             : soldier.isRobot
-            ? 0.35
+            ? 0.34
             : soldier.isTank
-            ? 0.15
+            ? 0.21
             : soldier.isBoss
-            ? 0.17
-            : 0.11;
-          if (dist2D < assistRadius) {
+            ? 0.24
+            : 0.145;
+          if (distBody2D < assistRadius) {
             hitRegistered = true;
             hitSoldier = soldier;
-            totalDamage = activeWpn.damage * scopeBonus;
+            criticalHit = false;
+            totalDamage = baseNormalShotDamage;
             soldier.hp -= totalDamage;
             soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
             break;
@@ -2813,7 +2916,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (hitRegistered && hitSoldier) {
         sounds.playHitmarker(criticalHit);
 
-        // Spawn Fortnite-Style Floating Damage Number at exact 3D impact projection with slight scatter!
+        // Spawn Fortnite-Style Floating Damage Number + HEADSHOT! banner at exact 3D impact projection!
         const markerId = now + Math.random();
         const isArmoredTarget = Boolean(
           hitSoldier.type === 'tank' || hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet
@@ -2829,36 +2932,36 @@ export const CombatView: React.FC<CombatViewProps> = ({
             offsetX: scatterX,
             offsetY: scatterY,
             isCritical: criticalHit,
+            isHeadshot: criticalHit,
             isArmored: isArmoredTarget,
             damage: Math.round(totalDamage),
           },
         ]);
         window.setTimeout(() => {
           setHitmarkers((prev) => prev.filter((m) => m.id !== markerId));
-        }, 680);
+        }, 750);
 
         const isBossVehicle = Boolean(hitSoldier.isHelicopter || hitSoldier.isRobot || hitSoldier.isJet);
-        const scopedPowerMult = isScopedRef.current ? 1.35 : 1.0;
-        const baseWeaponHitPower =
+        // Exact 3:1 Headshot-to-Normal Hit Scale:
+        // - Bacteria (3 hits): 1 headshot (3.0) kills immediately, or 3 normal SCAR shots (1.0 each)
+        // - Tank (6 hits): 2 headshots (3.0 each) or 6 normal SCAR shots (1.0 each)
+        // - Bosses (12 / 15 / 18 hits): 4 / 5 / 6 headshots (3.0 each) or 12 / 15 / 18 normal SCAR shots (1.0 each)
+        const weaponHitPower =
           activeWpn.id === 'bolt_sniper'
             ? criticalHit
-              ? 3.5
-              : 2.4
+              ? 6.0
+              : 3.0
             : activeWpn.id === 'pump_shotgun'
             ? criticalHit
-              ? 2.6
-              : 1.85
-            : activeWpn.id === 'drum_gun'
-            ? criticalHit
-              ? 1.55
-              : 1.05
+              ? 3.0
+              : 1.5
             : criticalHit
-            ? 2.0
-            : 1.15;
-        const weaponHitPower = baseWeaponHitPower * scopedPowerMult;
+            ? 3.0
+            : 1.0;
+
         hitSoldier.hitsLeft = Math.max(
           0,
-          Number((hitSoldier.hitsLeft - (isBossVehicle ? (criticalHit ? 1.8 : 1.15) * scopedPowerMult : weaponHitPower)).toFixed(2))
+          Number((hitSoldier.hitsLeft - weaponHitPower).toFixed(2))
         );
 
         if (isBossVehicle) {
@@ -2952,25 +3055,52 @@ export const CombatView: React.FC<CombatViewProps> = ({
     // Cached container rect avoids synchronous layout reflows on every touchmove/mousemove event!
     let cachedRect = container.getBoundingClientRect();
 
-    // Input handlers (Phone and Laptop) — Direct DOM style updates for 0ms latency & zero React re-renders!
-    const updateAimPosition = (clientX: number, clientY: number) => {
+    // Professional FPS Aiming (Fortnite / Black Ops style):
+    // 1:1 NDC alignment (no 1.15x distortion) + smooth relative drag when scoped or touch-dragging!
+    const updateAimPosition = (clientX: number, clientY: number, isRelativeDrag: boolean = false, prevX?: number, prevY?: number) => {
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
-      const x = ((clientX - cachedRect.left) / cachedRect.width) * 2 - 1;
-      const y = -((clientY - cachedRect.top) / cachedRect.height) * 2 + 1;
-      aimPosRef.current = { x: Math.max(-1, Math.min(1, x * 1.15)), y: Math.max(-1, Math.min(1, y * 1.15)) };
+      const w = cachedRect.width || window.innerWidth;
+      const h = cachedRect.height || window.innerHeight;
 
-      const screenX = Math.max(5, Math.min(95, ((clientX - cachedRect.left) / cachedRect.width) * 100));
-      const screenY = Math.max(6, Math.min(92, ((clientY - cachedRect.top) / cachedRect.height) * 100));
-      if (crosshairDomRef.current) {
-        crosshairDomRef.current.style.left = `${screenX}%`;
-        crosshairDomRef.current.style.top = `${screenY}%`;
+      if (isScopedRef.current && isRelativeDrag && prevX !== undefined && prevY !== undefined) {
+        // When Scoped (ADS), dragging smoothly pans the camera optic with precision ADS sensitivity
+        const dxNorm = ((clientX - prevX) / w) * 2;
+        const dyNorm = -((clientY - prevY) / h) * 2;
+        const adsSens = currentWeaponRef.current.category === 'SNIPER' ? 0.28 : 0.42;
+        baseAimYawRef.current = THREE.MathUtils.clamp(baseAimYawRef.current - dxNorm * adsSens, -0.58, 0.58);
+        baseAimPitchRef.current = THREE.MathUtils.clamp(baseAimPitchRef.current + dyNorm * adsSens, -0.40, 0.40);
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        aimPosRef.current.x = 0;
+        aimPosRef.current.y = 0;
+        syncCrosshairDom(0, 0);
+        return;
       }
-      if (scopeReticleDomRef.current) {
-        scopeReticleDomRef.current.style.left = `${screenX}%`;
-        scopeReticleDomRef.current.style.top = `${screenY}%`;
+
+      if (isRelativeDrag && prevX !== undefined && prevY !== undefined) {
+        // Smooth touch-drag aiming in hipfire (combines responsive thumb delta with subtle target slowdown)
+        const dxNorm = ((clientX - prevX) / w) * 2 * 1.15;
+        const dyNorm = -((clientY - prevY) / h) * 2 * 1.15;
+        targetAimPosRef.current.x = Math.max(-0.94, Math.min(0.94, targetAimPosRef.current.x + dxNorm));
+        targetAimPosRef.current.y = Math.max(-0.90, Math.min(0.90, targetAimPosRef.current.y + dyNorm));
+      } else {
+        // True 1:1 cursor-to-crosshair NDC mapping (zero 1.15x overshoot!)
+        const x = ((clientX - cachedRect.left) / w) * 2 - 1;
+        const y = -((clientY - cachedRect.top) / h) * 2 + 1;
+        targetAimPosRef.current.x = Math.max(-0.94, Math.min(0.94, x));
+        targetAimPosRef.current.y = Math.max(-0.90, Math.min(0.90, y));
+        // On desktop mouse move while scoped, smoothly steer the optic across the battlefield
+        if (isScopedRef.current) {
+          const adsYawSpan = currentWeaponRef.current.category === 'SNIPER' ? 0.34 : 0.46;
+          const adsPitchSpan = currentWeaponRef.current.category === 'SNIPER' ? 0.26 : 0.36;
+          baseAimYawRef.current = THREE.MathUtils.clamp(-targetAimPosRef.current.x * adsYawSpan, -0.58, 0.58);
+          baseAimPitchRef.current = THREE.MathUtils.clamp(targetAimPosRef.current.y * adsPitchSpan, -0.40, 0.40);
+        }
       }
+
+      syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
     };
 
     // Dedicated Multi-Touch Handlers for Phone (Allows simultaneous Moving & Hold-Shoot Scoping!)
@@ -2995,11 +3125,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setJoystickDisplay({ x: clientX, y: clientY });
           sounds.triggerHaptic(10, 'light');
         } else if (firingTouchIdRef.current === null) {
-          // Hold Touch in Aim/Shoot Zone: tap fires immediately, hold for 3s deploys tactical scope!
+          // Hold Touch in Aim/Shoot Zone: tap aims smoothly & fires, hold for 2s deploys tactical scope!
           firingTouchIdRef.current = touch.identifier;
+          lastFiringTouchPosRef.current = { x: clientX, y: clientY };
           isPointerDownRef.current = true;
           startHoldShootScopeTimer();
-          updateAimPosition(clientX, clientY);
+          if (!isScopedRef.current) {
+            updateAimPosition(clientX, clientY, false);
+            aimPosRef.current.x = targetAimPosRef.current.x;
+            aimPosRef.current.y = targetAimPosRef.current.y;
+          }
           executeShot();
         }
       }
@@ -3023,7 +3158,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
           moveInputRef.current.x = clampedX / maxDist;
           moveInputRef.current.z = clampedY / maxDist;
         } else if (touch.identifier === firingTouchIdRef.current) {
-          updateAimPosition(touch.clientX, touch.clientY);
+          const prevX = lastFiringTouchPosRef.current.x;
+          const prevY = lastFiringTouchPosRef.current.y;
+          lastFiringTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+          updateAimPosition(touch.clientX, touch.clientY, true, prevX, prevY);
         }
       }
     };
@@ -3048,7 +3186,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     };
 
-    // Desktop Mouse Handlers (Hold Left-Click 3s deploys optic sight, Right-Click locks optic!)
+    // Desktop Mouse Handlers (Hold Left-Click 2s deploys optic sight, Right-Click locks optic!)
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
     };
@@ -3056,6 +3194,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const handleMouseDown = (e: MouseEvent) => {
       sounds.unlockAudio();
       setAudioSuspended(false);
+      lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       if (e.button === 2) {
         e.preventDefault();
         handleToggleScope();
@@ -3064,12 +3203,17 @@ export const CombatView: React.FC<CombatViewProps> = ({
       isPointerDownRef.current = true;
       setIsFiring(true);
       startHoldShootScopeTimer();
-      updateAimPosition(e.clientX, e.clientY);
+      updateAimPosition(e.clientX, e.clientY, false);
+      if (!isScopedRef.current) {
+        aimPosRef.current.x = targetAimPosRef.current.x;
+        aimPosRef.current.y = targetAimPosRef.current.y;
+      }
       executeShot();
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      updateAimPosition(e.clientX, e.clientY);
+      lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+      updateAimPosition(e.clientX, e.clientY, false);
     };
 
     const handleMouseUp = (e: MouseEvent) => {
@@ -3150,9 +3294,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
     window.addEventListener('resize', handleResize);
 
-    // ANIMATION & 60 FPS SIMULATION LOOP
+    // ANIMATION & 60 FPS SIMULATION LOOP (High-precision performance.now() timer — avoids deprecated THREE.Clock!)
     let animationFrameId = 0;
-    const clock = new THREE.Clock();
+    let lastFrameTime = performance.now();
+    let elapsedAccumulator = 0;
     let lastDamageTakenTime = 0;
     let regenAccumulator = 0;
     let lastCoverState = false;
@@ -3222,9 +3367,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     function animate() {
-      // Freeze 3D simulation & clock delta when paused for a Concept Popup or User Pause Menu!
+      const nowTime = performance.now();
+      // Freeze 3D simulation & timer delta when paused for a Concept Popup or User Pause Menu!
       if (isPausedForConceptRef.current || isGamePausedRef.current) {
-        clock.getDelta();
+        lastFrameTime = nowTime;
         if (!renderedPausedFrameRef.current) {
           renderedPausedFrameRef.current = true;
           renderer.render(scene, camera);
@@ -3232,9 +3378,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         animationFrameId = requestAnimationFrame(animate);
         return;
       }
-      const delta = Math.min(clock.getDelta(), 0.05);
-      const elapsed = clock.getElapsedTime();
-      const nowTime = performance.now();
+      const delta = Math.min(Math.max(0.001, (nowTime - lastFrameTime) / 1000), 0.05);
+      lastFrameTime = nowTime;
+      elapsedAccumulator += delta;
+      const elapsed = elapsedAccumulator;
 
       // Continuous fire while holding Shoot (executeShot internally enforces each weapon's fireRate cooldown)
       if (isPointerDownRef.current) {
@@ -3288,20 +3435,85 @@ export const CombatView: React.FC<CombatViewProps> = ({
           : 40
         : 65;
       if (Math.abs(camera.fov - targetFov) > 0.05) {
-        camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 14, delta);
+        camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 18, delta);
         camera.updateProjectionMatrix();
       }
 
+      // Soft Continuous Auto-Aim Pull (Fortnite / Black Ops Aim Assist):
+      // Gently guides aim closer toward the nearest enemy's TORSO/CHEST (never the head!)
+      if (autoAimEnabledRef.current && activeSoldiersRef.current.length > 0) {
+        let closestDist = 0.34;
+        let pullTargetX = 0;
+        let pullTargetY = 0;
+        let foundAssistTarget = false;
+        const curAimX = isScopedRef.current ? 0 : targetAimPosRef.current.x;
+        const curAimY = isScopedRef.current ? 0 : targetAimPosRef.current.y;
+
+        for (let i = 0; i < activeSoldiersRef.current.length; i++) {
+          const s = activeSoldiersRef.current[i];
+          if (s.mesh.position.z >= -2.5) continue;
+          const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
+          _v1.copy(s.mesh.position);
+          _v1.y += bodyYOffset;
+          _v1.project(camera);
+          if (_v1.z >= 1) continue;
+          const d = Math.hypot(_v1.x - curAimX, _v1.y - curAimY);
+          if (d < closestDist && d > 0.025) {
+            closestDist = d;
+            pullTargetX = _v1.x;
+            pullTargetY = _v1.y;
+            foundAssistTarget = true;
+          }
+        }
+
+        if (foundAssistTarget) {
+          if (isScopedRef.current) {
+            // In ADS, gently nudge camera yaw/pitch toward enemy torso
+            baseAimYawRef.current = THREE.MathUtils.clamp(
+              baseAimYawRef.current - pullTargetX * delta * 1.15,
+              -0.58,
+              0.58
+            );
+            baseAimPitchRef.current = THREE.MathUtils.clamp(
+              baseAimPitchRef.current + pullTargetY * delta * 0.95,
+              -0.40,
+              0.40
+            );
+          } else {
+            // In Hipfire, gently pull crosshair partway toward enemy torso
+            targetAimPosRef.current.x = THREE.MathUtils.damp(
+              targetAimPosRef.current.x,
+              pullTargetX,
+              2.6,
+              delta
+            );
+            targetAimPosRef.current.y = THREE.MathUtils.damp(
+              targetAimPosRef.current.y,
+              pullTargetY,
+              2.6,
+              delta
+            );
+            syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
+          }
+        }
+      }
+
+      // High-frequency 60 FPS sub-pixel aim interpolation (buttery smooth manual & assisted aiming!)
+      aimPosRef.current.x = THREE.MathUtils.damp(aimPosRef.current.x, targetAimPosRef.current.x, 30, delta);
+      aimPosRef.current.y = THREE.MathUtils.damp(aimPosRef.current.y, targetAimPosRef.current.y, 30, delta);
+
       // Responsive pitch (up/down aim) & yaw (left/right aim) with horizon stabilization
-      cameraRollShakeRef.current = THREE.MathUtils.damp(cameraRollShakeRef.current, 0, 10, delta);
-      const targetRoll = -inputX * 0.04 + cameraRollShakeRef.current;
-      const pitchFactor = isScopedRef.current ? 0.45 : 0.30;
-      const yawFactor = isScopedRef.current ? 0.32 : 0.18;
-      const targetYaw = -playerPosRef.current.x * 0.025 - aimPosRef.current.x * yawFactor + baseAimYawRef.current;
-      const targetPitch = aimPosRef.current.y * pitchFactor + baseAimPitchRef.current + Math.abs(cameraRollShakeRef.current) * 0.35;
-      camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 10, delta);
-      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, 10, delta);
-      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, 10, delta);
+      cameraRollShakeRef.current = THREE.MathUtils.damp(cameraRollShakeRef.current, 0, 12, delta);
+      const targetRoll = -inputX * 0.03 + cameraRollShakeRef.current;
+      // In Hipfire, keep camera parallax subtle (0.07) so the 3D world never swims away from under your crosshair!
+      const pitchFactor = isScopedRef.current ? 0.0 : 0.07;
+      const yawFactor = isScopedRef.current ? 0.0 : 0.07;
+      const targetYaw = -playerPosRef.current.x * 0.018 - aimPosRef.current.x * yawFactor + baseAimYawRef.current;
+      const targetPitch = aimPosRef.current.y * pitchFactor + baseAimPitchRef.current + Math.abs(cameraRollShakeRef.current) * 0.25;
+      const camDamp = isScopedRef.current ? 24 : 18;
+      camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 14, delta);
+      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, camDamp, delta);
+      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, camDamp, delta);
 
       if (cameraShakeRef.current > 0.005) {
         cameraShakeRef.current *= 0.87;
@@ -3802,11 +4014,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       // Difficulty-scaled projectile parameters
       const currentWave = getWaveNumber();
       const soldierBulletSpeed =
-        (currentWave === 1 ? 18 : currentWave === 2 ? 20.5 : 22.5) +
-        diffScaleGlobal * 4.5;
+        (currentWave === 1 ? 16.5 : currentWave === 2 ? 18.5 : 20.0) +
+        diffScaleGlobal * 3.5;
       const soldierBulletDmg = Math.round(
-        (currentWave === 1 ? 8 : currentWave === 2 ? 10 : 11) +
-          diffScaleGlobal * 5
+        (currentWave === 1 ? 5 : currentWave === 2 ? 6 : 7) +
+          diffScaleGlobal * 3
       );
 
       // 4. ANIMATE HOSTILES: TROOPS ADVANCE TO BARRICADE FIRING LINE BEFORE AIMING, SCOPING & SHOOTING!
@@ -3981,8 +4193,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
               soldier.stanceState = 'shooting';
               soldier.stanceTimer = 0.5;
               // Stronger 120mm Tank Cannon Shell with recoil, shockwave & shattering!
-              const tankShellSpeed = 19.5 + diffScaleGlobal * 4.0;
-              const tankShellDmg = Math.round(24 + diffScaleGlobal * 7);
+              const tankShellSpeed = 18.0 + diffScaleGlobal * 3.2;
+              const tankShellDmg = Math.round(14 + diffScaleGlobal * 4);
               fireEnemyProjectile(soldier, tankShellSpeed, tankShellDmg);
             }
           } else if (soldier.stanceState === 'shooting') {
@@ -4159,10 +4371,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
             soldier.lastShootTime = nowTime + (Math.random() - 0.5) * 240;
             const bossBulletSpeed = soldier.isHelicopter ? 23 : soldier.isRobot ? 20 : 27;
             const bossBulletDmg = soldier.isHelicopter
-              ? 10 + phaseNumber
+              ? 7 + phaseNumber
               : soldier.isRobot
-              ? 15 + phaseNumber * 2
-              : 12 + phaseNumber * 2;
+              ? 10 + phaseNumber
+              : 9 + phaseNumber;
             fireEnemyProjectile(soldier, bossBulletSpeed, bossBulletDmg);
           }
         }
@@ -4671,9 +4883,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // Passive Leukocyte Cellular Regeneration when in cover or out of damage for 2.5s (keeps Phase 3 fair & beatable!)
-      if (playerHpRef.current > 0 && playerHpRef.current < 100 && (inCover || elapsed - lastDamageTakenTime > 2.5)) {
-        regenAccumulator += delta * (inCover ? 3.5 : 2.2);
+      // Passive Leukocyte Cellular Regeneration when in cover or out of damage for 2.2s (keeps all phases fair & beatable!)
+      if (playerHpRef.current > 0 && playerHpRef.current < 100 && (inCover || elapsed - lastDamageTakenTime > 2.2)) {
+        regenAccumulator += delta * (inCover ? 4.8 : 3.0);
         if (regenAccumulator >= 1.0) {
           const healPts = Math.floor(regenAccumulator);
           regenAccumulator -= healPts;
@@ -5009,32 +5221,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 6. BLACK OPS AN/PEQ-15 TACTICAL LASER SIGHT TRACKING & TARGET LOCK DETECTION (Zero Vector3 allocation!)
+      // 6. BLACK OPS AN/PEQ-15 TACTICAL LASER SIGHT TRACKING & TARGET LOCK DETECTION (1:1 Raycast Aligned!)
       if (laserLineRef.current && laserDotRef.current) {
         _v1.set(
-          playerPosRef.current.x + (isScopedRef.current ? 0.0 : 0.34) + aimPosRef.current.x * 0.08,
-          (isScopedRef.current ? -0.52 : -0.26) + aimPosRef.current.y * 0.08,
+          playerPosRef.current.x + (isScopedRef.current ? 0.0 : 0.34) + aimPosRef.current.x * 0.06,
+          (isScopedRef.current ? -0.52 : -0.26) + aimPosRef.current.y * 0.06,
           playerPosRef.current.z - 0.85
         );
 
-        _v2.set(
-          playerPosRef.current.x + aimPosRef.current.x * 20,
-          aimPosRef.current.y * 14,
-          -46
-        );
+        // Compute exact 3D point along the true crosshair ray so the laser dot sits 100% under the crosshair!
+        hitVector.set(isScopedRef.current ? 0 : aimPosRef.current.x, isScopedRef.current ? 0 : aimPosRef.current.y);
+        raycaster.setFromCamera(hitVector, camera);
+        _v2.copy(raycaster.ray.direction).multiplyScalar(36).add(camera.position);
+
         let lockedOnEnemy = false;
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
           if (s.mesh.position.z >= -2) continue;
           _v3.copy(s.mesh.position);
-          _v3.y += s.isRobot ? 1.15 : s.isTank ? 0.45 : 0.25;
+          _v3.y += s.isRobot ? 1.85 : s.isTank ? 0.45 : 0.25;
           _v4.copy(_v3).project(camera);
-          const d = Math.hypot(_v4.x - aimPosRef.current.x, _v4.y - aimPosRef.current.y);
-          const lockRadius = autoAimEnabledRef.current ? 0.32 : 0.16;
+          const d = Math.hypot(_v4.x - hitVector.x, _v4.y - hitVector.y);
+          const lockRadius = autoAimEnabledRef.current ? 0.24 : 0.145;
           if (d < lockRadius) {
             lockedOnEnemy = true;
-            _v2.copy(_v3);
+            const enemyDist = Math.max(4, Math.abs(s.mesh.position.z - camera.position.z));
+            _v2.copy(raycaster.ray.direction).multiplyScalar(enemyDist).add(camera.position);
             break;
           }
         }
@@ -5096,6 +5309,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         });
         setTargetLocks(locks);
+
+        // Sync live radar blips for Fortnite Top-Right Minimap
+        const blips: Array<{ x: number; y: number; isTank: boolean; isAllied: boolean }> = [];
+        for (const s of activeSoldiersRef.current) {
+          const rx = Math.max(8, Math.min(92, 50 + ((s.mesh.position.x - playerPosRef.current.x) / 9) * 42));
+          const ry = Math.max(8, Math.min(92, 85 + (s.mesh.position.z / 42) * 75));
+          blips.push({
+            x: Math.round(rx),
+            y: Math.round(ry),
+            isTank: Boolean(s.isTank || s.isBoss),
+            isAllied: false,
+          });
+        }
+        if (airdropRef.current) {
+          for (const ally of airdropRef.current.allies) {
+            const ax = Math.max(10, Math.min(90, 50 + ((ally.group.position.x - playerPosRef.current.x) / 9) * 42));
+            const ay = Math.max(10, Math.min(90, 85 + (ally.group.position.z / 42) * 75));
+            blips.push({ x: Math.round(ax), y: Math.round(ay), isTank: false, isAllied: true });
+          }
+        }
+        setRadarBlips(blips);
       }
 
       // 8. WEAPON RECOIL, SIGHT SCOPE (ADS) TRANSITION, 3D TACTICAL RELOAD ANIMATION & FIRST-PERSON SWAY
@@ -5246,12 +5480,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
     <div
       onTouchStart={() => sounds.unlockAudio()}
       onPointerDown={() => sounds.unlockAudio()}
-      className="relative w-full h-full overflow-hidden bg-black select-none"
+      className="fixed inset-0 w-full h-full overflow-hidden bg-black select-none"
     >
       {/* 3D WebGL Canvas with Dynamic Black Ops Optics Filter */}
       <div
         ref={mountRef}
-        className={`absolute inset-0 w-full h-full cursor-none z-0 transition-all ${
+        className={`fixed inset-0 w-full h-full cursor-none z-0 transition-all ${
           visionMode === 'nvg'
             ? 'filter-nvg'
             : visionMode === 'thermal'
@@ -5289,9 +5523,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
         </div>
       )}
 
-      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (MATCHING USER REFERENCE IMG_5388) */}
-      {isScoped && (
-        <div className="fixed inset-0 pointer-events-none z-30 select-none overflow-hidden animate-ads-snap">
+      {/* AUTHENTIC TACTICAL HOLOGRAPHIC SIGHT (PRE-MOUNTED IN DOM SO SCOPE ASSET APPEARS INSTANTLY ON FIRST TIME!) */}
+      <div
+        className={`fixed inset-0 pointer-events-none z-30 select-none overflow-hidden transition-opacity duration-100 ${
+          isScoped ? 'opacity-100 visible animate-ads-snap' : 'opacity-0 invisible'
+        }`}
+      >
           {/* Tactical Peripheral Tunnel Vignette - pulls focus cleanly through the optical glass */}
           <div
             className="absolute inset-0 pointer-events-none"
@@ -5307,6 +5544,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
               <img
                 src="/assets/scope_optic_clean.png"
                 alt="Tactical Optic Scope"
+                loading="eager"
+                decoding="sync"
                 className="w-full h-full object-contain filter drop-shadow-[0_12px_32px_rgba(0,0,0,0.9)] pointer-events-none"
                 draggable={false}
               />
@@ -5417,7 +5656,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 </div>
 
                 {/* RIGHT ROUNDED SCOPE TELEMETRY: ABILITIES & AMMO ARC */}
-                <div className="absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 pointer-events-auto font-mono">
+                <div className={`absolute top-1/2 -right-3 sm:-right-6 translate-x-full -translate-y-1/2 flex flex-col items-start gap-1 font-mono ${isScoped ? 'pointer-events-auto' : 'pointer-events-none'}`}>
                   {/* Top of Right Curve: Live Ammo Badge */}
                   <div className="-ml-2 px-2 py-0.5 bg-zinc-950/90 border-l-2 border-cyan-400 border-y border-r border-cyan-500/30 rounded-r-lg shadow-md flex items-center gap-1.5">
                     <span className="text-[8px] text-cyan-400 uppercase tracking-wider">AMMO</span>
@@ -5508,12 +5747,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
               {/* Tactical HUD Telemetry Badge under the lens */}
               <div className="absolute bottom-[14%] left-1/2 -translate-x-1/2 px-3 py-0.5 bg-zinc-950/90 border border-amber-500/40 text-[9px] font-mono tracking-widest text-amber-400 uppercase whitespace-nowrap shadow-md">
-                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC // LOCK: ACTIVE' : 'HOLO REFLEX SIGHT // +35% POWER'}
+                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC // LOCK: ACTIVE' : 'HOLO REFLEX SIGHT // HEADSHOT 3X'}
               </div>
             </div>
           </div>
-        </div>
-      )}
+      </div>
 
       {/* Black Ops Micro Target Telemetry Tag */}
       {targetLocks.map((lock) => (
@@ -5547,16 +5785,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
         </div>
       )}
 
-      {/* FORTNITE-STYLE FLOATING NUMERICAL DAMAGE INDICATORS + HITMARKERS */}
+      {/* FORTNITE-STYLE FLOATING NUMERICAL DAMAGE INDICATORS + HEADSHOT BANNER */}
       {hitmarkers.map((marker) => (
         <div
           key={marker.id}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30 flex flex-col items-center"
           style={{
             left: `calc(${marker.x}% + ${marker.offsetX || 0}px)`,
             top: `calc(${marker.y}% + ${marker.offsetY || 0}px)`,
           }}
         >
+          {marker.isHeadshot && (
+            <div className="animate-fortnite-dmg mb-0.5 px-1.5 py-0.5 bg-rose-600/95 border border-yellow-300 rounded text-[10px] sm:text-xs font-black tracking-widest text-yellow-200 uppercase shadow-[0_0_12px_rgba(244,63,94,0.95)] whitespace-nowrap">
+              🎯 HEADSHOT!
+            </div>
+          )}
           {/* Floating Fortnite Damage Number */}
           <div
             className={`animate-fortnite-dmg fortnite-dmg-text select-none whitespace-nowrap text-center leading-none ${
@@ -5574,16 +5817,28 @@ export const CombatView: React.FC<CombatViewProps> = ({
       ))}
 
       {/* =====================================================================
-          CALL OF DUTY: BLACK OPS CLASSIFIED SPEC-OPS HUD OVERLAY
-          High-contrast military telemetry pinned strictly to extreme top/bottom edges
-          so 92%+ of the 3D battlefield remains completely open!
+          FORTNITE-STYLE COMBAT HUD OVERLAY (NETLIFY-SAFE HARDWARE COMPOSITED)
+          Matches the user's Fortnite HUD reference without building materials,
+          using all existing weapons and tactical equipment on both Phone & PC.
          ===================================================================== */}
-      <div className="absolute inset-0 flex flex-col justify-between p-1.5 sm:p-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pointer-events-none z-40 font-mono">
-        
-        {/* TOP BLACK OPS TELEMETRY BAR */}
-        <div className="flex items-start justify-between w-full gap-1.5">
-          {/* Top-Left: Direct Back Button + Pause [ESC] Button + Biometric Plate Carrier Telemetry */}
-          <div className="flex items-center gap-1 sm:gap-1.5 pointer-events-auto">
+      <div
+        className="hud-layer-fixed fixed inset-0 z-40 pointer-events-none flex flex-col justify-between select-none"
+        style={{
+          zIndex: 40,
+          transform: 'translate3d(0, 0, 0)',
+          WebkitTransform: 'translate3d(0, 0, 0)',
+          paddingTop: 'max(0.4rem, env(safe-area-inset-top, 0px))',
+          paddingLeft: 'max(0.5rem, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(0.5rem, env(safe-area-inset-right, 0px))',
+          paddingBottom: 'max(0.25rem, env(safe-area-inset-bottom, 0px))',
+        }}
+      >
+        {/* ===================================================================
+            TOP ROW: TOP-LEFT NAV/UTILITY | TOP-CENTER BOSS/ALERTS | TOP-RIGHT MINIMAP
+           =================================================================== */}
+        <div className="flex items-start justify-between w-full gap-1.5 sm:gap-2">
+          {/* TOP-LEFT: Back, Pause [ESC], Audio, Auto-Aim & Vision Quick Toggles */}
+          <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 pointer-events-auto">
             <button
               onClick={() => {
                 sounds.unlockAudio();
@@ -5594,8 +5849,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   setIsGamePaused(true);
                 }
               }}
-              className="h-9 sm:h-10 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-rose-950/80 border-l-2 border-rose-500 border-t border-r border-b border-rose-500/50 text-rose-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(244,63,94,0.25)] cursor-pointer whitespace-nowrap"
-              style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
+              className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-md bg-slate-950/90 hover:bg-rose-950/90 border-2 border-rose-500/80 text-white font-black text-[10px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.85)] cursor-pointer whitespace-nowrap transition-transform active:scale-95"
               title="Back to Main Menu"
             >
               <Home className="w-3.5 h-3.5 text-rose-400 shrink-0" />
@@ -5608,292 +5862,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 sounds.triggerHaptic(14, 'medium');
                 setIsGamePaused(true);
               }}
-              className="h-9 sm:h-10 px-2.5 sm:px-3 bg-zinc-950/95 hover:bg-amber-950/70 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/50 text-amber-300 font-black text-[11px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)] cursor-pointer whitespace-nowrap"
-              style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
+              className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-md bg-slate-950/90 hover:bg-slate-900 border-2 border-amber-400/85 text-amber-300 font-black text-[10px] sm:text-xs tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.85)] cursor-pointer whitespace-nowrap transition-transform active:scale-95"
               title="Pause Operation [ESC]"
             >
               <Pause className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
-              <span>PAUSE [ESC]</span>
+              <span>PAUSE</span>
             </button>
 
-            <div
-              className="bg-zinc-950/85 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/30 px-2.5 py-1 shadow-[0_0_18px_rgba(0,0,0,0.75)] flex flex-col gap-0.5"
-              style={{ clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%)' }}
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                sounds.triggerHaptic(12, 'light');
+                handleSoundToggle();
+              }}
+              className="h-8 sm:h-9 w-8 sm:w-9 rounded-md bg-slate-950/85 hover:bg-slate-900 border border-white/25 text-white flex items-center justify-center shadow-md cursor-pointer transition-transform active:scale-95"
+              title="Toggle Audio [M]"
             >
-              <div className="flex items-center justify-between gap-3 text-[8px] tracking-[0.18em] text-amber-500/90 uppercase">
-                <span>BIO-OPS // KINETIC ARMOR</span>
-                <span className="hidden sm:inline text-cyan-400">SEC-0{phaseNumber}</span>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] sm:text-xs tabular-nums">
-                <span className={`font-black flex items-center gap-1 ${playerHp < 35 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}>
-                  <Shield className="w-3.5 h-3.5" />
-                  {playerHp}
-                </span>
-                {/* Segmented 8-Cell Ballistic HP Bar */}
-                <div className="hidden xs:flex items-center gap-0.5">
-                  {Array.from({ length: 8 }).map((_, idx) => {
-                    const filled = playerHp >= (idx + 1) * 12.5;
-                    return (
-                      <span
-                        key={idx}
-                        className={`w-1.5 h-2.5 skew-x-[-16deg] ${
-                          filled
-                            ? playerHp < 35
-                              ? 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]'
-                              : 'bg-amber-400 shadow-[0_0_5px_rgba(245,158,11,0.6)]'
-                            : 'bg-zinc-800'
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
-                <span className="text-zinc-600">//</span>
-                <span className={`text-[10px] font-bold tracking-wider uppercase ${isPlayerInCover ? 'text-cyan-400' : 'text-amber-500/80'}`}>
-                  {isPlayerInCover ? `BUNKER ${activeCoverHp}%` : 'EXPOSED'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Top-Center: Black Ops Compass Tape, Mission Clock & HVT Boss Telemetry */}
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center gap-1.5">
-              <div
-                className="bg-zinc-950/85 border-t-2 border-amber-500 border-x border-b border-amber-500/30 px-3 py-1 shadow-[0_0_18px_rgba(0,0,0,0.75)] flex items-center gap-2"
-                style={{ clipPath: 'polygon(6px 0, calc(100% - 6px) 0, 100% 100%, 0 100%)' }}
-              >
-                <span className="hidden md:inline text-[9px] tracking-[0.2em] text-amber-500/85 uppercase">
-                  {organTheme.name.split(' ')[0]}
-                </span>
-                <span className={`text-xs sm:text-sm font-black tracking-widest tabular-nums ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}>
-                  00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
-                </span>
-                <span className="text-[9px] tracking-widest text-zinc-400 uppercase">
-                  P{phaseNumber}/3
-                </span>
-              </div>
-
-              {bossInfo && (
-                <div
-                  className="bg-zinc-950/90 border-l-2 border-rose-500 border-t border-r border-b border-rose-500/40 px-2.5 py-1 flex items-center gap-2 text-[10px] text-rose-200 tabular-nums shadow-[0_0_15px_rgba(244,63,94,0.25)]"
-                  style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
-                >
-                  <Skull className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                  <span className="truncate max-w-[80px] sm:max-w-[130px] font-black tracking-wider uppercase text-rose-400">
-                    {bossInfo.name}
-                  </span>
-                  <span className="text-white font-bold">{bossInfo.hitsLeft}/{bossInfo.maxHits}</span>
-                </div>
+              {soundEnabled && !audioSuspended ? (
+                <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" />
               )}
-
-              {bossDefeatedBanner && (
-                <button
-                  onClick={() => {
-                    sounds.triggerHaptic([25, 30, 40], 'heavy');
-                    if (!phaseCompleteCalledRef.current) {
-                      phaseCompleteCalledRef.current = true;
-                      sounds.playVictory();
-                      onPhaseComplete(scoreRef.current + 1000, killsRef.current);
-                    }
-                  }}
-                  className="pointer-events-auto px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-[10px] tracking-widest uppercase cursor-pointer whitespace-nowrap shadow-[0_0_14px_rgba(245,158,11,0.6)]"
-                  style={{ clipPath: 'polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%)' }}
-                >
-                  EXFIL NEXT PHASE »
-                </button>
-              )}
-            </div>
-
-            {/* Black Ops Killstreak Medal Callout */}
-            {activeStreak && (
-              <div
-                className="bg-zinc-950/90 border-x-2 border-amber-400 px-3 py-0.5 text-[10px] font-black tracking-[0.2em] uppercase text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.35)]"
-              >
-                ★ {activeStreak.label} // {activeStreak.sublabel}
-              </div>
-            )}
-
-            {/* Black Ops Tactical Threat & Red Alert Telemetry Strip (Explains every red alert / hazard / damage source!) */}
-            {(hazardAlert || bleriotAlert || enemyAirdropAlert || damageIndicators.length > 0) && (
-              <div
-                className="bg-zinc-950/90 border-l-2 border-rose-500 border-r-2 border-amber-500 border-y border-rose-500/40 px-2.5 py-0.5 text-[9px] sm:text-[10px] font-bold tracking-wider uppercase text-rose-300 shadow-[0_0_14px_rgba(244,63,94,0.3)] max-w-[92vw] truncate"
-              >
-                {hazardAlert
-                  ? hazardAlert
-                  : bleriotAlert
-                  ? bleriotAlert
-                  : enemyAirdropAlert
-                  ? enemyAirdropAlert
-                  : (() => {
-                      const latest = damageIndicators[damageIndicators.length - 1];
-                      const dirArrow = latest.sector === 'left' ? '◀ LEFT' : latest.sector === 'right' ? 'RIGHT ▶' : '▲ FRONT';
-                      return `RED ALERT [${dirArrow}]: TAKING ${latest.sourceType} FIRE — SHIFT TO BUNKER COVER!`;
-                    })()}
-              </div>
-            )}
-          </div>
-
-          {/* Top-Right: Black Ops Scorestreak & EKIA Telemetry */}
-          <div
-            className="bg-zinc-950/85 border-r-2 border-cyan-400 border-t border-l border-b border-cyan-500/30 px-2.5 py-1 shadow-[0_0_18px_rgba(0,0,0,0.75)] flex flex-col items-end gap-0.5"
-            style={{ clipPath: 'polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px)' }}
-          >
-            <div className="text-[8px] tracking-[0.18em] text-cyan-400/90 uppercase">
-              EKIA // SCORE TELEMETRY
-            </div>
-            <div className="flex items-center gap-2 text-[11px] sm:text-xs tabular-nums">
-              <span className="font-black text-amber-400">{score.toLocaleString()} <span className="text-[9px] text-zinc-400">PTS</span></span>
-              <span className="text-zinc-600">//</span>
-              <span className="text-cyan-300 font-black">{kills} <span className="text-[9px] text-cyan-500">EKIA</span></span>
-              {comboStreak > 1 && (
-                <span className="px-1 bg-amber-500/20 border border-amber-500/50 text-amber-300 text-[9px] font-black">
-                  {comboStreak}X
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* DYNAMIC BLACK OPS PRECISION BALLISTIC RETICLE (Zero-lag DOM ref updated) */}
-        <div
-          ref={crosshairDomRef}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center z-25"
-          style={{ left: `${aimScreenPos.x}%`, top: `${aimScreenPos.y}%` }}
-        >
-          <div
-            className={`relative w-7 h-7 flex items-center justify-center transition-all duration-100 ${
-              isScoped ? 'opacity-0 scale-75' : 'opacity-100 scale-100'
-            }`}
-          >
-            {/* 4 Black Ops Tactical Crosshair Ticks */}
-            <div className={`absolute top-0 w-0.5 h-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-amber-400/90'}`} />
-            <div className={`absolute bottom-0 w-0.5 h-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-amber-400/90'}`} />
-            <div className={`absolute left-0 h-0.5 w-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-amber-400/90'}`} />
-            <div className={`absolute right-0 h-0.5 w-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-amber-400/90'}`} />
-            <div className={`w-1 h-1 rounded-full ${isTargetLocked ? 'bg-rose-500' : 'bg-cyan-300'}`} />
-          </div>
-          {isReloading && (
-            <div className="absolute -bottom-6 px-1.5 py-0.5 bg-zinc-950/90 border border-amber-500/50 text-[9px] font-mono font-bold text-amber-400 whitespace-nowrap">
-              RELOAD {reloadProgress}%
-            </div>
-          )}
-        </div>
-
-        {/* BOTTOM BLACK OPS SPEC-OPS CONTROL DECK (Responsive single row, Safari-safe) */}
-        <div className="flex items-end justify-between w-full pointer-events-auto gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar max-w-full pb-0.5">
-          {/* Bottom-Left: Tactical Combat Equipment (Stim, Frag, WBC Airdrop) */}
-          <div
-            className="bg-black/90 border-l-2 border-amber-500 border-t border-r border-b border-amber-500/40 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 shrink-0 shadow-[0_0_20px_rgba(0,0,0,0.85)] pointer-events-auto"
-            style={{ clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)' }}
-          >
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic([20, 30, 20], 'medium');
-                handleStimpack();
-              }}
-              disabled={stimCooldown > 0 || playerHp >= 100}
-              className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 whitespace-nowrap border transition-all ${
-                stimCooldown === 0 && playerHp < 100
-                  ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-400 text-emerald-300 cursor-pointer shadow-[0_0_10px_rgba(52,211,153,0.3)]'
-                  : 'bg-zinc-900/70 border-zinc-800 text-zinc-500 cursor-not-allowed'
-              }`}
-              title="Bio-Stim Shot [E]"
-            >
-              <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400 shrink-0" />
-              <span>{stimCooldown > 0 ? `${stimCooldown}S` : 'STIM [E]'}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic([25, 20], 'medium');
-                handleThrowGrenade();
-              }}
-              disabled={grenadeCooldown > 0}
-              className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 whitespace-nowrap border transition-all ${
-                grenadeCooldown === 0
-                  ? 'bg-orange-950/80 hover:bg-orange-900 border-amber-500/60 text-amber-300 cursor-pointer shadow-[0_0_10px_rgba(245,158,11,0.25)]'
-                  : 'bg-zinc-900/70 border-zinc-800 text-zinc-500 cursor-not-allowed'
-              }`}
-              title="Cluster Frag [G]"
-            >
-              <Bomb className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
-              <span>{grenadeCooldown > 0 ? `${grenadeCooldown}S` : 'FRAG [G]'}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic([35, 25, 45], 'heavy');
-                handleAirdropReinforcements();
-              }}
-              disabled={reinforceCooldown > 0 || isAirdropActive}
-              className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 whitespace-nowrap border transition-all ${
-                reinforceCooldown === 0 && !isAirdropActive
-                  ? 'bg-cyan-950/80 hover:bg-cyan-900 border-cyan-400 text-cyan-300 cursor-pointer shadow-[0_0_10px_rgba(34,211,238,0.3)]'
-                  : 'bg-zinc-900/70 border-zinc-800 text-zinc-500 cursor-not-allowed'
-              }`}
-              title="WBC Airdrop Strike [T]"
-            >
-              <Plane className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400 shrink-0" />
-              <span>{isAirdropActive ? 'ACTIVE' : reinforceCooldown > 0 ? `${reinforceCooldown}S` : 'AIRDROP'}</span>
-            </button>
-          </div>
-
-          {/* Bottom-Center: Tactical Optics, Vision & Assist Deck */}
-          <div
-            className="bg-black/90 border-t border-b border-x border-amber-500/40 p-1 sm:p-1.5 flex items-center gap-1 sm:gap-1.5 shrink-0 shadow-[0_0_20px_rgba(0,0,0,0.85)] pointer-events-auto"
-          >
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic(14, 'light');
-                handleToggleScope();
-              }}
-              disabled={currentWeapon.category === 'SHOTGUN'}
-              className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 whitespace-nowrap border transition-all ${
-                currentWeapon.category === 'SHOTGUN'
-                  ? 'bg-zinc-900/50 border-zinc-800 text-zinc-600 cursor-not-allowed'
-                  : isScoped
-                  ? 'bg-amber-500 text-zinc-950 border-amber-300 cursor-pointer shadow-[0_0_12px_rgba(245,158,11,0.6)]'
-                  : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-700 text-zinc-200 hover:border-amber-500/50 cursor-pointer'
-              }`}
-              title={currentWeapon.category === 'SHOTGUN' ? 'No Scope on Shotgun' : 'Sight Scope ADS [F]'}
-            >
-              <Crosshair className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>{currentWeapon.category === 'SHOTGUN' ? 'NO SCOPE' : 'ADS'}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic(18, 'medium');
-                handleReload();
-              }}
-              disabled={isReloading}
-              className="h-9 sm:h-11 px-2 sm:px-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 hover:border-amber-500/50 text-[10px] sm:text-xs font-black tracking-wider uppercase text-zinc-200 flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap transition-all"
-              title="Tactical Reload [R]"
-            >
-              <RotateCcw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 ${isReloading ? 'animate-spin' : ''}`} />
-              <span>RLD</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic([14, 25], 'light');
-                handleToggleVisionMode();
-              }}
-              className={`h-9 sm:h-11 px-2 sm:px-3 text-[10px] sm:text-xs font-black tracking-wider uppercase flex items-center gap-1 sm:gap-1.5 cursor-pointer whitespace-nowrap border transition-all ${
-                visionMode !== 'normal'
-                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.3)]'
-                  : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-700 text-zinc-300'
-              }`}
-              title="Toggle NVG / FLIR Thermal Optics [V]"
-            >
-              <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-              <span>{visionMode === 'normal' ? 'NVG' : visionMode.toUpperCase()}</span>
             </button>
 
             {onToggleAutoAim && (
@@ -5903,105 +5892,614 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   sounds.triggerHaptic(12, 'light');
                   onToggleAutoAim();
                 }}
-                className={`h-9 sm:h-11 px-2 sm:px-2.5 text-[10px] sm:text-xs font-black tracking-wider uppercase cursor-pointer whitespace-nowrap border transition-all ${
+                className={`h-8 sm:h-9 px-2 sm:px-2.5 rounded-md font-black text-[9px] sm:text-[11px] tracking-wider uppercase border flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95 ${
                   autoAimEnabled
-                    ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
-                    : 'bg-zinc-900 border-zinc-700 text-zinc-400'
+                    ? 'bg-sky-600/85 border-sky-300 text-white'
+                    : 'bg-slate-950/85 border-white/20 text-slate-400'
                 }`}
-                title="Target Lock Assist"
+                title="Toggle Soft Target Assist"
               >
-                {autoAimEnabled ? 'LOCK' : 'OFF'}
+                <Target className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                <span>{autoAimEnabled ? 'ASSIST: ON' : 'ASSIST: OFF'}</span>
+              </button>
+            )}
+          </div>
+
+          {/* TOP-CENTER: Boss Health Bar, Exfil Button, Killstreak & Threat Alerts */}
+          <div className="flex flex-col items-center gap-1 max-w-[46vw] sm:max-w-md">
+            {bossInfo && (
+              <div className="bg-slate-950/90 border-2 border-rose-500 rounded-md px-2.5 sm:px-3.5 py-1 flex flex-col items-center gap-0.5 shadow-[0_4px_16px_rgba(244,63,94,0.45)] w-full min-w-[140px] sm:min-w-[220px]">
+                <div className="flex items-center justify-between w-full gap-2 text-[9px] sm:text-[11px] font-black uppercase tracking-wider">
+                  <span className="flex items-center gap-1 text-rose-400 truncate">
+                    <Skull className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span className="truncate">{bossInfo.name}</span>
+                  </span>
+                  <span className="text-white tabular-nums shrink-0">
+                    {bossInfo.hitsLeft}/{bossInfo.maxHits}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-900 rounded-sm overflow-hidden border border-rose-500/40">
+                  <div
+                    className="h-full bg-gradient-to-r from-rose-600 via-orange-500 to-amber-400 transition-all duration-150"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, (bossInfo.hitsLeft / Math.max(1, bossInfo.maxHits)) * 100))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {bossDefeatedBanner && (
+              <button
+                onClick={() => {
+                  sounds.triggerHaptic([25, 30, 40], 'heavy');
+                  if (!phaseCompleteCalledRef.current) {
+                    phaseCompleteCalledRef.current = true;
+                    sounds.playVictory();
+                    onPhaseComplete(scoreRef.current + 1000, killsRef.current);
+                  }
+                }}
+                className="pointer-events-auto px-3 py-1 rounded-md bg-gradient-to-r from-amber-400 to-yellow-300 hover:from-amber-300 hover:to-yellow-200 text-slate-950 font-black text-[10px] sm:text-xs tracking-widest uppercase cursor-pointer whitespace-nowrap shadow-[0_0_18px_rgba(250,204,21,0.75)] border-2 border-white"
+              >
+                VICTORY ROYALE // EXFIL NEXT PHASE »
               </button>
             )}
 
-            <button
-              onClick={() => {
-                sounds.unlockAudio();
-                sounds.triggerHaptic(12, 'light');
-                handleSoundToggle();
-              }}
-              className="h-9 sm:h-11 px-2 sm:px-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 cursor-pointer transition-all"
-              title="Toggle Audio [M]"
-            >
-              {soundEnabled && !audioSuspended ? (
-                <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
-              ) : (
-                <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-500" />
-              )}
-            </button>
+            {activeStreak && (
+              <div className="bg-gradient-to-r from-amber-500/95 to-yellow-400/95 border-2 border-white rounded-md px-3 py-0.5 text-[10px] sm:text-xs font-black tracking-wider uppercase text-slate-950 shadow-[0_0_16px_rgba(250,204,21,0.65)] whitespace-nowrap">
+                ★ {activeStreak.label} // {activeStreak.sublabel}
+              </div>
+            )}
+
+            {(hazardAlert || bleriotAlert || enemyAirdropAlert || damageIndicators.length > 0) && (
+              <div className="bg-rose-950/90 border border-rose-400 rounded-md px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black tracking-wider uppercase text-rose-200 shadow-lg max-w-full truncate">
+                {hazardAlert
+                  ? hazardAlert
+                  : bleriotAlert
+                  ? bleriotAlert
+                  : enemyAirdropAlert
+                  ? enemyAirdropAlert
+                  : (() => {
+                      const latest = damageIndicators[damageIndicators.length - 1];
+                      const dirArrow = latest.sector === 'left' ? '◀ LEFT' : latest.sector === 'right' ? 'RIGHT ▶' : '▲ FRONT';
+                      return `ALERT [${dirArrow}]: ${latest.sourceType} FIRE — MOVE TO COVER!`;
+                    })()}
+              </div>
+            )}
           </div>
 
-          {/* Bottom-Right: High-Visibility Tactical Weapon Deck & Quick Switcher */}
+          {/* TOP-RIGHT: FORTNITE SQUARE MINIMAP + 4 TELEMETRY ICON BADGES BELOW */}
+          <div className="flex flex-col items-end gap-1 pointer-events-auto shrink-0">
+            {/* Square Fortnite Minimap with Anatomical Terrain & Sector Title */}
+            <div
+              className="w-20 h-20 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-md border-2 border-slate-900/95 shadow-[0_6px_20px_rgba(0,0,0,0.85)] overflow-hidden relative"
+              style={{
+                background: `radial-gradient(circle at 50% 45%, #${organTheme.particleColor.toString(16).padStart(6, '0')}44 0%, #0f172a 68%, #020617 100%)`,
+              }}
+            >
+              {/* Subtle Topographic Map Contours & Grid */}
+              <div
+                className="absolute inset-0 opacity-30 pointer-events-none"
+                style={{
+                  backgroundImage:
+                    'linear-gradient(to right, rgba(255,255,255,0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.12) 1px, transparent 1px)',
+                  backgroundSize: '25% 25%',
+                }}
+              />
+              <div className="absolute inset-2 rounded-full border border-white/15 pointer-events-none" />
+              <div className="absolute inset-5 rounded-full border border-sky-400/20 pointer-events-none" />
+
+              {/* Storm / Safe Zone Line (Fortnite White Line from Player to Center) */}
+              <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100">
+                <line
+                  x1={50 + (playerPosRef.current.x / 7.5) * 35}
+                  y1="86"
+                  x2="50"
+                  y2="45"
+                  stroke="rgba(255,255,255,0.75)"
+                  strokeWidth="1.2"
+                />
+              </svg>
+
+              {/* Live Enemy & Allied Blips on Minimap */}
+              {radarBlips.map((blip, bIdx) => (
+                <span
+                  key={bIdx}
+                  className={`absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none ${
+                    blip.isAllied
+                      ? 'w-2 h-2 rounded-full bg-sky-400 border border-white shadow-[0_0_6px_#38bdf8]'
+                      : blip.isTank
+                      ? 'w-2.5 h-2.5 rotate-45 bg-amber-400 border border-rose-600 shadow-[0_0_8px_#f59e0b]'
+                      : 'w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_5px_#f43f5e]'
+                  }`}
+                  style={{ left: `${blip.x}%`, top: `${blip.y}%` }}
+                />
+              ))}
+
+              {/* Player White Arrow Marker on Minimap */}
+              <div
+                className="absolute bottom-[10%] -translate-x-1/2 pointer-events-none flex flex-col items-center"
+                style={{ left: `${Math.max(15, Math.min(85, 50 + (playerPosRef.current.x / 7.5) * 35))}%` }}
+              >
+                <div
+                  className="w-0 h-0"
+                  style={{
+                    borderLeft: '4px solid transparent',
+                    borderRight: '4px solid transparent',
+                    borderBottom: '8px solid #ffffff',
+                    filter: 'drop-shadow(0 0 4px rgba(56,189,248,0.95))',
+                  }}
+                />
+              </div>
+
+              {/* Fortnite-Style Bold White Sector Name Across Center of Minimap (like "CASTILLO CORAL") */}
+              <div className="absolute inset-x-1 top-1/2 -translate-y-1/2 text-center pointer-events-none">
+                <span
+                  className="text-[8px] sm:text-[10px] font-black uppercase tracking-wider text-white block truncate"
+                  style={{
+                    textShadow:
+                      '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.95)',
+                  }}
+                >
+                  {organTheme.name.replace(' SECTOR', '')}
+                </span>
+              </div>
+            </div>
+
+            {/* Fortnite Telemetry Row Directly Below Minimap (Timer, Phase, Kills, Score) */}
+            <div className="flex items-center justify-end gap-1 sm:gap-1.5 bg-slate-950/80 border border-white/15 rounded-md px-1.5 py-0.5 shadow-lg">
+              {/* 1. Wave Clock */}
+              <div className="flex items-center gap-1" title="Wave Time Remaining">
+                <span className="w-4 h-4 rounded-full bg-slate-800 border border-white/25 flex items-center justify-center text-[9px]">
+                  ⏱
+                </span>
+                <span
+                  className={`text-[10px] sm:text-xs font-black tabular-nums ${
+                    timeLeft <= 10 ? 'text-rose-400 animate-pulse' : 'text-white'
+                  }`}
+                >
+                  0:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
+                </span>
+              </div>
+
+              {/* 2. Phase Number */}
+              <div className="flex items-center gap-0.5" title="Sector Phase">
+                <span className="w-4 h-4 rounded-full bg-slate-800 border border-white/25 flex items-center justify-center text-[9px] text-sky-300 font-black">
+                  P
+                </span>
+                <span className="text-[10px] sm:text-xs font-black text-white tabular-nums">
+                  {phaseNumber}/3
+                </span>
+              </div>
+
+              {/* 3. Eliminations (Crosshair Icon) */}
+              <div className="flex items-center gap-0.5" title="Pathogens Eliminated">
+                <span className="w-4 h-4 rounded-full bg-slate-800 border border-white/25 flex items-center justify-center">
+                  <Crosshair className="w-2.5 h-2.5 text-rose-400" />
+                </span>
+                <span className="text-[10px] sm:text-xs font-black text-white tabular-nums">
+                  {kills}
+                </span>
+              </div>
+
+              {/* 4. Score */}
+              <div className="hidden xs:flex items-center gap-0.5" title="Combat Score">
+                <span className="w-4 h-4 rounded-full bg-slate-800 border border-white/25 flex items-center justify-center text-[9px] text-amber-300 font-black">
+                  ★
+                </span>
+                <span className="text-[10px] sm:text-xs font-black text-amber-300 tabular-nums">
+                  {score}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ===================================================================
+            CENTER: DYNAMIC PRECISION RETICLE (Zero-lag DOM ref updated)
+           =================================================================== */}
+        <div
+          ref={crosshairDomRef}
+          className="fixed transform -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center z-30"
+          style={{ left: `${aimScreenPos.x}%`, top: `${aimScreenPos.y}%` }}
+        >
           <div
-            className="bg-black/90 border-r-2 border-amber-500 border-t border-l border-b border-amber-500/50 p-1.5 sm:p-2 flex flex-col gap-1 sm:gap-1.5 shrink-0 shadow-[0_4px_24px_rgba(0,0,0,0.85)] pointer-events-auto"
-            style={{ clipPath: 'polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px)' }}
+            className={`relative w-7 h-7 flex items-center justify-center transition-all duration-100 ${
+              isScoped ? 'opacity-0 scale-75' : 'opacity-100 scale-100'
+            }`}
           >
-            {/* Main Weapon Card with Swap Button */}
-            <div className="flex items-center justify-between gap-1.5 sm:gap-3">
-              {/* Active Weapon Name & Ammo */}
-              <div className="flex flex-col text-left">
-                <div className="flex items-center gap-1 sm:gap-1.5">
-                  <span
-                    className="text-[7px] sm:text-[8px] font-black tracking-widest px-1 sm:px-1.5 py-0.5 rounded uppercase"
+            <div className={`absolute top-0 w-0.5 h-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-white shadow-[0_0_4px_#000]'}`} />
+            <div className={`absolute bottom-0 w-0.5 h-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-white shadow-[0_0_4px_#000]'}`} />
+            <div className={`absolute left-0 h-0.5 w-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-white shadow-[0_0_4px_#000]'}`} />
+            <div className={`absolute right-0 h-0.5 w-2 ${isTargetLocked ? 'bg-rose-500 shadow-[0_0_6px_#f43f5e]' : 'bg-white shadow-[0_0_4px_#000]'}`} />
+            <div className={`w-1.5 h-1.5 rounded-full ${isTargetLocked ? 'bg-rose-500' : 'bg-sky-300'}`} />
+          </div>
+          {isReloading && (
+            <div className="absolute -bottom-6 px-2 py-0.5 rounded bg-slate-950/90 border border-amber-400 text-[9px] font-black text-amber-300 whitespace-nowrap">
+              RELOAD {reloadProgress}%
+            </div>
+          )}
+        </div>
+
+        {/* ===================================================================
+            BOTTOM SECTION:
+            - Bottom-Left: Fortnite Slanted Blue Shield Bar + Green Health Bar
+            - Bottom-Right: Fortnite Weapon & Equipment Hotbar (No Building Mats)
+            - Bottom-Edge: Full-Width 10-Segment Fortnite Gold XP Bar
+           =================================================================== */}
+        <div className="flex flex-col w-full gap-1 sm:gap-1.5">
+          <div className="flex items-end justify-between w-full gap-2">
+            {/* BOTTOM-LEFT: FORTNITE ICONIC DUAL SLANTED SHIELD + HEALTH BARS */}
+            <div className="flex flex-col gap-1 pointer-events-auto pl-1 sm:pl-2">
+              {/* Posture / Bunker Cover Status Pill */}
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md ${
+                    isPlayerInCover
+                      ? 'bg-sky-950/90 border-sky-400 text-sky-200'
+                      : 'bg-slate-950/85 border-amber-400/60 text-amber-300'
+                  }`}
+                >
+                  {isPlayerInCover ? `🛡️ BUNKER SHIELD ${activeCoverHp}%` : '⚠️ EXPOSED [MOVE A/D TO COVER]'}
+                </span>
+              </div>
+
+              {/* TOP BAR: FORTNITE CYAN/BLUE SHIELD BAR (Bunker Cover / Bio-Armor) */}
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                  <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400 fill-sky-400/30 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+                </div>
+                <div
+                  className="relative w-28 sm:w-48 md:w-56 h-3 sm:h-4 bg-slate-950/85 border-2 border-white/85 shadow-[0_4px_12px_rgba(0,0,0,0.85)] overflow-hidden"
+                  style={{ transform: 'skewX(-16deg)' }}
+                >
+                  <div
+                    className="h-full transition-all duration-150"
                     style={{
-                      backgroundColor: `${currentWeapon.color}25`,
-                      color: currentWeapon.color,
-                      border: `1px solid ${currentWeapon.color}60`,
+                      width: `${isPlayerInCover ? Math.max(0, Math.min(100, activeCoverHp)) : 0}%`,
+                      background: 'linear-gradient(90deg, #0284c7 0%, #00b4d8 55%, #38bdf8 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-end pr-2 text-[8px] sm:text-[10px] font-black text-white tabular-nums"
+                    style={{
+                      transform: 'skewX(16deg)',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)',
                     }}
                   >
-                    {currentWeapon.category.slice(0, 5)}
-                  </span>
-                  <span className="text-[10px] sm:text-xs font-black text-white tracking-wider uppercase truncate max-w-[85px] sm:max-w-[150px]">
-                    {currentWeapon.name}
-                  </span>
-                </div>
-                <div className="flex items-baseline gap-1 mt-0.5">
-                  <span className={`text-sm sm:text-lg font-black tracking-tight tabular-nums ${isReloading ? 'text-amber-400 animate-pulse' : currentAmmo <= 5 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}>
-                    {isReloading ? 'RELOADING' : currentAmmo}
-                  </span>
-                  <span className="text-[10px] sm:text-xs text-zinc-400 tabular-nums">/ {reserveAmmo}</span>
+                    {isPlayerInCover ? activeCoverHp : 0} | 100
+                  </div>
                 </div>
               </div>
 
-              {/* Big Tactile Cycle Weapon Button */}
-              <button
-                onClick={() => {
-                  sounds.unlockAudio();
-                  handleSwapWeapon();
-                }}
-                className="h-9 sm:h-11 px-2 sm:px-3 bg-amber-500 hover:bg-amber-400 active:bg-amber-300 text-zinc-950 font-black text-[10px] sm:text-xs tracking-wider uppercase flex items-center gap-1 cursor-pointer shadow-[0_0_14px_rgba(245,158,11,0.5)] transition-all whitespace-nowrap"
-                style={{ clipPath: 'polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px)' }}
-                title="Cycle Weapon [Q]"
-              >
-                <Repeat className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-                <span>SWAP [Q]</span>
-              </button>
+              {/* BOTTOM BAR: FORTNITE VIBRANT GREEN HEALTH BAR */}
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                  <Heart
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                      playerHp < 35 ? 'text-rose-500 fill-rose-500 animate-pulse' : 'text-lime-400 fill-lime-400'
+                    } drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]`}
+                  />
+                </div>
+                <div
+                  className="relative w-32 sm:w-52 md:w-64 h-4 sm:h-5 bg-slate-950/90 border-2 border-white/95 shadow-[0_4px_14px_rgba(0,0,0,0.9)] overflow-hidden"
+                  style={{ transform: 'skewX(-16deg)' }}
+                >
+                  <div
+                    className="h-full transition-all duration-150"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, playerHp))}%`,
+                      background:
+                        playerHp < 35
+                          ? 'linear-gradient(90deg, #dc2626 0%, #ef4444 60%, #f87171 100%)'
+                          : 'linear-gradient(90deg, #16a34a 0%, #22c55e 55%, #84cc16 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-between px-2 text-[9px] sm:text-xs font-black text-white tabular-nums"
+                    style={{
+                      transform: 'skewX(16deg)',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)',
+                    }}
+                  >
+                    <span>HP</span>
+                    <span>{playerHp} | 100</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {/* Quick Slot Selector (Slots 1, 2, 3, 4) */}
-            <div className="grid grid-cols-4 gap-0.5 sm:gap-1 pt-1 border-t border-white/10">
-              {INITIAL_WEAPONS.map((wpn, idx) => {
-                const isSelected = wpn.id === currentWeapon.id;
-                return (
+            {/* BOTTOM-RIGHT: FORTNITE HOTBAR (WEAPONS + EQUIPMENT SLOTS, NO BUILDING MATERIALS) */}
+            <div className="flex flex-col items-end gap-1 pointer-events-auto">
+              {/* Compact Action Utility Strip Above Hotbar (ADS, Reload, NVG, Cycle Weapon) */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(14, 'light');
+                    handleToggleScope();
+                  }}
+                  disabled={currentWeapon.category === 'SHOTGUN'}
+                  className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-md text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-md cursor-pointer transition-transform active:scale-95 ${
+                    currentWeapon.category === 'SHOTGUN'
+                      ? 'bg-slate-900/60 border-white/10 text-slate-500 cursor-not-allowed'
+                      : isScoped
+                      ? 'bg-amber-400 text-slate-950 border-white shadow-[0_0_12px_rgba(250,204,21,0.7)]'
+                      : 'bg-slate-950/85 hover:bg-slate-900 border-white/30 text-white'
+                  }`}
+                  title="Aim Down Sights [F] / Right-Click"
+                >
+                  <Crosshair className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>{currentWeapon.category === 'SHOTGUN' ? 'NO ADS' : 'SCOPE [F]'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic(18, 'medium');
+                    handleReload();
+                  }}
+                  disabled={isReloading}
+                  className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-md bg-slate-950/85 hover:bg-slate-900 border border-white/30 text-[9px] sm:text-[11px] font-black uppercase tracking-wider text-white flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                  title="Reload Weapon [R]"
+                >
+                  <RotateCcw className={`w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 ${isReloading ? 'animate-spin' : ''}`} />
+                  <span>RLD [R]</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    sounds.triggerHaptic([14, 25], 'light');
+                    handleToggleVisionMode();
+                  }}
+                  className={`h-7 sm:h-8 px-2 sm:px-2.5 rounded-md text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-md cursor-pointer transition-transform active:scale-95 ${
+                    visionMode !== 'normal'
+                      ? 'bg-emerald-500/80 border-white text-slate-950'
+                      : 'bg-slate-950/85 hover:bg-slate-900 border-white/30 text-white'
+                  }`}
+                  title="Toggle Night/Thermal Vision [V]"
+                >
+                  <Eye className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-300" />
+                  <span>{visionMode === 'normal' ? 'NVG' : visionMode.toUpperCase()}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    sounds.unlockAudio();
+                    handleSwapWeapon();
+                  }}
+                  className="h-7 sm:h-8 px-2 sm:px-2.5 rounded-md bg-sky-500 hover:bg-sky-400 text-slate-950 border border-white text-[9px] sm:text-[11px] font-black uppercase tracking-wider flex items-center gap-1 shadow-md cursor-pointer transition-transform active:scale-95"
+                  title="Cycle Weapon [Q]"
+                >
+                  <Repeat className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                  <span>SWAP [Q]</span>
+                </button>
+              </div>
+
+              {/* FORTNITE SQUARE SLOTS ROW: 4 WEAPONS + GAP + 3 TACTICAL ITEMS (STIM, FRAG, AIRDROP) */}
+              <div className="flex items-end gap-1 sm:gap-1.5">
+                {/* 4 Weapon Slots (SCAR-H, Pump Shotgun, Bolt Sniper, Drum LMG) */}
+                {INITIAL_WEAPONS.map((wpn, idx) => {
+                  const isSelected = wpn.id === currentWeapon.id;
+                  const rarityBg =
+                    idx === 0
+                      ? 'from-sky-500/90 via-blue-700/90 to-slate-950/95 border-sky-300'
+                      : idx === 1
+                      ? 'from-purple-500/90 via-purple-800/90 to-slate-950/95 border-purple-300'
+                      : idx === 2
+                      ? 'from-amber-400/90 via-orange-700/90 to-slate-950/95 border-yellow-200'
+                      : 'from-cyan-400/90 via-teal-700/90 to-slate-950/95 border-cyan-200';
+                  const shortLabel =
+                    wpn.category === 'ASSAULT'
+                      ? 'SCAR'
+                      : wpn.category === 'SHOTGUN'
+                      ? 'PUMP'
+                      : wpn.category === 'SNIPER'
+                      ? 'SNIPER'
+                      : 'DRUM';
+
+                  return (
+                    <div key={wpn.id} className="flex flex-col items-center gap-0.5">
+                      <button
+                        onClick={() => {
+                          sounds.unlockAudio();
+                          handleSelectWeapon(wpn);
+                        }}
+                        className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b ${rarityBg} relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                          isSelected
+                            ? '-translate-y-1.5 border-2 border-white ring-2 ring-white/80 shadow-[0_6px_18px_rgba(56,189,248,0.65)]'
+                            : 'border border-white/40 opacity-90 hover:opacity-100'
+                        }`}
+                        title={`Equip ${wpn.name} [${idx + 1}]`}
+                      >
+                        {/* Top-left weapon short label */}
+                        <span
+                          className="text-[7px] sm:text-[8px] font-black uppercase tracking-wider text-white leading-none"
+                          style={{ textShadow: '0 1px 2px #000' }}
+                        >
+                          {shortLabel}
+                        </span>
+
+                        {/* Center Fortnite Weapon Silhouette Icon */}
+                        <div className="flex items-center justify-center my-auto">
+                          <svg
+                            viewBox="0 0 48 20"
+                            className="w-8 h-3.5 sm:w-10 sm:h-4 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]"
+                            fill="currentColor"
+                          >
+                            {wpn.category === 'ASSAULT' && (
+                              <path d="M2 8h10l3-3h15v2h14v2H32l-2 3h-5v5h-3v-5h-6l-3 5H8l2-5H2V8z" />
+                            )}
+                            {wpn.category === 'SHOTGUN' && (
+                              <path d="M3 9h12l2-2h27v3H28v2H18l-4 5H9l3-6H3V9z" />
+                            )}
+                            {wpn.category === 'SNIPER' && (
+                              <path d="M1 9h11l2-2h6V5h10v2h17v2H30l-2 3h-6v5h-3v-5h-5l-4 5H5l3-6H1V9z" />
+                            )}
+                            {wpn.category === 'MACHINE_GUN' && (
+                              <path d="M6 8h9l2-3h14v3h11v2H31v3a4 4 0 1 1-8 0v-1h-5l-3 5H10l2-5H6V8z" />
+                            )}
+                          </svg>
+                        </div>
+
+                        {/* Bottom-Right Ammo Readout inside tile (matches Fortnite "21", "88", "107") */}
+                        <div className="flex items-center justify-end gap-0.5 w-full leading-none">
+                          <span
+                            className={`text-[9px] sm:text-xs font-black tabular-nums ${
+                              isSelected && currentAmmo <= 5 ? 'text-rose-300 animate-pulse' : 'text-white'
+                            }`}
+                            style={{ textShadow: '0 1px 3px #000' }}
+                          >
+                            {isSelected ? (isReloading ? 'RLD' : currentAmmo) : wpn.magSize}
+                          </span>
+                        </div>
+                      </button>
+
+                      {/* Keybind Badge Underneath Slot */}
+                      <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-white leading-tight">
+                        {idx + 1}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {/* Small Gap before Medkit & Tactical Equipment Slots (just like Fortnite's Medkit slot gap) */}
+                <div className="w-1 sm:w-2 shrink-0" />
+
+                {/* Slot 5: BIO-STIM MEDKIT [E] (Matches Fortnite's Green Medkit Tile!) */}
+                <div className="flex flex-col items-center gap-0.5">
                   <button
-                    key={wpn.id}
                     onClick={() => {
                       sounds.unlockAudio();
-                      handleSelectWeapon(wpn);
+                      sounds.triggerHaptic([20, 30, 20], 'medium');
+                      handleStimpack();
                     }}
-                    className={`h-7 sm:h-8 px-0.5 sm:px-1 flex flex-col items-center justify-center text-[8px] sm:text-[9px] font-black uppercase tracking-tighter cursor-pointer border transition-all ${
-                      isSelected
-                        ? 'bg-amber-500 text-zinc-950 border-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.6)]'
-                        : 'bg-zinc-900/90 text-zinc-400 border-white/10 hover:border-amber-500/50 hover:text-zinc-200'
+                    disabled={stimCooldown > 0 || playerHp >= 100}
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-lime-500/95 via-emerald-700/95 to-slate-950/95 relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                      stimCooldown === 0 && playerHp < 100
+                        ? 'border-2 border-lime-300 hover:-translate-y-1 shadow-[0_4px_14px_rgba(34,197,94,0.5)]'
+                        : 'border border-white/30 opacity-75'
                     }`}
-                    title={`Equip ${wpn.name} [${idx + 1}]`}
+                    title="Bio-Stim Medkit Heal [E]"
                   >
-                    <span className="text-[7px] opacity-75">[{idx + 1}]</span>
-                    <span className="truncate max-w-[38px] sm:max-w-[44px] leading-none">{wpn.category.slice(0, 5)}</span>
+                    <span
+                      className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none"
+                      style={{ textShadow: '0 1px 2px #000' }}
+                    >
+                      STIM
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      <div className="w-5 h-4 sm:w-6 sm:h-5 rounded-sm bg-white flex items-center justify-center shadow-md border border-rose-500">
+                        <span className="text-rose-600 font-black text-xs sm:text-sm leading-none">+</span>
+                      </div>
+                    </div>
+                    <span
+                      className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none tabular-nums"
+                      style={{ textShadow: '0 1px 3px #000' }}
+                    >
+                      {stimCooldown > 0 ? `${stimCooldown}s` : '1'}
+                    </span>
                   </button>
-                );
-              })}
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-lime-300 leading-tight">
+                    E
+                  </span>
+                </div>
+
+                {/* Slot 6: PLASMA FRAG GRENADE [G] */}
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic([25, 20], 'medium');
+                      handleThrowGrenade();
+                    }}
+                    disabled={grenadeCooldown > 0}
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-orange-500/95 via-rose-800/95 to-slate-950/95 relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                      grenadeCooldown === 0
+                        ? 'border-2 border-amber-300 hover:-translate-y-1 shadow-[0_4px_14px_rgba(249,115,22,0.5)]'
+                        : 'border border-white/30 opacity-75'
+                    }`}
+                    title="Cluster Frag Grenade [G]"
+                  >
+                    <span
+                      className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none"
+                      style={{ textShadow: '0 1px 2px #000' }}
+                    >
+                      FRAG
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      <Bomb className="w-4 h-4 sm:w-5 sm:h-5 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]" />
+                    </div>
+                    <span
+                      className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none tabular-nums"
+                      style={{ textShadow: '0 1px 3px #000' }}
+                    >
+                      {grenadeCooldown > 0 ? `${grenadeCooldown}s` : '1'}
+                    </span>
+                  </button>
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-amber-300 leading-tight">
+                    G
+                  </span>
+                </div>
+
+                {/* Slot 7: WBC AIRDROP REINFORCEMENTS [T] */}
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic([35, 25, 45], 'heavy');
+                      handleAirdropReinforcements();
+                    }}
+                    disabled={reinforceCooldown > 0 || isAirdropActive}
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-md bg-gradient-to-b from-sky-400/95 via-indigo-800/95 to-slate-950/95 relative flex flex-col justify-between p-1 cursor-pointer transition-all ${
+                      reinforceCooldown === 0 && !isAirdropActive
+                        ? 'border-2 border-cyan-200 hover:-translate-y-1 shadow-[0_4px_14px_rgba(56,189,248,0.5)]'
+                        : 'border border-white/30 opacity-75'
+                    }`}
+                    title="WBC Airdrop Strike [T]"
+                  >
+                    <span
+                      className="text-[7px] sm:text-[8px] font-black uppercase text-white leading-none"
+                      style={{ textShadow: '0 1px 2px #000' }}
+                    >
+                      AIR
+                    </span>
+                    <div className="flex items-center justify-center my-auto">
+                      <Plane className="w-4 h-4 sm:w-5 sm:h-5 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]" />
+                    </div>
+                    <span
+                      className="text-[9px] sm:text-[11px] font-black text-white text-right w-full leading-none tabular-nums"
+                      style={{ textShadow: '0 1px 3px #000' }}
+                    >
+                      {isAirdropActive ? 'ON' : reinforceCooldown > 0 ? `${reinforceCooldown}s` : '1'}
+                    </span>
+                  </button>
+                  <span className="px-1.5 py-0.2 rounded bg-slate-950/90 border border-white/25 text-[8px] sm:text-[9px] font-black text-cyan-300 leading-tight">
+                    T
+                  </span>
+                </div>
+              </div>
             </div>
+          </div>
+
+          {/* BOTTOM-EDGE FULL-WIDTH 10-SEGMENT FORTNITE GOLD/YELLOW XP BAR */}
+          <div className="grid grid-cols-10 gap-1 w-full h-1.5 sm:h-2 pt-0.5 pointer-events-none">
+            {Array.from({ length: 10 }).map((_, segIdx) => {
+              const progressPct = Math.max(10, Math.min(100, Math.round(((60 - timeLeft) / 60) * 100)));
+              const segThreshold = (segIdx + 1) * 10;
+              const isFilled = progressPct >= segThreshold || segIdx < 8;
+              return (
+                <div
+                  key={segIdx}
+                  className={`h-full rounded-xs transition-all duration-300 ${
+                    isFilled
+                      ? 'bg-gradient-to-r from-amber-400 to-yellow-300 shadow-[0_0_6px_rgba(250,204,21,0.75)]'
+                      : 'bg-slate-800/80 border border-white/15'
+                  }`}
+                />
+              );
+            })}
           </div>
         </div>
       </div>

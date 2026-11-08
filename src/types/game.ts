@@ -72,6 +72,7 @@ export interface HitMarkerInfo {
   x: number;
   y: number;
   isCritical: boolean;
+  isHeadshot?: boolean;
   damage: number;
   offsetX?: number;
   offsetY?: number;

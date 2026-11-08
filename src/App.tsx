@@ -232,7 +232,7 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-slate-950 text-slate-100 font-tactical select-none">
+    <div className="fixed inset-0 w-full h-full overflow-hidden bg-slate-950 text-slate-100 font-tactical select-none">
       
       {/* 1. TITLE SCREEN */}
       {gameState === 'TITLE' && (
