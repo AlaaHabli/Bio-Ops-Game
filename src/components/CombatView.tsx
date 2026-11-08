@@ -5,6 +5,7 @@ import { sounds } from '../services/soundEffects';
 import { voipManager, OrganVoipClip } from '../services/voipManager';
 import { ORGAN_THEMES, OrganTheme, getOrganThemeForLevel } from '../services/organThemes';
 import { loadSeenConcepts, markConceptAsSeen } from '../services/storage';
+import { WeaponBlockyIcon } from './WeaponBlockyIcon';
 import {
   createStreptococcusSoldier,
   createBacillusSoldier,
@@ -1265,8 +1266,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       blending: THREE.AdditiveBlending,
     });
     const muzzleSprite = new THREE.Mesh(flashGeo, flashMat);
-    muzzleSprite.position.set(0.38, -0.24, -1.05);
-    camera.add(muzzleSprite);
+    muzzleSprite.position.set(0, 0.03, -1.24);
     muzzleSpriteRef.current = muzzleSprite;
 
     // Tactical Black Ops AN/PEQ-15 Dual-Core Laser Sight Beam & Target Lock Ring
@@ -1530,7 +1530,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     activeWeaponSubmeshRef.current = initialWeaponModel.group;
     pumpSlideRef.current = initialWeaponModel.pumpSlide || null;
 
-    fpsGroup.position.set(0.36, -0.34, -0.82);
+    fpsGroup.add(muzzleSprite);
+    fpsGroup.rotation.order = 'YXZ';
+    fpsGroup.position.set(0.34, -0.33, -0.82);
     camera.add(fpsGroup);
     scene.add(camera);
     weaponMeshRef.current = fpsGroup;
@@ -2756,13 +2758,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       raycaster.setFromCamera(hitVector, camera);
 
-      // Spawn a visible 3D Pointed Spitzer Bullet Projectile from playerTracerPool!
+      // Spawn a visible 3D Pointed Spitzer Bullet Projectile from playerTracerPool directly out of the 3D gun barrel!
       {
-        _v1.set(
-          playerPosRef.current.x + (isScopedRef.current ? 0.0 : 0.28),
-          isScopedRef.current ? -0.18 : -0.22,
-          playerPosRef.current.z - 0.85
-        );
+        if (!isScopedRef.current && weaponMeshRef.current) {
+          _v1.set(0, 0.03, -1.24);
+          weaponMeshRef.current.localToWorld(_v1);
+        } else {
+          _v1.set(
+            playerPosRef.current.x,
+            -0.18,
+            playerPosRef.current.z - 0.85
+          );
+        }
         _v2.copy(raycaster.ray.direction).multiplyScalar(42).add(_v1);
         const tracerColor =
           activeWpn.category === 'SNIPER'
@@ -5221,13 +5228,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 6. BLACK OPS AN/PEQ-15 TACTICAL LASER SIGHT TRACKING & TARGET LOCK DETECTION (1:1 Raycast Aligned!)
+      // 6. BLACK OPS AN/PEQ-15 TACTICAL LASER SIGHT TRACKING & TARGET LOCK DETECTION (1:1 Raycast & 3D Barrel Aligned!)
       if (laserLineRef.current && laserDotRef.current) {
-        _v1.set(
-          playerPosRef.current.x + (isScopedRef.current ? 0.0 : 0.34) + aimPosRef.current.x * 0.06,
-          (isScopedRef.current ? -0.52 : -0.26) + aimPosRef.current.y * 0.06,
-          playerPosRef.current.z - 0.85
-        );
+        if (!isScopedRef.current && weaponMeshRef.current) {
+          weaponMeshRef.current.updateMatrixWorld();
+          _v1.set(0.092, 0.04, -0.52);
+          weaponMeshRef.current.localToWorld(_v1);
+        } else {
+          _v1.set(
+            playerPosRef.current.x,
+            -0.52,
+            playerPosRef.current.z - 0.85
+          );
+        }
 
         // Compute exact 3D point along the true crosshair ray so the laser dot sits 100% under the crosshair!
         hitVector.set(isScopedRef.current ? 0 : aimPosRef.current.x, isScopedRef.current ? 0 : aimPosRef.current.y);
@@ -5385,19 +5398,43 @@ export const CombatView: React.FC<CombatViewProps> = ({
           weaponMeshRef.current.visible = false;
         } else {
           weaponMeshRef.current.visible = true;
-          // In hipfire: x = 0.36, y = -0.34, z = -0.82
-          const baseWpnX = 0.36;
-          const baseWpnY = -0.34 + reloadOffsetY;
-          const baseWpnZ = -0.84 + reloadOffsetZ;
+          // Smooth 3D Weapon Aim Tracking: translate and rotate the rifle & hands toward the exact 3D crosshair aim point!
+          const breathBobX = Math.cos(elapsed * 1.8) * 0.004;
+          const breathBobY = Math.sin(elapsed * 2.6) * 0.006;
+          const baseWpnX = 0.34;
+          const baseWpnY = -0.33 + reloadOffsetY;
+          const baseWpnZ = -0.82 + reloadOffsetZ;
 
-          const targetX = baseWpnX - inputX * 0.07 + aimPosRef.current.x * 0.09;
-          const targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimPosRef.current.y * 0.09;
-          const targetRotZ = inputX * 0.1 + reloadRotZ;
-          weaponMeshRef.current.position.x = THREE.MathUtils.damp(weaponMeshRef.current.position.x, targetX, 16, delta);
-          weaponMeshRef.current.position.y = THREE.MathUtils.damp(weaponMeshRef.current.position.y, targetY, 16, delta);
-          weaponMeshRef.current.position.z = THREE.MathUtils.damp(weaponMeshRef.current.position.z, baseWpnZ + recoilRef.current.z, 16, delta);
-          weaponMeshRef.current.rotation.x = THREE.MathUtils.damp(weaponMeshRef.current.rotation.x, 0.04 - recoilRef.current.rotX + reloadRotX, 16, delta);
-          weaponMeshRef.current.rotation.z = THREE.MathUtils.damp(weaponMeshRef.current.rotation.z, targetRotZ, 14, delta);
+          const aimX = aimPosRef.current.x;
+          const aimY = aimPosRef.current.y;
+
+          const targetX = baseWpnX - inputX * 0.06 + aimX * 0.24 + breathBobX;
+          const targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimY * 0.18 + breathBobY;
+          const targetZ = baseWpnZ + recoilRef.current.z - (Math.abs(aimX) + Math.abs(aimY)) * 0.04;
+
+          // Compute exact 3D convergence point in camera space at distance D = 15 so the barrel aims straight at the crosshair
+          const halfTanFov = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+          const aimDist = 15.0;
+          const aimCamX = aimX * aimDist * halfTanFov * camera.aspect;
+          const aimCamY = aimY * aimDist * halfTanFov;
+          const aimCamZ = -aimDist;
+
+          const dx = aimCamX - targetX;
+          const dy = aimCamY - targetY;
+          const dz = aimCamZ - targetZ;
+          const aimYaw = THREE.MathUtils.clamp(Math.atan2(-dx, -dz), -0.68, 0.68);
+          const aimPitch = THREE.MathUtils.clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.52, 0.52);
+
+          const targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX;
+          const targetRotY = aimYaw + (isReloadingRef.current ? 0.22 : 0);
+          const targetRotZ = -aimX * 0.14 + inputX * 0.09 + reloadRotZ;
+
+          weaponMeshRef.current.position.x = THREE.MathUtils.damp(weaponMeshRef.current.position.x, targetX, 22, delta);
+          weaponMeshRef.current.position.y = THREE.MathUtils.damp(weaponMeshRef.current.position.y, targetY, 22, delta);
+          weaponMeshRef.current.position.z = THREE.MathUtils.damp(weaponMeshRef.current.position.z, targetZ, 22, delta);
+          weaponMeshRef.current.rotation.x = THREE.MathUtils.damp(weaponMeshRef.current.rotation.x, targetRotX, 22, delta);
+          weaponMeshRef.current.rotation.y = THREE.MathUtils.damp(weaponMeshRef.current.rotation.y, targetRotY, 22, delta);
+          weaponMeshRef.current.rotation.z = THREE.MathUtils.damp(weaponMeshRef.current.rotation.z, targetRotZ, 18, delta);
         }
       }
 
@@ -6321,26 +6358,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
                           {shortLabel}
                         </span>
 
-                        {/* Center Fortnite Weapon Silhouette Icon */}
-                        <div className="flex items-center justify-center my-auto">
-                          <svg
-                            viewBox="0 0 48 20"
-                            className="w-8 h-3.5 sm:w-10 sm:h-4 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]"
-                            fill="currentColor"
-                          >
-                            {wpn.category === 'ASSAULT' && (
-                              <path d="M2 8h10l3-3h15v2h14v2H32l-2 3h-5v5h-3v-5h-6l-3 5H8l2-5H2V8z" />
-                            )}
-                            {wpn.category === 'SHOTGUN' && (
-                              <path d="M3 9h12l2-2h27v3H28v2H18l-4 5H9l3-6H3V9z" />
-                            )}
-                            {wpn.category === 'SNIPER' && (
-                              <path d="M1 9h11l2-2h6V5h10v2h17v2H30l-2 3h-6v5h-3v-5h-5l-4 5H5l3-6H1V9z" />
-                            )}
-                            {wpn.category === 'MACHINE_GUN' && (
-                              <path d="M6 8h9l2-3h14v3h11v2H31v3a4 4 0 1 1-8 0v-1h-5l-3 5H10l2-5H6V8z" />
-                            )}
-                          </svg>
+                        {/* Center Blocky ("Lego-Style") 3D Weapon Icon */}
+                        <div className="flex items-center justify-center my-auto w-full">
+                          <WeaponBlockyIcon
+                            weaponId={wpn.id}
+                            category={wpn.category}
+                            className="w-9 h-4.5 sm:w-11 sm:h-5.5"
+                          />
                         </div>
 
                         {/* Bottom-Right Ammo Readout inside tile (matches Fortnite "21", "88", "107") */}

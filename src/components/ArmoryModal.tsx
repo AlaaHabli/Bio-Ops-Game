@@ -2,7 +2,8 @@ import React from 'react';
 import { Weapon } from '../types/game';
 import { INITIAL_WEAPONS } from '../data/curriculumData';
 import { sounds } from '../services/soundEffects';
-import { X, Shield, Zap, Target, Gauge } from 'lucide-react';
+import { X, Zap, Target, Gauge } from 'lucide-react';
+import { WeaponBlockyIcon } from './WeaponBlockyIcon';
 
 interface ArmoryModalProps {
   selectedWeaponId: string;
@@ -65,12 +66,21 @@ export const ArmoryModal: React.FC<ArmoryModalProps> = ({
                       </span>
                     )}
                   </div>
-                  <h3 className="text-base font-display font-bold text-white mt-1">
-                    {wpn.name}
-                  </h3>
-                  <p className="text-xs font-mono text-slate-400 mt-1 leading-relaxed">
-                    {wpn.description}
-                  </p>
+                  <div className="my-2.5 py-2 px-3 rounded-md bg-slate-950/85 border border-slate-800 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-display font-bold text-white">
+                        {wpn.name}
+                      </h3>
+                      <p className="text-xs font-mono text-slate-400 mt-0.5 leading-relaxed">
+                        {wpn.description}
+                      </p>
+                    </div>
+                    <WeaponBlockyIcon
+                      weaponId={wpn.id}
+                      category={wpn.category}
+                      className="w-20 h-10 shrink-0"
+                    />
+                  </div>
                 </div>
 
                 {/* Stat Gauges */}

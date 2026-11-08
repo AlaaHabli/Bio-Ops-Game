@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { LevelConfig, Weapon, BiologyConceptCard, HitMarkerInfo } from '../types/game';
 import { BIOLOGY_CONCEPT_CARDS } from '../data/curriculumData';
 import { sounds } from '../services/soundEffects';
+import { WeaponBlockyIcon } from './WeaponBlockyIcon';
 import {
   Crosshair,
   Shield,
@@ -1348,19 +1349,32 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetRotY, 22, dt);
       camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetRotX, 22, dt);
 
-      // 3D Silenced Pistol Scope-In (ADS) & Recoil Recovery
+      // 3D Silenced Pistol Scope-In (ADS), Smooth Crosshair Aim Tracking & Recoil Recovery
       if (stateRef.current.isScoped) {
         // Hide 3D gun mesh while scoped so it never clips into the optic lens as a black box!
         pistolModel.group.visible = false;
       } else {
         pistolModel.group.visible = true;
-        const targetPistolX = 0.35;
-        const targetPistolY = -0.35;
-        const targetPistolZ = -0.85;
-        pistolModel.group.position.x += (targetPistolX - pistolModel.group.position.x) * 0.22;
-        pistolModel.group.position.y += (targetPistolY - pistolModel.group.position.y) * 0.22;
-        pistolModel.group.position.z += (targetPistolZ - pistolModel.group.position.z) * 0.2;
-        pistolModel.slideMesh.position.z += (-0.05 - pistolModel.slideMesh.position.z) * 0.25;
+        const aimX = mouseRef.current.x;
+        const aimY = mouseRef.current.y;
+        const breathBobX = Math.cos(timeCounter * 1.9) * 0.004;
+        const breathBobY = Math.sin(timeCounter * 2.7) * 0.006;
+
+        const targetPistolX = 0.34 - inputX * 0.05 + aimX * 0.18 + breathBobX;
+        const targetPistolY = -0.34 - Math.abs(inputX) * 0.012 + aimY * 0.14 + breathBobY;
+        const targetPistolZ = -0.84 - (Math.abs(aimX) + Math.abs(aimY)) * 0.03;
+
+        const targetPistolRotY = THREE.MathUtils.clamp(-aimX * 0.36, -0.52, 0.52);
+        const targetPistolRotX = THREE.MathUtils.clamp(aimY * 0.28, -0.42, 0.42);
+        const targetPistolRotZ = -aimX * 0.12 + inputX * 0.08;
+
+        pistolModel.group.position.x = THREE.MathUtils.damp(pistolModel.group.position.x, targetPistolX, 22, dt);
+        pistolModel.group.position.y = THREE.MathUtils.damp(pistolModel.group.position.y, targetPistolY, 22, dt);
+        pistolModel.group.position.z = THREE.MathUtils.damp(pistolModel.group.position.z, targetPistolZ, 20, dt);
+        pistolModel.group.rotation.x = THREE.MathUtils.damp(pistolModel.group.rotation.x, targetPistolRotX, 22, dt);
+        pistolModel.group.rotation.y = THREE.MathUtils.damp(pistolModel.group.rotation.y, targetPistolRotY, 22, dt);
+        pistolModel.group.rotation.z = THREE.MathUtils.damp(pistolModel.group.rotation.z, targetPistolRotZ, 18, dt);
+        pistolModel.slideMesh.position.z = THREE.MathUtils.damp(pistolModel.slideMesh.position.z, -0.05, 24, dt);
       }
 
       if (triggerShootRef.current) {
@@ -2420,8 +2434,11 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
                         >
                           {wpn.name.split(' ')[0]}
                         </span>
-                        <div className="flex items-center justify-center my-auto">
-                          <Crosshair className="w-4 h-4 sm:w-5 sm:h-5 text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]" />
+                        <div className="flex items-center justify-center my-auto w-full">
+                          <WeaponBlockyIcon
+                            weaponId={wpn.id}
+                            className="w-9 h-4.5 sm:w-11 sm:h-5.5"
+                          />
                         </div>
                         <span
                           className="text-[9px] sm:text-xs font-black text-white text-right w-full leading-none tabular-nums"
