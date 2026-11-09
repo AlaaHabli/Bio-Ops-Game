@@ -234,12 +234,13 @@ class SoundEffectsService {
     intensity: 'light' | 'medium' | 'heavy' | number = 'medium'
   ): void {
     const nowMs = performance.now();
-    if (nowMs - this.lastHapticTime < 120) return;
+    if (nowMs - this.lastHapticTime < 220) return;
     this.lastHapticTime = nowMs;
 
     try {
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        navigator.vibrate(pattern);
+        const firstVal = Array.isArray(pattern) ? pattern[0] : pattern;
+        navigator.vibrate(Math.min(25, firstVal || 18));
       }
     } catch {
       // ignore if blocked

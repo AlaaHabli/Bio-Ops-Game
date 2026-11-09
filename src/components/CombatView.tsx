@@ -705,6 +705,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const moveInputRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
   const keysDownRef = useRef<Record<string, boolean>>({});
   const currentWeaponRef = useRef<Weapon>(initialWeapon);
+  const weaponSwapAnimRef = useRef<{
+    isSwapping: boolean;
+    phase: 'lowering' | 'raising';
+    progress: number;
+    targetWpn: Weapon | null;
+  }>({
+    isSwapping: false,
+    phase: 'lowering',
+    progress: 0,
+    targetWpn: null,
+  });
+  const lastWheelTimeRef = useRef<number>(0);
   const currentAmmoRef = useRef<number>(initialWeapon.magSize);
   const reserveAmmoRef = useRef<number>(initialWeapon.totalReserve);
   const isReloadingRef = useRef<boolean>(false);
@@ -1130,7 +1142,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   };
   handleAirdropReinforcementsRef.current = handleAirdropReinforcements;
 
-  const handleSelectWeapon = (nextWpn: Weapon) => {
+  const applyWeaponChange = (nextWpn: Weapon) => {
     currentWeaponRef.current = nextWpn;
     currentAmmoRef.current = nextWpn.magSize;
     reserveAmmoRef.current = nextWpn.totalReserve;
@@ -1139,7 +1151,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setReserveAmmo(nextWpn.totalReserve);
     if (onSelectWeapon) onSelectWeapon(nextWpn);
 
-    // If swapping to a weapon without a scope (Shotgun), unscope automatically
     if (!weaponSupportsScope(nextWpn) && isScopedRef.current) {
       isScopedRef.current = false;
       manualScopeLockRef.current = false;
@@ -1147,7 +1158,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       setIsScoped(false);
     }
 
-    // Switch pre-built 3D weapon visibility in 0ms (zero geometry/shader allocation or disposal stutter!)
     const weaponsMap = prebuiltWeaponsRef.current;
     if (weaponsMap && Object.keys(weaponsMap).length > 0) {
       Object.entries(weaponsMap).forEach(([wId, wData]) => {
@@ -1159,20 +1169,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
         pumpSlideRef.current = chosen.pumpSlide || null;
       }
     }
+  };
 
+  const handleSelectWeapon = (nextWpn: Weapon) => {
+    if (nextWpn.id === currentWeaponRef.current.id && !weaponSwapAnimRef.current.isSwapping) {
+      return;
+    }
+    // Kick off smooth 3D lowering phase for weapon swap transition
+    weaponSwapAnimRef.current = {
+      isSwapping: true,
+      phase: 'lowering',
+      progress: 0,
+      targetWpn: nextWpn,
+    };
     sounds.playRadioChirp();
     sounds.triggerHaptic([18, 25], 'medium');
   };
   handleSelectWeaponRef.current = handleSelectWeapon;
 
-  // Quick Weapon Swap (SCAR, Pump Shotgun, Sniper, Drum Machine Gun)
-  const handleSwapWeapon = () => {
+  // Quick Weapon Swap in Circular Loop
+  const handleSwapWeapon = (direction: 'next' | 'prev' = 'next') => {
     const list = availableWeapons && availableWeapons.length > 0 ? availableWeapons : INITIAL_WEAPONS;
     const currentIdx = list.findIndex((w) => w.id === currentWeaponRef.current.id);
-    const nextIdx = (currentIdx + 1) % list.length;
+    const step = direction === 'next' ? 1 : -1;
+    const nextIdx = (currentIdx + step + list.length) % list.length;
     handleSelectWeapon(list[nextIdx]);
   };
-  handleSwapWeaponRef.current = handleSwapWeapon;
+  handleSwapWeaponRef.current = () => handleSwapWeapon('next');
 
   // MAIN THREE.JS SETUP (Runs ONCE on mount!)
   useEffect(() => {
@@ -3309,12 +3332,29 @@ export const CombatView: React.FC<CombatViewProps> = ({
       keysDownRef.current[e.key.toLowerCase()] = false;
     };
 
+    const handleWheel = (e: WheelEvent) => {
+      if (isPausedForConceptRef.current || isGamePausedRef.current) return;
+      e.preventDefault();
+      const now = performance.now();
+      if (now - lastWheelTimeRef.current < 120) return;
+      lastWheelTimeRef.current = now;
+
+      const list = availableWeapons && availableWeapons.length > 0 ? availableWeapons : INITIAL_WEAPONS;
+      const currentIdx = list.findIndex((w) => w.id === currentWeaponRef.current.id);
+      const dir = e.deltaY > 0 ? 1 : -1;
+      const nextIdx = (currentIdx + dir + list.length) % list.length;
+      if (list[nextIdx]) {
+        handleSelectWeapon(list[nextIdx]);
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     container.addEventListener('contextmenu', handleContextMenu);
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    container.addEventListener('wheel', handleWheel, { passive: false });
 
     container.addEventListener('touchstart', handleTouchStart, { passive: false });
     container.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -4530,7 +4570,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             damageBarricade(bar, barMissileDmg, r.mesh.position, true);
             applyBarricadeSplashToPlayer(bar, splashDmg, 'BOSS MISSILE');
             r.mesh.visible = false;
-            rockets.splice(i, 1);
+            rockets[i] = rockets[rockets.length - 1];
+            rockets.pop();
             rocketDetonated = true;
             break;
           }
@@ -4569,14 +4610,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
               }
             }
             r.mesh.visible = false;
-            rockets.splice(i, 1);
+            rockets[i] = rockets[rockets.length - 1];
+            rockets.pop();
             continue;
           }
         }
 
         if (r.mesh.position.z > playerPosRef.current.z + 3.5 || r.life <= 0) {
           r.mesh.visible = false;
-          rockets.splice(i, 1);
+          rockets[i] = rockets[rockets.length - 1];
+          rockets.pop();
         }
       }
 
@@ -4664,11 +4707,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         if (run.group.position.z > 12) {
           releaseBleriotPlane(run.group);
-          activeBleriotRunsRef.current.splice(i, 1);
+          activeBleriotRunsRef.current[i] = activeBleriotRunsRef.current[activeBleriotRunsRef.current.length - 1];
+          activeBleriotRunsRef.current.pop();
         }
       }
 
-      // Animate Falling Mortar Shells & Detonate on Target Barricade with Splash Damage (Less than Barricade Destruction!)
+      // Animate Falling Mortar Shells & Detonate on Target Barricade
       for (let i = activeMortarBombsRef.current.length - 1; i >= 0; i--) {
         const bomb = activeMortarBombsRef.current[i];
         bomb.mesh.position.x += bomb.vx * delta;
@@ -4690,7 +4734,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             applyBarricadeSplashToPlayer(targetBar, mortarPlayerSplashDamage, 'MORTAR SPLASH');
           }
           bomb.mesh.visible = false;
-          activeMortarBombsRef.current.splice(i, 1);
+          activeMortarBombsRef.current[i] = activeMortarBombsRef.current[activeMortarBombsRef.current.length - 1];
+          activeMortarBombsRef.current.pop();
         }
       }
 
@@ -4739,11 +4784,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         if (eDrop.group.position.z > 14) {
           releaseAirdropPlane(eDrop.group);
-          activeEnemyAirdropsRef.current.splice(i, 1);
+          activeEnemyAirdropsRef.current[i] = activeEnemyAirdropsRef.current[activeEnemyAirdropsRef.current.length - 1];
+          activeEnemyAirdropsRef.current.pop();
         }
       }
 
-      // 4c-quater. INTERACTIVE 3D ORGAN ENVIRONMENTAL HAZARDS (Stomach Acid Geysers, Mucus Surge, Bile Jet, Synaptic Arc, Systolic Vortex!)
+      // 4c-quater. INTERACTIVE 3D ORGAN ENVIRONMENTAL HAZARDS
       organHazardScheduleRef.current.forEach((sched, hIdx) => {
         if (!sched.fired && timeLeftRef.current <= sched.triggerTime && timeLeftRef.current > 2) {
           sched.fired = true;
@@ -4837,7 +4883,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
           for (let sIdx = activeSoldiersRef.current.length - 1; sIdx >= 0; sIdx--) {
             const s = activeSoldiersRef.current[sIdx];
             if (Math.abs(s.mesh.position.x - hz.laneX) <= 1.55 && s.mesh.position.z > -22 && s.mesh.position.z < -1.5) {
-              // Mucus / Acid slows pathogen advance and dissolves their outer capsule
               s.mesh.position.z -= s.speed * 0.55 * delta;
               if (nowTime - hz.lastDamageTime >= 600 && !s.isBoss) {
                 s.hp -= 28;
@@ -4851,7 +4896,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
           }
 
-          // Check if player is standing exposed in the hazard lane (bunker cover shields the player!)
           if (nowTime - hz.lastDamageTime >= 650) {
             hz.lastDamageTime = nowTime;
             const playerInHazardLane = Math.abs(playerPosRef.current.x - hz.laneX) <= 1.15;
@@ -4874,7 +4918,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             hz.group.visible = false;
             const poolSlot = hazardPool.find((hp) => hp.group === hz.group);
             if (poolSlot) poolSlot.inUse = false;
-            activeOrganHazardsRef.current.splice(i, 1);
+            activeOrganHazardsRef.current[i] = activeOrganHazardsRef.current[activeOrganHazardsRef.current.length - 1];
+            activeOrganHazardsRef.current.pop();
           }
         }
       }
@@ -5447,6 +5492,38 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         }
 
+        let swapOffsetY = 0;
+        let swapRotX = 0;
+
+        if (weaponSwapAnimRef.current.isSwapping) {
+          const anim = weaponSwapAnimRef.current;
+          const speed = delta * 15.0;
+          if (anim.phase === 'lowering') {
+            anim.progress += speed;
+            const t = Math.min(1, anim.progress);
+            const easeDown = t * t;
+            swapOffsetY = -0.58 * easeDown;
+            swapRotX = -0.42 * easeDown;
+
+            if (t >= 1.0 && anim.targetWpn) {
+              applyWeaponChange(anim.targetWpn);
+              anim.phase = 'raising';
+              anim.progress = 0;
+            }
+          } else if (anim.phase === 'raising') {
+            anim.progress += speed;
+            const t = Math.min(1, anim.progress);
+            const easeUp = 1 - (1 - t) * (1 - t);
+            swapOffsetY = -0.58 * (1 - easeUp);
+            swapRotX = -0.42 * (1 - easeUp);
+
+            if (t >= 1.0) {
+              anim.isSwapping = false;
+              anim.targetWpn = null;
+            }
+          }
+        }
+
         const scopedNow = isScopedRef.current && !isReloadingRef.current && currentWeaponRef.current.category !== 'SHOTGUN';
 
         // Keep 3D weapon ALWAYS VISIBLE in both Hipfire and ADS Scope!
@@ -5477,16 +5554,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
           // 3D Black Ops scope on the top rail (local y = 0.23) aligns at -0.23 + 0.23 = 0.0 (DEAD CENTER of screen!)
           const baseAdY = -0.23;
           targetX = breathBobX * 0.25;
-          targetY = baseAdY + breathBobY * 0.25 + reloadOffsetY;
+          targetY = baseAdY + breathBobY * 0.25 + reloadOffsetY + swapOffsetY;
           targetZ = -0.54 + recoilRef.current.z * 1.4 + reloadOffsetZ;
 
-          targetRotX = 0.01 - recoilRef.current.rotX * 1.2 + reloadRotX;
+          targetRotX = 0.01 - recoilRef.current.rotX * 1.2 + reloadRotX + swapRotX;
           targetRotY = (isReloadingRef.current ? 0.22 : 0);
           targetRotZ = reloadRotZ;
         } else {
           // Hipfire stance: Held down-right with natural operator sway
           const baseWpnX = 0.34;
-          const baseWpnY = -0.33 + reloadOffsetY;
+          const baseWpnY = -0.33 + reloadOffsetY + swapOffsetY;
           const baseWpnZ = -0.82 + reloadOffsetZ;
 
           targetX = baseWpnX - inputX * 0.06 + aimX * 0.24 + breathBobX;
@@ -5499,7 +5576,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const aimYaw = THREE.MathUtils.clamp(Math.atan2(-dx, -dz), -0.68, 0.68);
           const aimPitch = THREE.MathUtils.clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.52, 0.52);
 
-          targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX;
+          targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX + swapRotX;
           targetRotY = aimYaw + (isReloadingRef.current ? 0.22 : 0);
           targetRotZ = -aimX * 0.14 + inputX * 0.09 + reloadRotZ;
         }

@@ -177,8 +177,15 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
   const [isReloading, setIsReloading] = useState(false);
   const [isScoped, setIsScoped] = useState(false);
 
-  const handleSwapSpyWeapon = (idx?: number) => {
-    const nextIdx = typeof idx === 'number' ? idx : (activeSpyWeaponIdx + 1) % SPY_WEAPONS.length;
+  const handleSwapSpyWeapon = (target?: number | 'next' | 'prev') => {
+    let nextIdx = 0;
+    if (typeof target === 'number') {
+      nextIdx = (target + SPY_WEAPONS.length) % SPY_WEAPONS.length;
+    } else if (target === 'prev') {
+      nextIdx = (activeSpyWeaponIdx - 1 + SPY_WEAPONS.length) % SPY_WEAPONS.length;
+    } else {
+      nextIdx = (activeSpyWeaponIdx + 1) % SPY_WEAPONS.length;
+    }
     const nextW = SPY_WEAPONS[nextIdx];
     setActiveSpyWeaponIdx(nextIdx);
     setMaxAmmo(nextW.magSize);
@@ -186,7 +193,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     sounds.playRadioChirp();
     sounds.triggerHaptic([16, 22], 0.6);
   };
-  const handleSwapSpyWeaponRef = useRef<((idx?: number) => void) | null>(null);
+  const handleSwapSpyWeaponRef = useRef<((target?: number | 'next' | 'prev') => void) | null>(null);
   handleSwapSpyWeaponRef.current = handleSwapSpyWeapon;
 
   // Stealth & Infiltration states
@@ -1411,6 +1418,18 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
 
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
 
+    let lastSpyWheelTime = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (isConceptModalOpenRef.current || isGamePausedRef.current) return;
+      e.preventDefault();
+      const now = performance.now();
+      if (now - lastSpyWheelTime < 120) return;
+      lastSpyWheelTime = now;
+
+      const dir = e.deltaY > 0 ? 'next' : 'prev';
+      handleSwapSpyWeaponRef.current?.(dir);
+    };
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     const domElem = renderer.domElement;
@@ -1418,6 +1437,7 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
     domElem.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     domElem.addEventListener('contextmenu', onContextMenu);
+    container.addEventListener('wheel', onWheel, { passive: false });
     container.addEventListener('touchstart', handleTouchStart, { passive: false });
     container.addEventListener('touchmove', handleTouchMove, { passive: false });
     window.addEventListener('touchend', handleTouchEnd);
