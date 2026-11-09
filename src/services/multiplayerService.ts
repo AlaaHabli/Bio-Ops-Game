@@ -30,6 +30,7 @@ export interface LiveArenaPlayer {
   isReady: boolean;
   shotSeq: number;
   grenadeSeq: number;
+  isCrouched?: boolean;
   lastHitByName?: string;
   lastHitWeapon?: string;
   lastHitDamage?: number;
@@ -136,9 +137,9 @@ export async function joinDeathmatchRoom(
   const className = (profile?.className || 'Science Unit').trim().slice(0, 32) || 'Science Unit';
   const now = Date.now();
 
-  // Randomize initial lateral lane so joining students don't stack on the exact same X coordinate
-  const spawnX = Number(((Math.random() - 0.5) * 5.2).toFixed(2));
-  const spawnZ = Number(((Math.random() - 0.5) * 2.4).toFixed(2));
+  // Randomize initial spawn coordinates across the wide 20-player Alveoli Arena so joining students never stack
+  const spawnX = Number(((Math.random() - 0.5) * 18.0).toFixed(2));
+  const spawnZ = Number(((Math.random() - 0.5) * 10.0).toFixed(2));
 
   const initialPlayer: LiveArenaPlayer = {
     playerId,
@@ -192,18 +193,38 @@ export async function joinDeathmatchRoom(
   return { roomCode, playerId, initialPlayer };
 }
 
+let lastFirestoreSyncAt = 0;
+let lastFirestoreShotSeq = -1;
+let lastFirestoreStatus = '';
+let lastFirestoreKills = -1;
+
 export async function syncLocalPlayerState(
   rawRoomCode: string,
   playerState: LiveArenaPlayer
 ): Promise<void> {
   const roomCode = sanitizeRoomCode(rawRoomCode);
+  const now = Date.now();
   const updated: LiveArenaPlayer = {
     ...playerState,
-    lastPing: Date.now(),
+    lastPing: now,
   };
 
   // Immediate 0ms broadcast to local tabs
   getBus(roomCode).post({ type: 'PLAYER_STATE', player: updated });
+
+  // Throttle cloud Firestore writes to ~500ms unless shotSeq, status, or kills changed (prevents Firestore rate-limit stalls!)
+  const importantChange =
+    playerState.shotSeq !== lastFirestoreShotSeq ||
+    playerState.status !== lastFirestoreStatus ||
+    playerState.kills !== lastFirestoreKills;
+
+  if (!importantChange && now - lastFirestoreSyncAt < 500) {
+    return;
+  }
+  lastFirestoreSyncAt = now;
+  lastFirestoreShotSeq = playerState.shotSeq;
+  lastFirestoreStatus = playerState.status;
+  lastFirestoreKills = playerState.kills;
 
   try {
     const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerState.playerId);

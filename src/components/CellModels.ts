@@ -6148,12 +6148,12 @@ export function createOpenLungAlveoliLandscape(): {
   }
   const skyTex = new THREE.CanvasTexture(skyCanvas);
   const skyDome = new THREE.Mesh(
-    new THREE.SphereGeometry(92, 24, 16),
+    new THREE.SphereGeometry(148, 24, 16),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false })
   );
   group.add(skyDome);
 
-  // 2. Expansive Open Lung Parenchyma Floor with Capillary Vascular Network & Surfactant Grid
+  // 2. Expansive 280x280 Open Lung Parenchyma Floor with Capillary Vascular Network & Surfactant Grid (Fits 20+ Operatives!)
   const floorCanvas = document.createElement('canvas');
   floorCanvas.width = 512;
   floorCanvas.height = 512;
@@ -6214,21 +6214,21 @@ export function createOpenLungAlveoliLandscape(): {
   const floorTex = new THREE.CanvasTexture(floorCanvas);
   floorTex.wrapS = THREE.RepeatWrapping;
   floorTex.wrapT = THREE.RepeatWrapping;
-  floorTex.repeat.set(10, 10);
+  floorTex.repeat.set(16, 16);
 
-  const floorGeo = new THREE.PlaneGeometry(160, 160, 36, 36);
+  const floorGeo = new THREE.PlaneGeometry(280, 280, 44, 44);
   floorGeo.rotateX(-Math.PI / 2);
-  // Subtle natural undulating pleural terrain hills around the outer perimeter while keeping the central combat floor smooth
+  // Wide, flat 90m+ central combat basin so 20 players can walk, sprint & crouch smoothly, surrounded by outer pleural hills
   const posAttr = floorGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < posAttr.count; i++) {
     const vx = posAttr.getX(i);
     const vz = posAttr.getZ(i);
-    const distFromArenaCenter = Math.hypot(vx, vz + 11);
+    const distFromArenaCenter = Math.hypot(vx, vz + 20);
     const outerRidge =
-      distFromArenaCenter > 22
-        ? Math.min(7.5, (distFromArenaCenter - 22) * 0.22) *
-          (0.65 + 0.35 * Math.sin(vx * 0.18) * Math.cos(vz * 0.18))
-        : Math.sin(vx * 0.25) * Math.cos(vz * 0.25) * 0.14;
+      distFromArenaCenter > 46
+        ? Math.min(11.0, (distFromArenaCenter - 46) * 0.22) *
+          (0.65 + 0.35 * Math.sin(vx * 0.12) * Math.cos(vz * 0.12))
+        : Math.sin(vx * 0.16) * Math.cos(vz * 0.16) * 0.1;
     posAttr.setY(i, outerRidge);
   }
   floorGeo.computeVertexNormals();
@@ -6240,22 +6240,32 @@ export function createOpenLungAlveoliLandscape(): {
     metalness: 0.08,
   });
   const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-  floorMesh.position.set(0, -1.72, -11);
+  floorMesh.position.set(0, -1.72, -20);
   group.add(floorMesh);
 
-  // 3. Glowing Arena Center Gas-Exchange Ring Landmark (Marks the center of the Battle Royale Alveoli Arena at z = -11)
-  const centerRing = new THREE.Mesh(
-    new THREE.RingGeometry(4.2, 4.55, 36),
-    new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.42,
-      side: THREE.DoubleSide,
-    })
-  );
-  centerRing.rotation.x = -Math.PI / 2;
-  centerRing.position.set(0, -1.58, -11);
-  group.add(centerRing);
+  // 3. Glowing Pulmonary Gas-Exchange Sector Rings across the Wide 20-Player Landscape
+  const sectorRingCoords: Array<[number, number, number, number]> = [
+    [0, -18, 6.2, 0x38bdf8],
+    [-18, -28, 4.5, 0xf43f5e],
+    [18, -28, 4.5, 0xf43f5e],
+    [-16, -6, 4.2, 0x22d3ee],
+    [16, -6, 4.2, 0x22d3ee],
+    [0, -42, 5.2, 0xa855f7],
+  ];
+  sectorRingCoords.forEach(([rx, rz, rad, col]) => {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(rad, rad + 0.42, 36),
+      new THREE.MeshBasicMaterial({
+        color: col,
+        transparent: true,
+        opacity: 0.38,
+        side: THREE.DoubleSide,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(rx, -1.58, rz);
+    group.add(ring);
+  });
 
   // 4. Shared Materials for Grape-Like Alveolar Sac Clusters & Capillary Beds
   const alveolusPinkMat = createFastLitMaterial({
@@ -6306,7 +6316,7 @@ export function createOpenLungAlveoliLandscape(): {
 
   const sacSphereGeo = new THREE.SphereGeometry(1.0, 14, 14);
   const capillaryRingGeo = new THREE.TorusGeometry(1.03, 0.075, 7, 20);
-  const gasOrbGeo = new THREE.SphereGeometry(0.18, 8, 8);
+  const gasOrbGeo = new THREE.SphereGeometry(0.22, 8, 8);
 
   // Helper to build a 3D Grape-like Alveolar Sac Cluster with Bronchiole Duct & Capillary Network
   const buildAlveolarCluster = (cx: number, cy: number, cz: number, scale: number, seed: number) => {
@@ -6374,7 +6384,7 @@ export function createOpenLungAlveoliLandscape(): {
     // Floating O2 / CO2 Gas Exchange Orbs rising around the Alveolar Cluster
     const orb = new THREE.Mesh(gasOrbGeo, seed % 2 === 0 ? o2OrbMat : co2OrbMat);
     const orbY = cy + stemHeight + 1.2 * scale;
-    orb.position.set(cx + (Math.sin(seed) * 0.8), orbY, cz + (Math.cos(seed) * 0.8));
+    orb.position.set(cx + Math.sin(seed) * 0.8, orbY, cz + Math.cos(seed) * 0.8);
     group.add(orb);
     gasParticles.push({
       mesh: orb,
@@ -6384,49 +6394,56 @@ export function createOpenLungAlveoliLandscape(): {
     });
   };
 
-  // Place 20 Alveolar Sac Clusters all around the Open Lung Landscape
-  // (Flanks, Horizon, Rear & Mid-Field Landmarks — ZERO sandbag barricades!)
+  // Place 28 Giant Alveolar Sac Clusters across the wide 20-Player Open Lung Landscape
   const clusterPlacements: Array<[number, number, number, number]> = [
-    // Mid-field left & right alveolar clusters
-    [-11.5, -1.7, -5.5, 1.15],
-    [11.5, -1.7, -5.5, 1.15],
-    [-13.5, -1.7, -14.5, 1.3],
-    [13.5, -1.7, -14.5, 1.3],
-    [-10.5, -1.7, -23.5, 1.2],
-    [10.5, -1.7, -23.5, 1.2],
-    // Outer flank giant alveolar sacs
-    [-21.0, -1.2, -2.0, 1.65],
-    [21.0, -1.2, -2.0, 1.65],
-    [-23.5, -1.0, -12.0, 1.85],
-    [23.5, -1.0, -12.0, 1.85],
-    [-22.0, -1.1, -24.0, 1.75],
-    [22.0, -1.1, -24.0, 1.75],
-    [-19.5, -1.2, 6.5, 1.55],
-    [19.5, -1.2, 6.5, 1.55],
-    // Distant forward horizon alveolar clusters
-    [-14.0, -1.2, -35.0, 1.7],
-    [0.0, -1.3, -38.0, 1.95],
-    [14.0, -1.2, -35.0, 1.7],
-    [-25.0, -0.8, -36.0, 2.1],
-    [25.0, -0.8, -36.0, 2.1],
-    // Rear horizon alveolar clusters
-    [0.0, -1.3, 14.5, 1.75],
+    // Inner-Flank Landmarks across the wide combat basin
+    [-19.5, -1.7, -4.0, 1.35],
+    [19.5, -1.7, -4.0, 1.35],
+    [-22.5, -1.7, -18.0, 1.45],
+    [22.5, -1.7, -18.0, 1.45],
+    [-20.5, -1.7, -34.0, 1.4],
+    [20.5, -1.7, -34.0, 1.4],
+    [-18.0, -1.7, -48.0, 1.45],
+    [18.0, -1.7, -48.0, 1.45],
+    [-16.0, -1.7, 10.0, 1.3],
+    [16.0, -1.7, 10.0, 1.3],
+    // Wide Outer-Wing Alveolar Sacs (X = ±34 to ±46)
+    [-36.0, -1.2, 6.0, 1.85],
+    [36.0, -1.2, 6.0, 1.85],
+    [-39.0, -1.0, -10.0, 2.05],
+    [39.0, -1.0, -10.0, 2.05],
+    [-42.0, -0.9, -26.0, 2.15],
+    [42.0, -0.9, -26.0, 2.15],
+    [-38.0, -1.0, -44.0, 2.0],
+    [38.0, -1.0, -44.0, 2.0],
+    // Forward Horizon Giant Alveolar Clusters (Z = -60 to -74)
+    [-28.0, -0.9, -62.0, 2.2],
+    [-12.0, -1.1, -66.0, 2.1],
+    [0.0, -1.1, -70.0, 2.35],
+    [12.0, -1.1, -66.0, 2.1],
+    [28.0, -0.9, -62.0, 2.2],
+    // Rear Horizon Giant Alveolar Clusters (Z = +20 to +28)
+    [-24.0, -1.1, 22.0, 1.9],
+    [-8.0, -1.2, 25.0, 1.85],
+    [8.0, -1.2, 25.0, 1.85],
+    [24.0, -1.1, 22.0, 1.9],
+    [0.0, -1.1, 28.0, 2.1],
   ];
 
   clusterPlacements.forEach(([x, y, z, sc], idx) => {
     buildAlveolarCluster(x, y, z, sc, idx + 1);
   });
 
-  // 5. Overhead Bronchial Cartilage Arches & Pulmonary Capillary Bridges spanning the Open Sky
+  // 5. Grand Overhead Bronchial Cartilage Arches spanning the Wide 20-Player Basin
   const archMat = createFastLitMaterial({
     color: 0xfda4af,
     emissive: 0x9f1239,
     emissiveIntensity: 0.2,
     roughness: 0.5,
   });
-  [-18, -4, -30].forEach((az, aIdx) => {
+  [-48, -26, -6, 14].forEach((az, aIdx) => {
     const arch = new THREE.Mesh(
-      new THREE.TorusGeometry(28 + aIdx * 3, 0.65, 8, 32, Math.PI),
+      new THREE.TorusGeometry(54 + (aIdx % 2) * 5, 0.85, 8, 36, Math.PI),
       archMat
     );
     arch.position.set(0, -1.5, az);
@@ -6435,5 +6452,172 @@ export function createOpenLungAlveoliLandscape(): {
 
   return { group, breathingSacs, gasParticles };
 }
+
+// ============================================================================
+// DESTRUCTIBLE ANATOMICAL COVER CLUSTER FOR MULTIPLAYER OPEN-WORLD DEATHMATCH
+// Students can hide & crouch behind these biological structures (Alveolar Coral
+// Septum Wall, Hyaline Cartilage Ring Barrier, or Fibrin-Platelet Clot Cluster)
+// to block enemy gunfire — and they can be damaged, shattered, and regrown!
+// ============================================================================
+export function createAnatomicalCoverCluster(variantIndex: number = 0): {
+  group: THREE.Group;
+  hpBarFill: THREE.Mesh;
+  bounds: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
+} {
+  const group = new THREE.Group();
+  const variant = variantIndex % 3;
+
+  if (variant === 0) {
+    // Variant 0: Alveolar Coral Septum & Capillary Barrier Wall
+    const septumMat = createFastLitMaterial({
+      color: 0xfb7185,
+      emissive: 0xbe123c,
+      emissiveIntensity: 0.25,
+      roughness: 0.4,
+    });
+    const capRedMat = createFastLitMaterial({
+      color: 0xef4444,
+      emissive: 0xdc2626,
+      emissiveIntensity: 0.4,
+    });
+    const capBlueMat = createFastLitMaterial({
+      color: 0x3b82f6,
+      emissive: 0x2563eb,
+      emissiveIntensity: 0.4,
+    });
+
+    // Organic lobed alveolar wall pods
+    const podPositions: Array<[number, number, number, number, number, number]> = [
+      [-0.95, -0.15, 0, 0.72, 0.95, 0.55],
+      [-0.32, -0.05, 0.08, 0.78, 1.12, 0.58],
+      [0.35, -0.08, -0.06, 0.76, 1.08, 0.58],
+      [0.98, -0.18, 0.04, 0.7, 0.92, 0.54],
+      [-0.62, 0.35, 0, 0.58, 0.65, 0.48],
+      [0.62, 0.32, 0, 0.58, 0.65, 0.48],
+    ];
+    const sphereGeo = new THREE.SphereGeometry(1, 12, 10);
+    podPositions.forEach(([px, py, pz, sx, sy, sz], idx) => {
+      const pod = new THREE.Mesh(sphereGeo, septumMat);
+      pod.position.set(px, py, pz);
+      pod.scale.set(sx, sy, sz);
+      group.add(pod);
+
+      const vein = new THREE.Mesh(
+        new THREE.TorusGeometry(0.58, 0.065, 6, 16),
+        idx % 2 === 0 ? capRedMat : capBlueMat
+      );
+      vein.position.set(px, py, pz);
+      vein.rotation.set(idx * 0.5, idx * 0.8, 0.3);
+      group.add(vein);
+    });
+  } else if (variant === 1) {
+    // Variant 1: Hyaline Bronchial Cartilage Ridge & Surfactant Nodes
+    const cartilageMat = createFastLitMaterial({
+      color: 0xe0f2fe,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.24,
+      roughness: 0.32,
+    });
+    const mucosaMat = createFastLitMaterial({
+      color: 0xf472b6,
+      emissive: 0x9d174d,
+      emissiveIntensity: 0.25,
+    });
+
+    // 3 interlocking curved hyaline cartilage plates
+    [-0.78, 0, 0.78].forEach((cx, idx) => {
+      const arch = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.52, 0.64, 1.38, 12),
+        cartilageMat
+      );
+      arch.position.set(cx, -0.05 + (idx === 1 ? 0.12 : 0), (idx % 2 === 0 ? 1 : -1) * 0.06);
+      arch.rotation.z = (cx < 0 ? 1 : cx > 0 ? -1 : 0) * 0.12;
+      group.add(arch);
+
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.56, 0.08, 7, 16),
+        mucosaMat
+      );
+      band.rotation.x = Math.PI / 2;
+      band.position.set(cx, 0.15, 0);
+      group.add(band);
+    });
+  } else {
+    // Variant 2: Coagulated Fibrin Meshwork & Activated Platelet Bio-Shield Mound
+    const plateletMat = createFastLitMaterial({
+      color: 0xfde047,
+      emissive: 0xca8a04,
+      emissiveIntensity: 0.28,
+    });
+    const rbcClotMat = createFastLitMaterial({
+      color: 0xe11d48,
+      emissive: 0x881337,
+      emissiveIntensity: 0.3,
+    });
+    const fibrinStrandMat = createFastLitMaterial({
+      color: 0xfef08a,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.32,
+    });
+
+    const clotNodes: Array<[number, number, number, number, boolean]> = [
+      [-0.88, -0.18, 0.05, 0.62, false],
+      [-0.28, 0.05, -0.05, 0.72, true],
+      [0.32, 0.02, 0.06, 0.7, false],
+      [0.92, -0.16, -0.04, 0.62, true],
+      [0, 0.38, 0, 0.56, true],
+    ];
+    const nodeGeo = new THREE.DodecahedronGeometry(1, 1);
+    clotNodes.forEach(([nx, ny, nz, rad, isPlt]) => {
+      const node = new THREE.Mesh(nodeGeo, isPlt ? plateletMat : rbcClotMat);
+      node.position.set(nx, ny, nz);
+      node.scale.set(rad * 1.15, rad * 0.95, rad * 0.75);
+      group.add(node);
+    });
+
+    // Cross-linked golden fibrin strands wrapping the cover mound
+    for (let s = 0; s < 4; s++) {
+      const strand = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.055, 0.055, 2.45, 6),
+        fibrinStrandMat
+      );
+      strand.rotation.z = Math.PI / 2 + (s - 1.5) * 0.16;
+      strand.position.set(0, -0.15 + s * 0.18, 0.38);
+      group.add(strand);
+    }
+  }
+
+  // Floating 3D Bio-Cover Integrity Bar above the anatomical structure
+  const hpBarGroup = new THREE.Group();
+  hpBarGroup.position.set(0, 0.98, 0);
+
+  const hpBg = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.48, 0.13),
+    new THREE.MeshBasicMaterial({ color: 0x09090b, side: THREE.DoubleSide })
+  );
+  hpBarGroup.add(hpBg);
+
+  const hpBarFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.38, 0.085),
+    new THREE.MeshBasicMaterial({ color: 0x10b981, side: THREE.DoubleSide })
+  );
+  hpBarFill.position.z = 0.01;
+  hpBarGroup.add(hpBarFill);
+  group.add(hpBarGroup);
+
+  return {
+    group,
+    hpBarFill,
+    bounds: {
+      minX: -1.48,
+      maxX: 1.48,
+      minY: -0.75,
+      maxY: 0.95,
+      minZ: -0.68,
+      maxZ: 0.68,
+    },
+  };
+}
+
 
 

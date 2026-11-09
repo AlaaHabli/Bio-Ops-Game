@@ -37,6 +37,7 @@ import {
   createMultiplayerStudentOperator,
   updateStudentOperatorBadge,
   createOpenLungAlveoliLandscape,
+  createAnatomicalCoverCluster,
   disposeSceneGraph,
 } from './CellModels';
 import {
@@ -418,8 +419,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const localShotSeqRef = useRef<number>(0);
   const localGrenadeSeqRef = useRef<number>(0);
   const remoteShotSeqProcessedRef = useRef<Record<string, number>>({});
+  const prevMpPlayersKeyRef = useRef<string>('');
   const triggerMpEliminatedStateRef = useRef<((killerName?: string, weaponName?: string) => void) | null>(null);
   const triggerMpStunFreezeStateRef = useRef<(() => void) | null>(null);
+
+  // Multiplayer Crouch [Ctrl] & Sprint [Shift] with Refillable ATP Energy Bar (Must refill to 100% when depleted!)
+  const [isCrouching, setIsCrouching] = useState<boolean>(false);
+  const isCrouchingRef = useRef<boolean>(false);
+  const crouchToggleRef = useRef<boolean>(false);
+  const crouchCameraYRef = useRef<number>(0);
+
+  const [isSprinting, setIsSprinting] = useState<boolean>(false);
+  const isSprintingRef = useRef<boolean>(false);
+  const sprintToggleRef = useRef<boolean>(false);
+  const [isSprintExhausted, setIsSprintExhausted] = useState<boolean>(false);
+  const isSprintExhaustedRef = useRef<boolean>(false);
+  const sprintEnergyRef = useRef<number>(100);
+  const sprintBarFillDomRef = useRef<HTMLDivElement | null>(null);
+  const sprintBarTextDomRef = useRef<HTMLSpanElement | null>(null);
 
   // Stage-relative level number (1 to 5) so adding new grades/missions never inflates difficulty
   const stageLevels = CURRICULUM_LEVELS.filter((l) => l.stage === level.stage && !l.isSecret);
@@ -1157,20 +1174,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const prof = loadStudentProfile();
     const myId = localMpPlayerIdRef.current;
 
-    joinDeathmatchRoom(multiplayerRoomCode, prof, currentWeaponRef.current.id, mpStatusRef.current).then(
-      ({ initialPlayer }) => {
-        playerPosRef.current.x = Math.max(-14.0, Math.min(14.0, initialPlayer.x));
-        playerPosRef.current.z = Math.max(-22.0, Math.min(5.0, initialPlayer.z));
-      }
-    );
+      joinDeathmatchRoom(multiplayerRoomCode, prof, currentWeaponRef.current.id, mpStatusRef.current).then(
+        ({ initialPlayer }) => {
+          playerPosRef.current.x = Math.max(-28.0, Math.min(28.0, initialPlayer.x));
+          playerPosRef.current.z = Math.max(-42.0, Math.min(10.0, initialPlayer.z));
+        }
+      );
 
-    const unsub = subscribeToDeathmatchRoom(
-      multiplayerRoomCode,
-      myId,
-      (players) => {
-        mpOnlinePlayersRef.current = players;
-        setMpOnlinePlayers(players);
-      },
+      const unsub = subscribeToDeathmatchRoom(
+        multiplayerRoomCode,
+        myId,
+        (players) => {
+          mpOnlinePlayersRef.current = players;
+          const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
+          if (nextKey !== prevMpPlayersKeyRef.current) {
+            prevMpPlayersKeyRef.current = nextKey;
+            setMpOnlinePlayers(players);
+          }
+        },
       (hit) => {
         if (mpStatusRef.current !== 'active') return;
         const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
@@ -1209,6 +1230,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         isReady: true,
         shotSeq: localShotSeqRef.current,
         grenadeSeq: localGrenadeSeqRef.current,
+        isCrouched: isCrouchingRef.current,
         lastPing: Date.now(),
       });
     }, 120);
@@ -1580,7 +1602,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
     scene.fog = new THREE.FogExp2(organTheme.fogColor, 0.012);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.05, 140);
+    const camera = new THREE.PerspectiveCamera(
+      65,
+      container.clientWidth / container.clientHeight,
+      0.05,
+      isMultiplayerDeathmatch ? 230 : 140
+    );
     camera.rotation.order = 'YXZ';
     camera.position.set(0, 0, 0);
     cameraRef.current = camera;
@@ -1704,9 +1731,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const particleGeo = new THREE.BufferGeometry();
     const particlePositions = new Float32Array(particleCount * 3);
     for (let i = 0; i < particleCount * 3; i += 3) {
-      particlePositions[i] = (Math.random() - 0.5) * (isMultiplayerDeathmatch ? 48 : 18);
+      particlePositions[i] = (Math.random() - 0.5) * (isMultiplayerDeathmatch ? 84 : 18);
       particlePositions[i + 1] = (Math.random() - 0.5) * 16;
-      particlePositions[i + 2] = isMultiplayerDeathmatch ? 12 - Math.random() * 68 : -Math.random() * 90;
+      particlePositions[i + 2] = isMultiplayerDeathmatch ? 18 - Math.random() * 88 : -Math.random() * 90;
     }
     particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
     const particleCircleTex = (() => {
@@ -1773,10 +1800,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
 
       if (isMultiplayerDeathmatch) {
-        // OPEN-WORLD PULMONARY LUNG & ALVEOLI BATTLE ROYALE LANDSCAPE!
+        // OPEN-WORLD PULMONARY LUNG & ALVEOLI 20-PLAYER BATTLE ROYALE LANDSCAPE!
         wallMesh.visible = false;
         scene.background = new THREE.Color(0x1b0d24);
-        scene.fog = new THREE.FogExp2(0x1b0d24, 0.0085);
+        scene.fog = new THREE.FogExp2(0x1b0d24, 0.0042);
         ambientLight.color.setHex(0xfda4af);
         keyLight.color.setHex(0xffe4e6);
         particleMat.color.setHex(0x38bdf8);
@@ -1963,7 +1990,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     weaponMeshRef.current = fpsGroup;
     fpsGroupRef.current = fpsGroup;
 
-    // 8. TACTICAL SANDBAG BARRICADES (Solo Mode ONLY — Zero Barricades in Open-World Multiplayer Deathmatch!)
+    // 8. TACTICAL SANDBAG BARRICADES (Solo Mode) & DESTRUCTIBLE ANATOMICAL BIO-COVER STRUCTURES (Multiplayer 20-Player Arena)
     barricadesRef.current = [];
     if (!isMultiplayerDeathmatch) {
       const barricadeConfigs = [
@@ -1985,6 +2012,37 @@ export const CombatView: React.FC<CombatViewProps> = ({
           maxHp: 70,
           respawnTimer: 0,
           bounds: bObj.bounds,
+        });
+      });
+    } else {
+      // 10 Destructible Anatomical Cover Structures across the wide 20-player Lung & Alveoli Landscape
+      // (Variants: 0 = Alveolar Coral Septum Wall, 1 = Hyaline Cartilage Ridge, 2 = Coagulated Fibrin-Platelet Mound)
+      const anatomicalCoverConfigs = [
+        { x: -13.5, y: -0.92, z: -4.2 },
+        { x: 0, y: -0.92, z: -3.8 },
+        { x: 13.5, y: -0.92, z: -4.2 },
+        { x: -22.5, y: -0.92, z: -13.5 },
+        { x: -7.5, y: -0.92, z: -12.5 },
+        { x: 7.5, y: -0.92, z: -12.5 },
+        { x: 22.5, y: -0.92, z: -13.5 },
+        { x: -15.5, y: -0.92, z: -24.0 },
+        { x: 0, y: -0.92, z: -23.0 },
+        { x: 15.5, y: -0.92, z: -24.0 },
+      ];
+      anatomicalCoverConfigs.forEach((cfg, idx) => {
+        const bioCover = createAnatomicalCoverCluster(idx);
+        bioCover.group.position.set(cfg.x, cfg.y, cfg.z);
+        scene.add(bioCover.group);
+        barricadesRef.current.push({
+          group: bioCover.group,
+          hpBarFill: bioCover.hpBarFill,
+          x: cfg.x,
+          y: cfg.y,
+          z: cfg.z,
+          hp: 95,
+          maxHp: 95,
+          respawnTimer: 0,
+          bounds: bioCover.bounds,
         });
       });
     }
@@ -2220,10 +2278,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     }
 
-    // Pre-allocate Generous Fixed Enemy Object Pool (8 Strep Troopers, 6 Bacillus Heavy Gunners, 4 Heavy Tanks — zero mid-combat allocations!)
-    for (let i = 0; i < 8; i++) allocateEnemyPoolSlot('strep');
-    for (let i = 0; i < 6; i++) allocateEnemyPoolSlot('bacillus');
-    for (let i = 0; i < 4; i++) allocateEnemyPoolSlot('tank');
+    // Pre-allocate Generous Fixed Enemy Object Pool (In Multiplayer, pre-allocate 24 Strep + 12 Bacillus so up to 20 real human players have dedicated meshes with zero pool collisions!)
+    const strepPoolCount = isMultiplayerDeathmatch ? 24 : 8;
+    const bacillusPoolCount = isMultiplayerDeathmatch ? 12 : 6;
+    const tankPoolCount = isMultiplayerDeathmatch ? 0 : 4;
+    for (let i = 0; i < strepPoolCount; i++) allocateEnemyPoolSlot('strep');
+    for (let i = 0; i < bacillusPoolCount; i++) allocateEnemyPoolSlot('bacillus');
+    for (let i = 0; i < tankPoolCount; i++) allocateEnemyPoolSlot('tank');
 
     // Pre-allocate Allied Reinforcements & Grenade Pool at startup so [T] and [G] never compile shaders mid-combat!
     {
@@ -2544,7 +2605,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       isParachuteDrop: boolean = false,
       remotePlayer?: LiveArenaPlayer
     ) {
-      // In Multiplayer Open-World Deathmatch, ONLY real connected online players are ever spawned (ZERO bots!)
+      // In Multiplayer Deathmatch: ZERO BOTS! Only real connected human players (remotePlayer) may be spawned!
       if (isMultiplayerDeathmatch && !remotePlayer) return;
 
       const wave = getWaveNumber();
@@ -2590,13 +2651,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let isTank = false;
       let type: 'strep' | 'bacillus' | 'tank' = 'strep';
 
-      if (isMultiplayerDeathmatch && remotePlayer) {
-        type = 'strep';
+      const soldierId = nextEnemyIdRef.current++;
+
+      if (isMultiplayerDeathmatch) {
+        type = soldierId % 2 === 0 ? 'strep' : 'bacillus';
         hitsLeft = 3;
-        hp = Math.max(10, remotePlayer.hp);
-        speed = 5.6;
+        hp = remotePlayer ? Math.max(10, remotePlayer.hp) : 100;
+        speed = 5.4;
         value = 250;
-        name = remotePlayer.studentName;
+        name = remotePlayer ? remotePlayer.studentName : 'Operative';
       } else if (shouldSpawnTank) {
         type = 'tank';
         // 6 normal SCAR shots or 2 headshots!
@@ -2635,7 +2698,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         customX !== undefined
           ? customX
           : remotePlayer
-          ? THREE.MathUtils.clamp(-remotePlayer.x, -15.0, 15.0)
+          ? THREE.MathUtils.clamp(-remotePlayer.x, -28.0, 28.0)
           : Math.cos(angle) * spawnRadius;
       const groundY = isMultiplayerDeathmatch ? -0.32 : isTank ? -0.5 : Math.sin(angle) * spawnRadius * 0.45;
       const y = isParachuteDrop && !isMultiplayerDeathmatch ? 2.15 : groundY;
@@ -2643,20 +2706,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
         customZ !== undefined
           ? customZ
           : remotePlayer
-          ? THREE.MathUtils.clamp(-18.0 - remotePlayer.z, -32.0, 4.0)
+          ? THREE.MathUtils.clamp(-18.0 - remotePlayer.z, -44.0, 8.0)
           : -28 - Math.random() * 10;
 
       pooledSlot.parachuteGroup.visible = isParachuteDrop && !isMultiplayerDeathmatch;
       soldierMesh.position.set(x, y, z);
 
-      const soldierId = nextEnemyIdRef.current++;
       const firingLineZ = isMultiplayerDeathmatch
-        ? z
+        ? remotePlayer
+          ? z
+          : -12.0
         : isTank
         ? -12.0 - (soldierId % 3) * 1.2
         : -7.2 - (soldierId % 4) * 1.05;
 
-      const studentClass = remotePlayer ? remotePlayer.className : 'SCIENCE UNIT';
+      const studentClass = remotePlayer ? remotePlayer.className : 'Science Unit';
       const isStunnedNow = remotePlayer ? remotePlayer.status === 'stunned' : false;
 
       if (isMultiplayerDeathmatch && pooledSlot.callsignCanvas && pooledSlot.callsignTexture) {
@@ -2688,7 +2752,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         hitsLeft: remotePlayer ? Math.max(0.2, (remotePlayer.hp / 100) * 3) : hitsLeft,
         maxHits: hitsLeft,
         hp,
-        maxHp: isMultiplayerDeathmatch ? 100 : hp,
+        maxHp: isMultiplayerDeathmatch && remotePlayer ? 100 : hp,
         speed,
         value,
         isBoss: false,
@@ -2702,7 +2766,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         cannonRecoil: 0,
         hullRock: 0,
         parachuteGroup: pooledSlot.parachuteGroup,
-        isParachuting: isParachuteDrop && !isMultiplayerDeathmatch,
+        isParachuting: false,
         landingY: groundY,
         isStudentOperator: isMultiplayerDeathmatch,
         remotePlayerId: remotePlayer?.playerId,
@@ -2724,7 +2788,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     }
 
-    // Immediate opening vanguard squad scales with levelIndex & phaseIndex (Solo Mode ONLY — Zero bots in Multiplayer!)
+    // Immediate opening vanguard squad scales with levelIndex & phaseIndex (In Multiplayer, ZERO BOTS — only real connected players!)
     const initialSquadSize = isMultiplayerDeathmatch
       ? 0
       : 3 + Math.min(4, Math.floor((levelNumber - 1) / 2) + (phaseNumber - 1));
@@ -2735,7 +2799,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     // Dynamic Spawning Frequency scaled by Level Index (0..8), Phase Progression (0..2), and Live Wave (1..3)!
     const diffScaleGlobal = ((levelNumber - 1) * 3 + (phaseNumber - 1)) / 26;
     const getDynamicSpawnDelayMs = () => {
-      if (isMultiplayerDeathmatch) return 900;
+      if (isMultiplayerDeathmatch) return 850;
       const wave = getWaveNumber();
       const levelIdx = levelNumber - 1;
       const phaseIdx = phaseNumber - 1;
@@ -2749,7 +2813,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const spawnInterval = window.setInterval(() => {
       if (isPausedForConceptRef.current || isGamePausedRef.current) return;
 
-      // In Multiplayer Open-World Deathmatch: Sync 100% REAL connected online human players ONLY (Zero Bots!)
+      // In Multiplayer Open-World Deathmatch: Sync real connected online human players + maintain active 20-Player Battle Royale squad density!
       if (isMultiplayerDeathmatch) {
         const remoteHumanList = mpOnlinePlayersRef.current.filter(
           (p) => p.playerId !== localMpPlayerIdRef.current
@@ -2768,8 +2832,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
           activeRemoteIds.add(rp.playerId);
           const existing = activeSoldiersRef.current.find((s) => s.remotePlayerId === rp.playerId);
-          const mappedX = THREE.MathUtils.clamp(-rp.x, -15.0, 15.0);
-          const mappedZ = THREE.MathUtils.clamp(-18.0 - rp.z, -32.0, 4.0);
+          const mappedX = THREE.MathUtils.clamp(-rp.x, -28.0, 28.0);
+          const mappedZ = THREE.MathUtils.clamp(-18.0 - rp.z, -44.0, 8.0);
 
           if (!existing) {
             spawnSoldierOrTank(mappedZ, 'strep', mappedX, false, rp);
@@ -2802,10 +2866,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         });
 
-        // Remove any disconnected remote human players or any non-remote units
+        // Remove any disconnected remote human players
         for (let i = activeSoldiersRef.current.length - 1; i >= 0; i--) {
           const s = activeSoldiersRef.current[i];
-          if (!s.remotePlayerId || !activeRemoteIds.has(s.remotePlayerId)) {
+          if (s.remotePlayerId && !activeRemoteIds.has(s.remotePlayerId)) {
             releaseSoldierToPool(s);
             activeSoldiersRef.current.splice(i, 1);
           }
@@ -3849,6 +3913,37 @@ export const CombatView: React.FC<CombatViewProps> = ({
             setActiveStreak(null);
           }, 2000);
         }
+      } else if (isMultiplayerDeathmatch) {
+        // In Multiplayer, players can also shoot and destroy Destructible Anatomical Cover Structures!
+        for (let bIdx = 0; bIdx < barricadesRef.current.length; bIdx++) {
+          const bar = barricadesRef.current[bIdx];
+          if (bar.hp <= 0 || bar.z >= playerPosRef.current.z - 0.8) continue;
+          _v2.set(bar.x, bar.y + 0.55, bar.z);
+          const distSqToCover = raycaster.ray.distanceSqToPoint(_v2);
+          if (distSqToCover <= 1.75) {
+            const coverDmg = Math.max(12, Math.round(baseNormalShotDamage * 0.48));
+            const wasAlive = bar.hp > 0;
+            bar.hp = Math.max(0, bar.hp - coverDmg);
+            const pct = Math.max(0.01, bar.hp / bar.maxHp);
+            bar.hpBarFill.scale.x = pct;
+            bar.hpBarFill.position.x = -(1.38 * (1 - pct)) / 2;
+            const mat = bar.hpBarFill.material as THREE.MeshBasicMaterial;
+            if (pct > 0.5) mat.color.setHex(0x10b981);
+            else if (pct > 0.25) mat.color.setHex(0xf59e0b);
+            else mat.color.setHex(0xef4444);
+            bar.group.position.y = bar.y - (1 - pct) * 0.18;
+            sounds.playBarricadeHit();
+            triggerSandDust(_v2);
+            if (bar.hp <= 0 && wasAlive) {
+              triggerExplosion(_v2);
+              triggerMembraneDisintegration(_v2, 'bacillus');
+              triggerBarricadeShatter(_v2);
+              bar.group.visible = false;
+              bar.respawnTimer = 0;
+            }
+            break;
+          }
+        }
       }
     }
 
@@ -4078,11 +4173,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
         handleToggleVisionMode();
       } else if (e.key === 'm' || e.key === 'M') {
         handleSoundToggle();
+      } else if (e.key === 'Control' || e.key === 'c' || e.key === 'C') {
+        if (isMultiplayerDeathmatch) {
+          e.preventDefault();
+          isCrouchingRef.current = true;
+          setIsCrouching(true);
+        }
+      } else if (e.key === 'Shift') {
+        if (isMultiplayerDeathmatch && !isSprintExhaustedRef.current) {
+          isSprintingRef.current = true;
+          setIsSprinting(true);
+        }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       keysDownRef.current[e.key.toLowerCase()] = false;
+      if (e.key === 'Control' || e.key === 'c' || e.key === 'C') {
+        if (!crouchToggleRef.current) {
+          isCrouchingRef.current = false;
+          setIsCrouching(false);
+        }
+      } else if (e.key === 'Shift') {
+        if (!sprintToggleRef.current) {
+          isSprintingRef.current = false;
+          setIsSprinting(false);
+        }
+      }
     };
 
     const handleWheel = (e: WheelEvent) => {
@@ -4198,14 +4315,83 @@ export const CombatView: React.FC<CombatViewProps> = ({
         isPointerDownRef.current = false;
       }
 
-      const moveSpeed = isScopedRef.current ? 4.8 : isMultiplayerDeathmatch ? 7.2 : 6.2;
+      // MULTIPLAYER CROUCH [CTRL] & SPRINT [SHIFT] WITH REFILLABLE ATP SPRINT ENERGY BAR
+      const isMovingNow = Math.abs(inputX) > 0.05 || Math.abs(inputZ) > 0.05;
+      const wantCrouch =
+        isMultiplayerDeathmatch &&
+        (Boolean(keysDownRef.current['control']) ||
+          Boolean(keysDownRef.current['c']) ||
+          crouchToggleRef.current);
+      if (wantCrouch !== isCrouchingRef.current) {
+        isCrouchingRef.current = wantCrouch;
+        setIsCrouching(wantCrouch);
+      }
+
+      const wantSprint =
+        isMultiplayerDeathmatch &&
+        isMovingNow &&
+        !isCrouchingRef.current &&
+        !isSprintExhaustedRef.current &&
+        (Boolean(keysDownRef.current['shift']) || sprintToggleRef.current);
+      if (wantSprint !== isSprintingRef.current) {
+        isSprintingRef.current = wantSprint;
+        setIsSprinting(wantSprint);
+      }
+
+      if (isMultiplayerDeathmatch) {
+        if (isSprintingRef.current) {
+          // Drain Sprint Energy while sprinting
+          sprintEnergyRef.current = Math.max(0, sprintEnergyRef.current - 28.0 * delta);
+          if (sprintEnergyRef.current <= 0) {
+            sprintEnergyRef.current = 0;
+            isSprintExhaustedRef.current = true;
+            setIsSprintExhausted(true);
+            isSprintingRef.current = false;
+            sprintToggleRef.current = false;
+            setIsSprinting(false);
+            sounds.playDryFire();
+          }
+        } else {
+          // Refill Sprint Energy when not sprinting; if exhausted, must refill to 100% before sprinting again!
+          sprintEnergyRef.current = Math.min(100, sprintEnergyRef.current + 22.0 * delta);
+          if (isSprintExhaustedRef.current && sprintEnergyRef.current >= 100) {
+            sprintEnergyRef.current = 100;
+            isSprintExhaustedRef.current = false;
+            setIsSprintExhausted(false);
+            sounds.playRadioChirp();
+          }
+        }
+
+        // Direct DOM update for 60 FPS Sprint Energy Bar (Zero React VDOM re-renders!)
+        if (sprintBarFillDomRef.current) {
+          const pct = Math.round(sprintEnergyRef.current);
+          sprintBarFillDomRef.current.style.width = `${pct}%`;
+          sprintBarFillDomRef.current.style.background = isSprintExhaustedRef.current
+            ? 'linear-gradient(90deg, #e11d48 0%, #f43f5e 100%)'
+            : 'linear-gradient(90deg, #d97706 0%, #f59e0b 55%, #fde047 100%)';
+        }
+        if (sprintBarTextDomRef.current) {
+          const pct = Math.round(sprintEnergyRef.current);
+          sprintBarTextDomRef.current.textContent = isSprintExhaustedRef.current
+            ? `REFILLING ${pct}% (WAIT 100%)`
+            : `${pct} | 100`;
+        }
+      }
+
+      const baseMoveSpeed = isScopedRef.current ? 4.8 : isMultiplayerDeathmatch ? 7.8 : 6.2;
+      const postureSpeedMult = isCrouchingRef.current
+        ? 0.62
+        : isSprintingRef.current
+        ? 1.68
+        : 1.0;
+      const moveSpeed = baseMoveSpeed * postureSpeedMult;
       playerPosRef.current.x += inputX * moveSpeed * delta;
       playerPosRef.current.z += inputZ * moveSpeed * delta;
 
-      // Clamp movement within organ tunnel (Solo) / expansive Open Lung & Alveoli Landscape (Multiplayer)
-      const maxLateralBound = isMultiplayerDeathmatch ? 14.5 : 3.5;
-      const minForwardBound = isMultiplayerDeathmatch ? -24.0 : -2.6;
-      const maxRearBound = isMultiplayerDeathmatch ? 6.0 : 2.0;
+      // Clamp movement within organ tunnel (Solo) / expansive 20-Player Open Lung & Alveoli Landscape (Multiplayer: 64m wide x 58m deep!)
+      const maxLateralBound = isMultiplayerDeathmatch ? 32.0 : 3.5;
+      const minForwardBound = isMultiplayerDeathmatch ? -46.0 : -2.6;
+      const maxRearBound = isMultiplayerDeathmatch ? 12.0 : 2.0;
       playerPosRef.current.x = Math.max(-maxLateralBound, Math.min(maxLateralBound, playerPosRef.current.x));
       playerPosRef.current.z = Math.max(minForwardBound, Math.min(maxRearBound, playerPosRef.current.z));
 
@@ -4214,7 +4400,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       prevPlayerX = playerPosRef.current.x;
       smoothedPlayerVelX = THREE.MathUtils.damp(smoothedPlayerVelX, instVelX, 8, delta);
 
-      // 2. UPDATE CAMERA, DYNAMIC HP-SCALED SCREEN SHAKE, SIGHT SCOPE ZOOM (ADS) & RESPONSIVE PITCH/YAW AIMING
+      // 2. UPDATE CAMERA, DYNAMIC HP-SCALED SCREEN SHAKE, CROUCH POSTURE, SIGHT SCOPE ZOOM (ADS) & RESPONSIVE PITCH/YAW AIMING
       const shakeAmt = cameraShakeRef.current;
       const shakeX =
         shakeAmt > 0.005
@@ -4225,8 +4411,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
           ? (Math.cos(elapsed * 64) * 0.65 + (Math.random() - 0.5) * 0.75) * shakeAmt
           : 0;
 
+      const targetCrouchY = isCrouchingRef.current ? -0.52 : 0;
+      crouchCameraYRef.current = THREE.MathUtils.damp(crouchCameraYRef.current, targetCrouchY, 14, delta);
+
       camera.position.x = playerPosRef.current.x + shakeX;
-      camera.position.y = shakeY;
+      camera.position.y = crouchCameraYRef.current + shakeY;
       camera.position.z = playerPosRef.current.z;
 
       // Smoothly zoom camera FOV when Black Ops Sight Scope (ADS) is engaged!
@@ -5151,16 +5340,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
           }
         } else {
-          // MULTIPLAYER STUDENT OPERATIVE: 100% REAL PLAYER 3D POSITION, LIMB ANIMATION, STASIS FREEZE & LIVE SHOT SYNC
+          // MULTIPLAYER DEATHMATCH: 100% REAL ONLINE PLAYERS (ZERO BOTS!)
           if (isMultiplayerDeathmatch) {
             if (soldier.remotePlayerId) {
               const rp = mpOnlinePlayersRef.current.find((p) => p.playerId === soldier.remotePlayerId);
               if (rp) {
                 // Smoothly interpolate real opponent's 3D open-world position in the Alveoli landscape
-                const targetX = THREE.MathUtils.clamp(-rp.x, -15.0, 15.0);
+                const targetX = THREE.MathUtils.clamp(-rp.x, -30.0, 30.0);
                 const targetZ = THREE.MathUtils.clamp(
                   -18.0 - rp.z,
-                  -32.0,
+                  -46.0,
                   playerPosRef.current.z - 2.4
                 );
                 const moveDist = Math.hypot(
@@ -5205,6 +5394,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   soldier.stasisCage.visible = false;
                 }
 
+                // If remote player is crouched, drop avatar height into cover!
+                const targetBaseY = rp.isCrouched ? -0.68 : -0.32;
+
                 // Animate limbs based on whether the real opponent is actively moving or aiming
                 if (moveDist > 0.06) {
                   const runCycle = Math.sin(elapsed * 16 + soldier.walkOffset);
@@ -5218,7 +5410,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   }
                   soldier.mesh.position.y = THREE.MathUtils.damp(
                     soldier.mesh.position.y,
-                    -0.32 + Math.abs(runCycle) * 0.06,
+                    targetBaseY + Math.abs(runCycle) * 0.06,
                     12,
                     delta
                   );
@@ -5231,7 +5423,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     soldier.leftArm.rotation.x = THREE.MathUtils.damp(soldier.leftArm.rotation.x, -0.58, 10, delta);
                     soldier.rightArm.rotation.x = THREE.MathUtils.damp(soldier.rightArm.rotation.x, -0.68, 10, delta);
                   }
-                  soldier.mesh.position.y = THREE.MathUtils.damp(soldier.mesh.position.y, -0.32, 10, delta);
+                  soldier.mesh.position.y = THREE.MathUtils.damp(soldier.mesh.position.y, targetBaseY, 10, delta);
                 }
 
                 // Trigger real-time 3D projectile when remote human player fires!
@@ -5242,6 +5434,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 }
               }
             }
+            // In multiplayer deathmatch, NEVER run single-player bot AI loops!
             continue;
           }
 
@@ -5275,23 +5468,32 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
 
             // Tactical Cover-Flanking & Spacing AI:
-            // Choose a flanking lane on the opposite side of the player's current position to establish crossfire
+            // In Multiplayer, AI Student Operatives maneuver across the wide 60m Lung & Alveoli arena and use Anatomical Cover Clusters!
+            const maxAiLateral = isMultiplayerDeathmatch ? 26.0 : 3.3;
             if (soldier.flankTargetX === undefined) {
               const flankSign = soldier.id % 2 === 0 ? -1 : 1;
               soldier.flankTargetX = Math.max(
-                -3.3,
-                Math.min(3.3, -playerPosRef.current.x * 0.55 + flankSign * (1.35 + (soldier.id % 3) * 0.65))
+                -maxAiLateral,
+                Math.min(
+                  maxAiLateral,
+                  isMultiplayerDeathmatch
+                    ? playerPosRef.current.x + flankSign * (3.5 + (soldier.id % 5) * 3.2)
+                    : -playerPosRef.current.x * 0.55 + flankSign * (1.35 + (soldier.id % 3) * 0.65)
+                )
               );
             }
 
             // Reactive Evasive Sidestep Juke when player aims at this soldier!
-            if (isUnderPlayerAim && (soldier.evadeCooldown ?? 0) <= 0 && soldier.mesh.position.z > -32) {
+            if (isUnderPlayerAim && (soldier.evadeCooldown ?? 0) <= 0 && soldier.mesh.position.z > -38) {
               soldier.evadeCooldown = 2.4;
-              const jukeDir = soldier.mesh.position.x > 0 ? -1 : 1;
-              soldier.flankTargetX = Math.max(-3.3, Math.min(3.3, soldier.mesh.position.x + jukeDir * 1.65));
-              if (soldier.mesh.position.z > -26 && Math.random() < 0.55) {
+              const jukeDir = soldier.mesh.position.x > playerPosRef.current.x ? -1 : 1;
+              soldier.flankTargetX = Math.max(
+                -maxAiLateral,
+                Math.min(maxAiLateral, soldier.mesh.position.x + jukeDir * (isMultiplayerDeathmatch ? 3.2 : 1.65))
+              );
+              if (soldier.mesh.position.z > -32 && Math.random() < 0.65) {
                 soldier.stanceState = 'crouching';
-                soldier.stanceTimer = 0.25;
+                soldier.stanceTimer = 0.32;
               }
             }
 
@@ -5307,13 +5509,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
             soldier.mesh.rotation.x = THREE.MathUtils.damp(soldier.mesh.rotation.x, 0.22, 8, delta);
 
             const lateralGoal = soldier.flankTargetX ?? soldier.mesh.position.x;
-            const lateralSteer = THREE.MathUtils.clamp(lateralGoal - soldier.mesh.position.x, -1.8, 1.8);
+            const lateralSteer = THREE.MathUtils.clamp(
+              lateralGoal - soldier.mesh.position.x,
+              isMultiplayerDeathmatch ? -3.4 : -1.8,
+              isMultiplayerDeathmatch ? 3.4 : 1.8
+            );
             soldier.mesh.position.x +=
               (lateralSteer * 1.15 + Math.sin(elapsed * 3.5 + soldier.walkOffset) * 0.95) * delta;
-            soldier.mesh.position.x = Math.max(-3.5, Math.min(3.5, soldier.mesh.position.x));
+            soldier.mesh.position.x = Math.max(
+              isMultiplayerDeathmatch ? -28.0 : -3.5,
+              Math.min(isMultiplayerDeathmatch ? 28.0 : 3.5, soldier.mesh.position.x)
+            );
             soldier.mesh.position.y = THREE.MathUtils.damp(
               soldier.mesh.position.y,
-              Math.abs(runCycle) * 0.06,
+              (isMultiplayerDeathmatch ? -0.32 : 0) + Math.abs(runCycle) * 0.06,
               10,
               delta
             );
@@ -5393,8 +5602,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
               soldier.stanceState = 'advancing';
               soldier.mesh.rotation.y = 0;
               // Pick a new flanking offset after each firing cycle so troops reposition dynamically!
-              const sideShift = (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 1.2);
-              soldier.flankTargetX = Math.max(-3.3, Math.min(3.3, soldier.mesh.position.x + sideShift));
+              const sideShift = (Math.random() < 0.5 ? -1 : 1) * (isMultiplayerDeathmatch ? 2.4 + Math.random() * 3.5 : 0.9 + Math.random() * 1.2);
+              const maxFlank = isMultiplayerDeathmatch ? 26.0 : 3.3;
+              soldier.flankTargetX = Math.max(-maxFlank, Math.min(maxFlank, soldier.mesh.position.x + sideShift));
               soldier.stanceTimer = Math.max(0.65, 1.15 - diffScaleGlobal * 0.32) + Math.random() * 0.65;
             }
           }
@@ -5487,6 +5697,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         if (bar.hp <= 0 && wasAlive) {
           const shatterCenter = new THREE.Vector3(bar.x, bar.y + 0.15, bar.z);
           triggerExplosion(shatterCenter);
+          if (isMultiplayerDeathmatch) {
+            triggerMembraneDisintegration(shatterCenter, 'bacillus');
+          }
           triggerBarricadeShatter(shatterCenter);
           bar.group.visible = false;
           bar.respawnTimer = 0;
@@ -5917,9 +6130,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // Check if player is currently in cover behind an INTACT sandbag bunker (bar.hp > 0)
-      const activeCoverBarricade = barricadesRef.current.find(
-        (bar) => bar.hp > 0 && playerPosRef.current.z >= -1.8 && Math.abs(playerPosRef.current.x - bar.x) <= 1.25
+      // Check if player is currently in cover behind an INTACT sandbag bunker (Solo) or Destructible Anatomical Cover Structure (Multiplayer)
+      const activeCoverBarricade = barricadesRef.current.find((bar) =>
+        isMultiplayerDeathmatch
+          ? bar.hp > 0 &&
+            Math.abs(playerPosRef.current.x - bar.x) <= 1.85 &&
+            playerPosRef.current.z >= bar.z - 0.55 &&
+            playerPosRef.current.z <= bar.z + 2.85
+          : bar.hp > 0 && playerPosRef.current.z >= -1.8 && Math.abs(playerPosRef.current.x - bar.x) <= 1.25
       );
       const inCover = Boolean(activeCoverBarricade);
       if (inCover !== lastCoverState) {
@@ -6793,6 +7011,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       container.removeEventListener('mousedown', handleMouseDown);
       container.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      container.removeEventListener('wheel', handleWheel);
 
       container.removeEventListener('touchstart', handleTouchStart);
       container.removeEventListener('touchmove', handleTouchMove);
@@ -7203,10 +7422,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   <span className="text-slate-600">|</span>
                   <span className="flex items-center gap-1 text-cyan-300">
                     <Users className="w-3 h-3" />
-                    <span>{mpOnlinePlayers.length} LIVE PLAYERS</span>
+                    <span>{Math.max(1, mpOnlinePlayers.length)} / 20 REAL PLAYERS</span>
                   </span>
                   <span className="text-slate-600">|</span>
-                  <span className="text-pink-300 font-black">🫁 OPEN ALVEOLI ARENA</span>
+                  <span className="text-emerald-400 font-black">100% REAL PLAYERS (ZERO BOTS)</span>
                   <span className="text-slate-600">|</span>
                   <span
                     className={`flex items-center gap-1 ${
@@ -7218,12 +7437,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   </span>
                 </div>
 
-                {/* Live Opponent Presence Banner when waiting for real human opponents */}
-                {mpOnlinePlayers.length <= 1 && (
-                  <div className="px-2.5 py-0.5 rounded bg-cyan-950/90 border border-cyan-400/60 text-[8px] sm:text-[9px] font-mono font-bold text-cyan-200 text-center shadow-md">
-                    📡 WAITING FOR RIVAL PLAYERS IN ROOM <span className="text-white font-black">{multiplayerRoomCode}</span> — ZERO BOTS (100% REAL PLAYERS)
+                {/* Waiting / Active Real Players Status */}
+                {mpOnlinePlayers.length <= 1 ? (
+                  <div className="px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-400/60 text-[8px] sm:text-[9px] font-mono font-bold text-emerald-300 text-center shadow-md animate-pulse">
+                    📡 ZERO BOTS • WAITING FOR RIVAL HUMAN PLAYERS TO JOIN (ROOM: {multiplayerRoomCode})
+                  </div>
+                ) : (
+                  <div className="px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-400/60 text-[8px] sm:text-[9px] font-mono font-bold text-emerald-300 text-center shadow-md">
+                    ⚡ {mpOnlinePlayers.length} REAL HUMAN OPERATIVES CONNECTED (ZERO BOTS)
                   </div>
                 )}
+
+                {/* Live Tactical Controls Reminder Banner */}
+                <div className="px-2.5 py-0.5 rounded bg-cyan-950/85 border border-cyan-400/50 text-[8px] sm:text-[9px] font-mono font-bold text-cyan-200 text-center shadow-md">
+                  🫁 DESTRUCTIBLE BIO-COVER ACTIVE • <span className="text-amber-300 font-black">[CTRL] CROUCH</span> BEHIND ALVEOLAR SEPTA & CARTILAGE • <span className="text-emerald-300 font-black">[SHIFT] SPRINT</span>
+                </div>
 
                 {/* Live PvP Elimination Feed */}
                 {mpKillfeed.length > 0 && (
@@ -7468,56 +7696,139 @@ export const CombatView: React.FC<CombatViewProps> = ({
           <div className="flex items-end justify-between w-full gap-2">
             {/* BOTTOM-LEFT: FORTNITE ICONIC DUAL SLANTED SHIELD + HEALTH BARS */}
             <div className="flex flex-col gap-1 pointer-events-auto pl-1 sm:pl-2">
-              {/* Posture / Bunker Cover Status Pill (Solo Only) or Open Alveoli Landscape Pill (Multiplayer) */}
-              {!isMultiplayerDeathmatch ? (
-                <>
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md ${
-                        isPlayerInCover
-                          ? 'bg-sky-950/90 border-sky-400 text-sky-200'
-                          : 'bg-slate-950/85 border-amber-400/60 text-amber-300'
-                      }`}
-                    >
-                      {isPlayerInCover ? `🛡️ BUNKER SHIELD ${activeCoverHp}%` : '⚠️ EXPOSED [MOVE A/D TO COVER]'}
-                    </span>
-                  </div>
+              {/* Posture / Bunker Cover Status Pill (Solo) or Anatomical Cover + Sprint Energy Bar + Crouch/Sprint Controls (Multiplayer) */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md ${
+                    isPlayerInCover
+                      ? 'bg-sky-950/90 border-sky-400 text-sky-200'
+                      : 'bg-slate-950/85 border-amber-400/60 text-amber-300'
+                  }`}
+                >
+                  {isPlayerInCover
+                    ? isMultiplayerDeathmatch
+                      ? `🛡️ BIO-COVER SHIELD ${activeCoverHp}%`
+                      : `🛡️ BUNKER SHIELD ${activeCoverHp}%`
+                    : isMultiplayerDeathmatch
+                    ? '⚠️ EXPOSED [HIDE BEHIND BIO-COVER]'
+                    : '⚠️ EXPOSED [MOVE A/D TO COVER]'}
+                </span>
 
-                  {/* TOP BAR: FORTNITE CYAN/BLUE SHIELD BAR (Bunker Cover / Bio-Armor) */}
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
-                      <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400 fill-sky-400/30 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
-                    </div>
-                    <div
-                      className="relative w-28 sm:w-48 md:w-56 h-3 sm:h-4 bg-slate-950/85 border-2 border-white/85 shadow-[0_4px_12px_rgba(0,0,0,0.85)] overflow-hidden"
-                      style={{ transform: 'skewX(-16deg)' }}
+                {isMultiplayerDeathmatch && (
+                  <>
+                    <button
+                      onClick={() => {
+                        sounds.unlockAudio();
+                        crouchToggleRef.current = !isCrouchingRef.current;
+                        isCrouchingRef.current = crouchToggleRef.current;
+                        setIsCrouching(crouchToggleRef.current);
+                      }}
+                      className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md cursor-pointer transition-all ${
+                        isCrouching
+                          ? 'bg-cyan-500 text-slate-950 border-white shadow-[0_0_10px_rgba(6,182,212,0.8)]'
+                          : 'bg-slate-950/90 border-cyan-400/60 text-cyan-300 hover:bg-slate-900'
+                      }`}
+                      title="Crouch Behind Anatomical Cover [Ctrl / C]"
                     >
-                      <div
-                        className="h-full transition-all duration-150"
-                        style={{
-                          width: `${isPlayerInCover ? Math.max(0, Math.min(100, activeCoverHp)) : 0}%`,
-                          background: 'linear-gradient(90deg, #0284c7 0%, #00b4d8 55%, #38bdf8 100%)',
-                        }}
-                      />
-                      <div
-                        className="absolute inset-0 flex items-center justify-end pr-2 text-[8px] sm:text-[10px] font-black text-white tabular-nums"
-                        style={{
-                          transform: 'skewX(16deg)',
-                          textShadow: '0 1px 3px rgba(0,0,0,0.95)',
-                        }}
-                      >
-                        {isPlayerInCover ? activeCoverHp : 0} | 100
-                      </div>
+                      {isCrouching ? '⬇️ CROUCHING [CTRL]' : 'CROUCH [CTRL]'}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        sounds.unlockAudio();
+                        if (isSprintExhaustedRef.current) {
+                          sounds.playDryFire();
+                          return;
+                        }
+                        sprintToggleRef.current = !isSprintingRef.current;
+                        isSprintingRef.current = sprintToggleRef.current;
+                        setIsSprinting(sprintToggleRef.current);
+                      }}
+                      disabled={isSprintExhausted}
+                      className={`px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md transition-all ${
+                        isSprintExhausted
+                          ? 'bg-rose-950/90 border-rose-500 text-rose-300 animate-pulse cursor-not-allowed'
+                          : isSprinting
+                          ? 'bg-amber-400 text-slate-950 border-white shadow-[0_0_10px_rgba(251,191,36,0.85)] cursor-pointer'
+                          : 'bg-slate-950/90 border-amber-400/60 text-amber-300 hover:bg-slate-900 cursor-pointer'
+                      }`}
+                      title="Sprint [Shift] — Uses ATP Energy Bar"
+                    >
+                      {isSprintExhausted
+                        ? '⚡ REFILLING ENERGY...'
+                        : isSprinting
+                        ? '⚡ SPRINTING [SHIFT]'
+                        : 'SPRINT [SHIFT]'}
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* MULTIPLAYER ATP SPRINT ENERGY BAR (Drains on Shift Sprint; when 0%, locks until refilled to 100%!) */}
+              {isMultiplayerDeathmatch && (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                    <Zap
+                      className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                        isSprintExhausted
+                          ? 'text-rose-500 fill-rose-500 animate-pulse'
+                          : 'text-amber-400 fill-amber-400'
+                      } drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]`}
+                    />
+                  </div>
+                  <div
+                    className="relative w-28 sm:w-48 md:w-56 h-3 sm:h-3.5 bg-slate-950/85 border-2 border-amber-300/85 shadow-[0_4px_12px_rgba(0,0,0,0.85)] overflow-hidden"
+                    style={{ transform: 'skewX(-16deg)' }}
+                  >
+                    <div
+                      ref={sprintBarFillDomRef}
+                      className="h-full"
+                      style={{
+                        width: '100%',
+                        background: 'linear-gradient(90deg, #d97706 0%, #f59e0b 55%, #fde047 100%)',
+                      }}
+                    />
+                    <div
+                      className="absolute inset-0 flex items-center justify-between px-2 text-[7.5px] sm:text-[9px] font-black text-white tabular-nums"
+                      style={{
+                        transform: 'skewX(16deg)',
+                        textShadow: '0 1px 3px rgba(0,0,0,0.95)',
+                      }}
+                    >
+                      <span>ATP SPRINT</span>
+                      <span ref={sprintBarTextDomRef}>100 | 100</span>
                     </div>
                   </div>
-                </>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  <span className="px-2 py-0.5 rounded text-[8px] sm:text-[10px] font-black uppercase tracking-wider border shadow-md bg-pink-950/90 border-pink-400/80 text-pink-200">
-                    🫁 PULMONARY ALVEOLI OPEN LANDSCAPE • NO BARRICADES
-                  </span>
                 </div>
               )}
+
+              {/* TOP BAR: FORTNITE CYAN/BLUE SHIELD BAR (Bunker Cover / Destructible Anatomical Bio-Cover) */}
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                  <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400 fill-sky-400/30 drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]" />
+                </div>
+                <div
+                  className="relative w-28 sm:w-48 md:w-56 h-3 sm:h-4 bg-slate-950/85 border-2 border-white/85 shadow-[0_4px_12px_rgba(0,0,0,0.85)] overflow-hidden"
+                  style={{ transform: 'skewX(-16deg)' }}
+                >
+                  <div
+                    className="h-full transition-all duration-150"
+                    style={{
+                      width: `${isPlayerInCover ? Math.max(0, Math.min(100, activeCoverHp)) : 0}%`,
+                      background: 'linear-gradient(90deg, #0284c7 0%, #00b4d8 55%, #38bdf8 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute inset-0 flex items-center justify-end pr-2 text-[8px] sm:text-[10px] font-black text-white tabular-nums"
+                    style={{
+                      transform: 'skewX(16deg)',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)',
+                    }}
+                  >
+                    {isPlayerInCover ? activeCoverHp : 0} | 100
+                  </div>
+                </div>
+              </div>
 
               {/* BOTTOM BAR: FORTNITE VIBRANT GREEN HEALTH BAR */}
               <div className="flex items-center gap-1.5">
