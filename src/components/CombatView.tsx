@@ -570,6 +570,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [opticsCooldown, setOpticsCooldown] = useState<number>(0);
   const opticsCooldownRef = useRef<number>(0);
   const [radarBlips, setRadarBlips] = useState<Array<{ x: number; y: number; isTank: boolean; isAllied: boolean }>>([]);
+  const [compassBlips, setCompassBlips] = useState<Array<{ id: number; offsetPercent: number; isTank: boolean }>>([]);
   const [targetLocks, setTargetLocks] = useState<TargetHudLock[]>([]);
 
   // Crosshair Screen Tracking (Crosshair follows exact aiming/shooting point!)
@@ -684,6 +685,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
   // Dedicated Multi-Touch IDs (Solves phone shooting while moving!)
   const movementTouchIdRef = useRef<number | null>(null);
   const firingTouchIdRef = useRef<number | null>(null);
+  const movementTouchStartPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const movementTouchActiveRef = useRef<boolean>(false);
 
   // Virtual Joystick & Zero-Re-Render Crosshair DOM Refs (Eliminates 25Hz React VDOM re-renders during touch/mouse aim!)
   const joystickCenterRef = useRef<{ x: number; y: number } | null>(null);
@@ -2021,6 +2024,37 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     }
 
+    // Object pool for 3D Cell Membrane Ripples & Biochemical Portals (visual enemy spawn telegraphing)
+    const spawnRippleGeo = new THREE.RingGeometry(0.12, 1.45, 24);
+    spawnRippleGeo.rotateX(-Math.PI / 2);
+    const spawnRippleMatCyan = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+
+    const spawnRipplePool: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; maxLife: number }> = [];
+    for (let i = 0; i < 10; i++) {
+      const mat = spawnRippleMatCyan.clone();
+      const m = new THREE.Mesh(spawnRippleGeo, mat);
+      m.visible = false;
+      scene.add(m);
+      spawnRipplePool.push({ mesh: m, mat, life: 0, maxLife: 0.65 });
+    }
+
+    function triggerSpawnRipple(x: number, y: number, z: number, isTank: boolean = false) {
+      const slot = spawnRipplePool.find((r) => !r.mesh.visible) || spawnRipplePool[0];
+      slot.mesh.position.set(x, y, z);
+      slot.mesh.scale.set(0.2, 0.2, 0.2);
+      slot.mat.color.setHex(isTank ? 0xf97316 : 0x38bdf8);
+      slot.mat.opacity = 0.9;
+      slot.life = 0.65;
+      slot.maxLife = 0.65;
+      slot.mesh.visible = true;
+    }
+
     // SPAWNER FUNCTION (Acquires pre-built Enemies & Tanks from enemyPool!)
     function getWaveNumber(): 1 | 2 | 3 {
       if (timeLeftRef.current > 40) return 1;
@@ -2157,6 +2191,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       };
 
       activeSoldiersRef.current.push(soldier);
+      triggerSpawnRipple(x, groundY + 0.05, z, isTank);
       if (isTank) {
         triggerBiologyConceptRef.current?.('enemy_tank_biofilm');
       } else {
@@ -3087,20 +3122,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
         const touch = e.changedTouches[i];
         const clientX = touch.clientX;
         const clientY = touch.clientY;
+        const relX = clientX - cachedRect.left;
+        const relY = clientY - cachedRect.top;
 
-        // If touch begins in bottom-left movement zone (left 45%, bottom 55%)
-        if (
-          movementTouchIdRef.current === null &&
-          clientX - cachedRect.left < cachedRect.width * 0.45 &&
-          clientY - cachedRect.top > cachedRect.height * 0.45
-        ) {
+        // Dedicated bottom-left movement zone (left 30% width, bottom 35% height)
+        const inMovementZone = relX < cachedRect.width * 0.30 && relY > cachedRect.height * 0.65;
+
+        if (movementTouchIdRef.current === null && inMovementZone) {
           movementTouchIdRef.current = touch.identifier;
+          movementTouchStartPosRef.current = { x: clientX, y: clientY, time: performance.now() };
+          movementTouchActiveRef.current = false;
           joystickCenterRef.current = { x: clientX, y: clientY };
           joystickOffsetRef.current = { x: 0, y: 0 };
-          setJoystickDisplay({ x: clientX, y: clientY });
-          sounds.triggerHaptic(10, 'light');
         } else if (firingTouchIdRef.current === null) {
-          // Hold Touch in Aim/Shoot Zone: tap aims smoothly & fires, hold for 2s deploys tactical scope!
+          // Touch in Aim/Shoot Zone: tap aims smoothly & fires, hold for 2s deploys tactical scope!
           firingTouchIdRef.current = touch.identifier;
           lastFiringTouchPosRef.current = { x: clientX, y: clientY };
           isPointerDownRef.current = true;
@@ -3123,15 +3158,25 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const dx = touch.clientX - joystickCenterRef.current.x;
           const dy = touch.clientY - joystickCenterRef.current.y;
           const dist = Math.hypot(dx, dy);
-          const maxDist = 45;
-          const clampedX = dist > 0 ? (dx / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
-          const clampedY = dist > 0 ? (dy / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
-          joystickOffsetRef.current = { x: clampedX, y: clampedY };
-          if (joystickKnobDomRef.current) {
-            joystickKnobDomRef.current.style.transform = `translate(${clampedX}px, ${clampedY}px)`;
+
+          // Activate joystick UI & movement input after dragging past 7px deadzone threshold!
+          if (!movementTouchActiveRef.current && dist > 7) {
+            movementTouchActiveRef.current = true;
+            setJoystickDisplay({ x: joystickCenterRef.current.x, y: joystickCenterRef.current.y });
+            sounds.triggerHaptic(10, 'light');
           }
-          moveInputRef.current.x = clampedX / maxDist;
-          moveInputRef.current.z = clampedY / maxDist;
+
+          if (movementTouchActiveRef.current) {
+            const maxDist = 45;
+            const clampedX = dist > 0 ? (dx / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
+            const clampedY = dist > 0 ? (dy / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
+            joystickOffsetRef.current = { x: clampedX, y: clampedY };
+            if (joystickKnobDomRef.current) {
+              joystickKnobDomRef.current.style.transform = `translate(${clampedX}px, ${clampedY}px)`;
+            }
+            moveInputRef.current.x = clampedX / maxDist;
+            moveInputRef.current.z = clampedY / maxDist;
+          }
         } else if (touch.identifier === firingTouchIdRef.current) {
           const prevX = lastFiringTouchPosRef.current.x;
           const prevY = lastFiringTouchPosRef.current.y;
@@ -3145,7 +3190,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         if (touch.identifier === movementTouchIdRef.current) {
+          // If touch in movement zone was a stationary tap (not dragged as movement), execute tap-shot!
+          if (!movementTouchActiveRef.current && movementTouchStartPosRef.current) {
+            const dt = performance.now() - movementTouchStartPosRef.current.time;
+            const dist = Math.hypot(
+              touch.clientX - movementTouchStartPosRef.current.x,
+              touch.clientY - movementTouchStartPosRef.current.y
+            );
+            if (dt < 320 && dist < 12) {
+              updateAimPosition(touch.clientX, touch.clientY, false);
+              executeShot();
+            }
+          }
+
           movementTouchIdRef.current = null;
+          movementTouchStartPosRef.current = null;
+          movementTouchActiveRef.current = false;
           joystickCenterRef.current = null;
           joystickOffsetRef.current = { x: 0, y: 0 };
           setJoystickDisplay(null);
@@ -3279,6 +3339,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let lastCoverHp = 100;
     let lastTargetLockedState = false;
     let lastHudSyncTime = 0;
+    let prevLocksKey = '';
+    let prevBlipsKey = '';
+    let prevCompassKey = '';
     let prevPlayerX = 0;
     let smoothedPlayerVelX = 0;
 
@@ -3588,7 +3651,23 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
         if (p.life <= 0) {
           p.mesh.visible = false;
-          particles.splice(i, 1);
+          particles[i] = particles[particles.length - 1];
+          particles.pop();
+        }
+      }
+
+      // Update 3D Cell Membrane Ripple & Biochemical Portal Spawn Indicators
+      for (let i = 0; i < spawnRipplePool.length; i++) {
+        const r = spawnRipplePool[i];
+        if (!r.mesh.visible) continue;
+        r.life -= delta;
+        if (r.life <= 0) {
+          r.mesh.visible = false;
+        } else {
+          const progress = 1 - r.life / r.maxLife;
+          const s = 0.2 + progress * 2.8;
+          r.mesh.scale.set(s, s, s);
+          r.mat.opacity = (1 - progress) * 0.9;
         }
       }
 
@@ -4877,7 +4956,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
             damageBarricade(bar, b.damage, b.mesh.position, b.isTank);
             b.mesh.visible = false;
-            bullets.splice(i, 1);
+            bullets[i] = bullets[bullets.length - 1];
+            bullets.pop();
             hit = true;
             break;
           }
@@ -4900,7 +4980,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
               }
               damageBarricade(activeCoverBarricade, b.damage, b.mesh.position, b.isTank);
               b.mesh.visible = false;
-              bullets.splice(i, 1);
+              bullets[i] = bullets[bullets.length - 1];
+              bullets.pop();
               continue;
             }
 
@@ -4925,7 +5006,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             }
 
             b.mesh.visible = false;
-            bullets.splice(i, 1);
+            bullets[i] = bullets[bullets.length - 1];
+            bullets.pop();
 
             if (playerHpRef.current <= 0) {
               onPhaseDefeat(scoreRef.current, killsRef.current);
@@ -4937,7 +5019,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         // Expired or passed behind player into the camera
         if (b.mesh.position.z > playerPosRef.current.z + 4 || b.life <= 0) {
           b.mesh.visible = false;
-          bullets.splice(i, 1);
+          bullets[i] = bullets[bullets.length - 1];
+          bullets.pop();
         }
       }
 
@@ -5125,7 +5208,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         pt.life -= delta;
         if (pt.life <= 0 || pt.mesh.position.z < -68) {
           pt.mesh.visible = false;
-          pTracers.splice(i, 1);
+          pTracers[i] = pTracers[pTracers.length - 1];
+          pTracers.pop();
         }
       }
 
@@ -5149,7 +5233,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         if (sh.life <= 0) {
           sh.mesh.visible = false;
-          shells.splice(i, 1);
+          shells[i] = shells[shells.length - 1];
+          shells.pop();
         }
       }
 
@@ -5220,14 +5305,25 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 7. TARGET LOCK RANGEFINDER & MINIMAP RADAR (Throttled to every 650ms for zero React re-render lag)
-      if (nowTime - lastHudSyncTime >= 650) {
+      // 7. TARGET LOCK RANGEFINDER & MINIMAP RADAR (Key-cached for zero React VDOM re-render lag!)
+      if (nowTime - lastHudSyncTime >= 250) {
         lastHudSyncTime = nowTime;
         const locks: TargetHudLock[] = [];
-        const sorted = [...activeSoldiersRef.current]
-          .filter((s) => s.mesh.position.z < -3)
-          .sort((a, b) => b.mesh.position.z - a.mesh.position.z)
-          .slice(0, 2);
+        
+        let s1: ActiveSoldier | null = null;
+        let s2: ActiveSoldier | null = null;
+        for (let idx = 0; idx < activeSoldiersRef.current.length; idx++) {
+          const s = activeSoldiersRef.current[idx];
+          if (s.mesh.position.z < -3) {
+            if (!s1 || s.mesh.position.z > s1.mesh.position.z) {
+              s2 = s1;
+              s1 = s;
+            } else if (!s2 || s.mesh.position.z > s2.mesh.position.z) {
+              s2 = s;
+            }
+          }
+        }
+        const sorted = s1 ? (s2 ? [s1, s2] : [s1]) : [];
 
         sorted.forEach((s) => {
           _v1.copy(s.mesh.position);
@@ -5239,18 +5335,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
               id: s.id,
               name: s.name,
               dist: Math.round(dist * 10) / 10,
-              x: (_v1.x + 1) * 50,
-              y: (-_v1.y + 1) * 50,
+              x: Math.round((_v1.x + 1) * 50),
+              y: Math.round((-_v1.y + 1) * 50),
               isTank: Boolean(s.isTank || s.isBoss),
               hpPercent: Math.round((s.hitsLeft / s.maxHits) * 100),
             });
           }
         });
-        setTargetLocks(locks);
 
-        // Sync live radar blips for Fortnite Top-Right Minimap
+        const locksKey = locks.map((l) => `${l.id}_${l.x}_${l.y}_${l.hpPercent}`).join('|');
+        if (locksKey !== prevLocksKey) {
+          prevLocksKey = locksKey;
+          setTargetLocks(locks);
+        }
+
+        // Sync live radar blips for Minimap
         const blips: Array<{ x: number; y: number; isTank: boolean; isAllied: boolean }> = [];
-        for (const s of activeSoldiersRef.current) {
+        for (let idx = 0; idx < activeSoldiersRef.current.length; idx++) {
+          const s = activeSoldiersRef.current[idx];
           const rx = Math.max(8, Math.min(92, 50 + ((s.mesh.position.x - playerPosRef.current.x) / 9) * 42));
           const ry = Math.max(8, Math.min(92, 85 + (s.mesh.position.z / 42) * 75));
           blips.push({
@@ -5261,13 +5363,40 @@ export const CombatView: React.FC<CombatViewProps> = ({
           });
         }
         if (airdropRef.current) {
-          for (const ally of airdropRef.current.allies) {
+          for (let idx = 0; idx < airdropRef.current.allies.length; idx++) {
+            const ally = airdropRef.current.allies[idx];
             const ax = Math.max(10, Math.min(90, 50 + ((ally.group.position.x - playerPosRef.current.x) / 9) * 42));
             const ay = Math.max(10, Math.min(90, 85 + (ally.group.position.z / 42) * 75));
             blips.push({ x: Math.round(ax), y: Math.round(ay), isTank: false, isAllied: true });
           }
         }
-        setRadarBlips(blips);
+
+        const blipsKey = blips.map((b) => `${b.x}_${b.y}_${b.isTank}_${b.isAllied}`).join('|');
+        if (blipsKey !== prevBlipsKey) {
+          prevBlipsKey = blipsKey;
+          setRadarBlips(blips);
+        }
+
+        // Sync live relative enemy directions for Tactical Compass Bar
+        const cBlips: Array<{ id: number; offsetPercent: number; isTank: boolean }> = [];
+        for (let idx = 0; idx < activeSoldiersRef.current.length; idx++) {
+          const s = activeSoldiersRef.current[idx];
+          if (s.mesh.position.z >= -1) continue;
+          const distZ = Math.max(1, Math.abs(s.mesh.position.z - playerPosRef.current.z));
+          const relX = (s.mesh.position.x - playerPosRef.current.x) / distZ;
+          const offsetPercent = Math.max(-42, Math.min(42, (relX - aimPosRef.current.x * 0.5) * 36));
+          cBlips.push({
+            id: s.id,
+            offsetPercent: Math.round(offsetPercent),
+            isTank: Boolean(s.isTank || s.isBoss),
+          });
+        }
+        const slicedCompass = cBlips.slice(0, 8);
+        const compassKey = slicedCompass.map((c) => `${c.id}_${c.offsetPercent}_${c.isTank}`).join('|');
+        if (compassKey !== prevCompassKey) {
+          prevCompassKey = compassKey;
+          setCompassBlips(slicedCompass);
+        }
       }
 
       // 8. WEAPON RECOIL, SIGHT SCOPE (ADS) TRANSITION, 3D TACTICAL RELOAD ANIMATION & FIRST-PERSON SWAY
@@ -5658,11 +5787,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   <span>{isAirdropActive ? 'ACT' : reinforceCooldown > 0 ? `${reinforceCooldown}S` : 'AIR [T]'}</span>
                 </button>
               </div>
-
-              {/* Tactical HUD Telemetry Badge directly below the 3D Scope */}
-              <div className="absolute -bottom-5 sm:-bottom-6 left-1/2 -translate-x-1/2 px-2 sm:px-3 py-0.5 bg-zinc-950/95 border border-amber-500/40 text-[7.5px] sm:text-[9px] font-mono tracking-widest text-amber-400 uppercase whitespace-nowrap shadow-md">
-                {currentWeapon.category === 'SNIPER' ? '12X BALLISTIC OPTIC' : '3D BLACK OPS REFLEX'}
-              </div>
           </div>
       </div>
 
@@ -5679,6 +5803,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           </div>
         </div>
       ))}
+
+      {/* Dedicated Tactical Movement Control Zone Anchor (Bottom-Left) */}
+      <div className="fixed bottom-6 left-6 sm:bottom-8 sm:left-8 w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-amber-500/20 bg-slate-950/25 backdrop-blur-[1px] pointer-events-none z-20 flex items-center justify-center opacity-70">
+        <div className="w-10 h-10 rounded-full border border-dashed border-amber-400/30 flex items-center justify-center">
+          <span className="text-[8px] sm:text-[9px] font-mono font-black text-amber-400/60 tracking-widest uppercase">MOVE</span>
+        </div>
+      </div>
 
       {/* Virtual Touch Joystick Visual Indicator (Black Ops Tactical Ring) */}
       {joystickDisplay && (
@@ -5735,7 +5866,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           using all existing weapons and tactical equipment on both Phone & PC.
          ===================================================================== */}
       <div
-        className="hud-layer-fixed fixed inset-0 z-40 pointer-events-none flex flex-col justify-between select-none"
+        className="hud-layer-fixed fixed inset-0 z-40 pointer-events-none flex flex-col justify-between select-none will-change-transform transform-gpu"
         style={{
           zIndex: 40,
           transform: 'translate3d(0, 0, 0)',
@@ -5818,8 +5949,32 @@ export const CombatView: React.FC<CombatViewProps> = ({
             )}
           </div>
 
-          {/* TOP-CENTER: Boss Health Bar, Exfil Button, Killstreak & Threat Alerts */}
+          {/* TOP-CENTER: SLIM TACTICAL COMPASS BAR, Boss Health Bar, Exfil Button, Killstreak & Threat Alerts */}
           <div className="flex flex-col items-center gap-1 max-w-[46vw] sm:max-w-md">
+            {/* SLIM TACTICAL COMPASS BAR (GPU-ACCELERATED WITH CSS will-change) */}
+            <div className="w-48 sm:w-64 h-4.5 bg-slate-950/85 border border-cyan-500/40 rounded-sm flex items-center justify-between px-2 text-[8px] font-mono tracking-widest text-slate-300 relative overflow-hidden shadow-md will-change-transform transform-gpu">
+              {/* Compass Heading Ticks */}
+              <div className="absolute inset-0 flex items-center justify-between px-2.5 text-[7.5px] font-black text-cyan-400/80 pointer-events-none">
+                <span>W</span>
+                <span>NW</span>
+                <span className="text-amber-300 font-black text-[8.5px]">N</span>
+                <span>NE</span>
+                <span>E</span>
+              </div>
+              {/* Center Reticle Notch */}
+              <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 bg-amber-400 z-10 shadow-[0_0_4px_#f59e0b]" />
+              {/* Live Enemy Blips on Compass */}
+              {compassBlips.map((cb, cIdx) => (
+                <div
+                  key={cb.id || cIdx}
+                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full z-20 ${
+                    cb.isTank ? 'bg-amber-400 border border-rose-500 shadow-[0_0_6px_#f59e0b]' : 'bg-rose-500 shadow-[0_0_5px_#f43f5e]'
+                  }`}
+                  style={{ left: `calc(50% + ${cb.offsetPercent}%)` }}
+                />
+              ))}
+            </div>
+
             {bossInfo && (
               <div className="bg-slate-950/90 border-2 border-rose-500 rounded-md px-2.5 sm:px-3.5 py-1 flex flex-col items-center gap-0.5 shadow-[0_4px_16px_rgba(244,63,94,0.45)] w-full min-w-[140px] sm:min-w-[220px]">
                 <div className="flex items-center justify-between w-full gap-2 text-[9px] sm:text-[11px] font-black uppercase tracking-wider">

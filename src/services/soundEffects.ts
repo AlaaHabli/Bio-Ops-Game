@@ -739,6 +739,7 @@ class SoundEffectsService {
   // Victory fanfare
   public playVictory(): void {
     if (!this.enabled) return;
+    this.triggerHaptic([60, 40, 80, 50, 100], 'heavy');
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 

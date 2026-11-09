@@ -221,6 +221,8 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
   // Virtual Joystick Mobile/Touch State (matches regular CombatView!)
   const movementTouchIdRef = useRef<number | null>(null);
   const firingTouchIdRef = useRef<number | null>(null);
+  const movementTouchStartPosRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const movementTouchActiveRef = useRef<boolean>(false);
   const joystickCenterRef = useRef<{ x: number; y: number } | null>(null);
   const joystickOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const moveInputRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
@@ -1219,19 +1221,20 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
         const touch = e.changedTouches[i];
         const clientX = touch.clientX;
         const clientY = touch.clientY;
+        const relX = clientX - cachedRect.left;
+        const relY = clientY - cachedRect.top;
 
-        // Left side of phone screen (left 52%) controls the Virtual Movement Joystick WITHOUT shooting!
-        if (
-          movementTouchIdRef.current === null &&
-          clientX - cachedRect.left < cachedRect.width * 0.52
-        ) {
+        // Dedicated bottom-left movement zone (left 30% width, bottom 35% height)
+        const inMovementZone = relX < cachedRect.width * 0.30 && relY > cachedRect.height * 0.65;
+
+        if (movementTouchIdRef.current === null && inMovementZone) {
           movementTouchIdRef.current = touch.identifier;
+          movementTouchStartPosRef.current = { x: clientX, y: clientY, time: performance.now() };
+          movementTouchActiveRef.current = false;
           joystickCenterRef.current = { x: clientX, y: clientY };
           joystickOffsetRef.current = { x: 0, y: 0 };
-          sounds.triggerHaptic(8, 0.25);
-          setJoystickDisplay({ x: clientX, y: clientY });
         } else if (firingTouchIdRef.current === null) {
-          // Right side of phone screen: drag to look/aim smoothly WITHOUT automatically firing!
+          // Right side / Aim area: drag to look/aim smoothly
           firingTouchIdRef.current = touch.identifier;
           aimTouchStartPos = { x: clientX, y: clientY, time: performance.now() };
           aimTouchDragged = false;
@@ -1248,15 +1251,24 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
           const dx = touch.clientX - joystickCenterRef.current.x;
           const dy = touch.clientY - joystickCenterRef.current.y;
           const dist = Math.hypot(dx, dy);
-          const maxDist = 45;
-          const clampedX = dist > 0 ? (dx / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
-          const clampedY = dist > 0 ? (dy / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
-          joystickOffsetRef.current = { x: clampedX, y: clampedY };
-          moveInputRef.current.x = clampedX / maxDist;
-          moveInputRef.current.z = clampedY / maxDist;
-          // Direct DOM transform update — zero React state re-render!
-          if (joystickKnobDomRef.current) {
-            joystickKnobDomRef.current.style.transform = `translate3d(${clampedX}px, ${clampedY}px, 0)`;
+
+          // Activate movement dragging after 7px threshold
+          if (!movementTouchActiveRef.current && dist > 7) {
+            movementTouchActiveRef.current = true;
+            sounds.triggerHaptic(8, 0.25);
+            setJoystickDisplay({ x: joystickCenterRef.current.x, y: joystickCenterRef.current.y });
+          }
+
+          if (movementTouchActiveRef.current) {
+            const maxDist = 45;
+            const clampedX = dist > 0 ? (dx / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
+            const clampedY = dist > 0 ? (dy / Math.max(dist, maxDist)) * Math.min(dist, maxDist) : 0;
+            joystickOffsetRef.current = { x: clampedX, y: clampedY };
+            moveInputRef.current.x = clampedX / maxDist;
+            moveInputRef.current.z = clampedY / maxDist;
+            if (joystickKnobDomRef.current) {
+              joystickKnobDomRef.current.style.transform = `translate3d(${clampedX}px, ${clampedY}px, 0)`;
+            }
           }
         } else if (touch.identifier === firingTouchIdRef.current) {
           if (
@@ -1274,7 +1286,20 @@ export const SpyMissionView: React.FC<SpyMissionViewProps> = ({
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         if (touch.identifier === movementTouchIdRef.current) {
+          if (!movementTouchActiveRef.current && movementTouchStartPosRef.current) {
+            const dt = performance.now() - movementTouchStartPosRef.current.time;
+            const dist = Math.hypot(
+              touch.clientX - movementTouchStartPosRef.current.x,
+              touch.clientY - movementTouchStartPosRef.current.y
+            );
+            if (dt < 320 && dist < 12) {
+              updateAimFromClient(touch.clientX, touch.clientY);
+            }
+          }
+
           movementTouchIdRef.current = null;
+          movementTouchStartPosRef.current = null;
+          movementTouchActiveRef.current = false;
           joystickCenterRef.current = null;
           joystickOffsetRef.current = { x: 0, y: 0 };
           setJoystickDisplay(null);

@@ -28,8 +28,6 @@ import { ArmoryModal } from './components/ArmoryModal';
 import { IntelArchive } from './components/IntelArchive';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
-import { MultiplayerArenaModal } from './components/MultiplayerArenaModal';
-import { GameTrailerModal } from './components/GameTrailerModal';
 
 type GameState = 'TITLE' | 'BRIEFING' | 'QUIZ' | 'COMBAT' | 'VICTORY' | 'DEFEAT';
 
@@ -64,8 +62,6 @@ export default function App() {
   // Modals
   const [isArmoryOpen, setIsArmoryOpen] = useState<boolean>(false);
   const [isIntelOpen, setIsIntelOpen] = useState<boolean>(false);
-  const [isMultiplayerOpen, setIsMultiplayerOpen] = useState<boolean>(false);
-  const [isTrailerOpen, setIsTrailerOpen] = useState<boolean>(false);
 
   // Real-time Cloud Leaderboard Subscription (Free Firebase Firestore)
   useEffect(() => {
@@ -258,8 +254,6 @@ export default function App() {
             setIsLeaderboardOpen(true);
           }}
           onOpenProfile={() => setIsProfileModalOpen(true)}
-          onOpenMultiplayer={() => setIsMultiplayerOpen(true)}
-          onOpenTrailer={() => setIsTrailerOpen(true)}
         />
       )}
 
@@ -388,20 +382,6 @@ export default function App() {
         onEntryDeleted={(id) => {
           setLeaderboardEntries((prev) => prev.filter((e) => e.id !== id));
         }}
-      />
-
-      {/* MULTIPLAYER DEATHMATCH ARCADE ARENA (STUDENTS CAN START & HOST) */}
-      <MultiplayerArenaModal
-        isOpen={isMultiplayerOpen}
-        studentName={studentProfile?.name || 'Field Operative'}
-        className={studentProfile?.className || 'Science Unit'}
-        onClose={() => setIsMultiplayerOpen(false)}
-      />
-
-      {/* WEBSITE TRAILER BANNER & HYPERLINK GENERATOR */}
-      <GameTrailerModal
-        isOpen={isTrailerOpen}
-        onClose={() => setIsTrailerOpen(false)}
       />
     </div>
   );
