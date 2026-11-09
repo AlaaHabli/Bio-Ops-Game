@@ -2145,95 +2145,207 @@ export function createTacticalAirdropPlane(): {
   return { group, propellers, leftNavLight, rightNavLight };
 }
 
-// 11. PARACHUTING ALLIED WHITE BLOOD CELL COMMANDO
-export function createAlliedWBCCommando(isLeft: boolean): {
+// 11. PARACHUTING ALLIED WHITE BLOOD CELL COMMANDO (With Rotatable Head, Visible Multilobed Purple Neutrophil Nucleus, Articulated Flexing Limbs & Speech Callout)
+export function createAlliedWBCCommando(
+  isLeft: boolean,
+  playerName: string = 'COMMANDER'
+): {
   group: THREE.Group;
   parachuteGroup: THREE.Group;
+  headGroup: THREE.Group;
+  nucleusGroup: THREE.Group;
+  assistBadge: THREE.Mesh;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  leftLeg: THREE.Group;
+  rightLeg: THREE.Group;
   leftRifle: THREE.Mesh;
   rightRifle: THREE.Mesh;
 } {
   const group = new THREE.Group();
 
-  // White Blood Cell Body (Amoeboid Pearl White)
-  const bodyGeo = new THREE.SphereGeometry(0.75, 18, 18);
+  // Rotatable Upper Soma / Head Assembly (Turns behind to face player and reveal the multilobed purple nucleus!)
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 0.12, 0);
+  group.add(headGroup);
+
+  // Translucent Pearl-White Leukocyte Membrane (Allows internal multilobed purple nucleus to shine through!)
+  const bodyGeo = new THREE.SphereGeometry(0.74, 18, 18);
   const bodyMat = createFastLitMaterial({
     color: 0xf8fafc,
-    roughness: 0.25,
+    roughness: 0.2,
     metalness: 0.1,
     emissive: 0x38bdf8,
-    emissiveIntensity: 0.2,
+    emissiveIntensity: 0.18,
+    transparent: true,
+    opacity: 0.68,
   });
   const body = new THREE.Mesh(bodyGeo, bodyMat);
-  group.add(body);
+  headGroup.add(body);
 
-  // UN/NATO Elite Blue Commando Beret
-  const beretGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.2, 16);
+  // MULTILOBED PURPLE POLYMORPHONUCLEAR NEUTROPHIL NUCLEUS (3 connected glowing purple lobes inside & protruding slightly so when rotated it is unmistakably visible!)
+  const nucleusGroup = new THREE.Group();
+  nucleusGroup.position.set(0, 0.06, 0.12);
+  const purpleLobeMat = createFastLitMaterial({
+    color: 0x9333ea,
+    emissive: 0x7e22ce,
+    emissiveIntensity: 1.35,
+    roughness: 0.25,
+  });
+  const chromatinBridgeMat = createFastLitMaterial({
+    color: 0xc084fc,
+    emissive: 0x9333ea,
+    emissiveIntensity: 1.1,
+  });
+
+  // 3 Distinct Polymorphonuclear Lobes arranged in a horse-shoe / trefoil arc
+  const lobePositions: Array<[number, number, number, number]> = [
+    [-0.28, 0.14, 0.16, 0.23],
+    [0.0, 0.26, 0.22, 0.25],
+    [0.28, 0.12, 0.16, 0.23],
+  ];
+  lobePositions.forEach(([lx, ly, lz, r]) => {
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), purpleLobeMat);
+    lobe.scale.set(1.1, 0.92, 1.08);
+    lobe.position.set(lx, ly, lz);
+    nucleusGroup.add(lobe);
+  });
+
+  // Thin Chromatin Strands connecting the 3 purple lobes
+  [-0.14, 0.14].forEach((bx, idx) => {
+    const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.32, 8), chromatinBridgeMat);
+    bridge.position.set(bx, 0.19, 0.19);
+    bridge.rotation.z = idx === 0 ? -1.1 : 1.1;
+    nucleusGroup.add(bridge);
+  });
+  headGroup.add(nucleusGroup);
+
+  // UN/NATO Elite Blue Commando Beret (Tilted high so the purple multilobed nucleus beneath is clearly visible)
+  const beretGeo = new THREE.CylinderGeometry(0.54, 0.6, 0.18, 16);
   const beretMat = createFastLitMaterial({ color: 0x0284c7, roughness: 0.5 });
   const beret = new THREE.Mesh(beretGeo, beretMat);
-  beret.position.set(0.1, 0.68, 0);
-  beret.rotation.z = -0.28;
-  group.add(beret);
+  beret.position.set(0.1, 0.66, 0);
+  beret.rotation.z = -0.26;
+  headGroup.add(beret);
 
   const beretBadge = new THREE.Mesh(
     new THREE.BoxGeometry(0.16, 0.14, 0.04),
     createFastLitMaterial({ color: 0xfacc15, metalness: 0.9 })
   );
-  beretBadge.position.set(0.08, 0.68, 0.58);
-  group.add(beretBadge);
+  beretBadge.position.set(0.08, 0.66, 0.56);
+  headGroup.add(beretBadge);
 
-  // Tactical Ballistic Sunglasses
+  // Tactical Ballistic Visor Shades (Positioned lower on face so glowing purple 3-lobed nucleus is visible right above/behind them!)
   const shades = new THREE.Mesh(
-    new THREE.BoxGeometry(0.65, 0.2, 0.15),
+    new THREE.BoxGeometry(0.62, 0.15, 0.14),
     createFastLitMaterial({ color: 0x09090b, roughness: 0.1, metalness: 0.9 })
   );
-  shades.position.set(0, 0.16, 0.7);
-  group.add(shades);
+  shades.position.set(0, -0.08, 0.68);
+  headGroup.add(shades);
 
-  // Tactical Body Armor Vest
+  // Floating 3D Speech Callout ("ASSIST US, [NAME]!") shown when turning head toward player
+  const cleanName = (playerName || 'COMMANDER').trim().toUpperCase().slice(0, 12);
+  const assistBadge = createDistressSpeechBadge(`ASSIST US, ${cleanName}!`, '#f3e8ff', '#9333ea');
+  assistBadge.scale.set(1.55, 1.55, 1.55);
+  assistBadge.position.set(0, 1.22, 0);
+  assistBadge.visible = false;
+  headGroup.add(assistBadge);
+
+  // Tactical Body Armor Plate Carrier Vest & Commando Belt
   const vest = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.78, 0.8, 0.55, 16),
-    createFastLitMaterial({ color: 0x1e293b, roughness: 0.6 })
+    new THREE.CylinderGeometry(0.72, 0.76, 0.52, 16),
+    createFastLitMaterial({ color: 0x1e293b, roughness: 0.55 })
   );
-  vest.position.set(0, -0.15, 0);
+  vest.position.set(0, -0.22, 0);
   group.add(vest);
 
-  // Limbs
-  const limbMat = createFastLitMaterial({ color: 0xe2e8f0 });
+  // Pouch details on vest
+  [-0.28, 0, 0.28].forEach((px) => {
+    const pouch = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.22, 0.12),
+      createFastLitMaterial({ color: 0x334155, roughness: 0.6 })
+    );
+    pouch.position.set(px, -0.24, 0.72);
+    group.add(pouch);
+  });
+
+  // Articulated Muscular Commando Limbs
+  const limbMat = createFastLitMaterial({ color: 0xe2e8f0, roughness: 0.35 });
+  const muscleBandMat = createFastLitMaterial({ color: 0x0284c7, roughness: 0.4 });
   const bootMat = createFastLitMaterial({ color: 0x0f172a, roughness: 0.7 });
 
-  // Kneeling Combat Legs
+  // Articulated Combat Legs with Knee Pads & Boots
   const leftLeg = new THREE.Group();
-  leftLeg.position.set(-0.35, -0.6, 0);
-  leftLeg.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.55, 6, 8), limbMat));
-  const lb = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.32), bootMat);
-  lb.position.set(0, -0.4, 0.1);
+  leftLeg.position.set(-0.36, -0.58, 0);
+  const lThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.52, 6, 8), limbMat);
+  lThigh.position.set(0, -0.15, 0);
+  leftLeg.add(lThigh);
+  const lKnee = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.24), bootMat);
+  lKnee.position.set(0, -0.22, 0.08);
+  leftLeg.add(lKnee);
+  const lb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.36), bootMat);
+  lb.position.set(0, -0.46, 0.1);
   leftLeg.add(lb);
   group.add(leftLeg);
 
   const rightLeg = new THREE.Group();
-  rightLeg.position.set(0.35, -0.6, 0);
-  rightLeg.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.55, 6, 8), limbMat));
-  const rb = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.32), bootMat);
-  rb.position.set(0, -0.4, 0.1);
+  rightLeg.position.set(0.36, -0.58, 0);
+  const rThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.52, 6, 8), limbMat);
+  rThigh.position.set(0, -0.15, 0);
+  rightLeg.add(rThigh);
+  const rKnee = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.24), bootMat);
+  rKnee.position.set(0, -0.22, 0.08);
+  rightLeg.add(rKnee);
+  const rb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.36), bootMat);
+  rb.position.set(0, -0.46, 0.1);
   rightLeg.add(rb);
   group.add(rightLeg);
 
-  // Arms holding Tactical Rifles
+  // Muscular Commando Arms (Bicep + Forearm + Tactical Assault Rifle)
   const gunMat = createFastLitMaterial({ color: 0x334155, metalness: 0.85, roughness: 0.2 });
+  const barrelMat = createFastLitMaterial({ color: 0x0f172a, metalness: 0.9, roughness: 0.15 });
 
   const leftArm = new THREE.Group();
-  leftArm.position.set(-0.8, -0.05, 0.2);
-  leftArm.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 6, 8), limbMat));
-  const leftRifle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.8), gunMat);
-  leftRifle.position.set(0.1, -0.25, 0.35);
+  leftArm.position.set(-0.82, 0.02, 0.12);
+  const lBicep = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), limbMat);
+  lBicep.scale.set(1.0, 1.35, 1.0);
+  lBicep.position.set(-0.06, 0.04, 0);
+  leftArm.add(lBicep);
+  const lBand = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.08, 10), muscleBandMat);
+  lBand.position.set(-0.06, 0.06, 0);
+  leftArm.add(lBand);
+  const lForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.48, 6, 8), limbMat);
+  lForearm.position.set(0.02, -0.18, 0.18);
+  lForearm.rotation.x = 0.65;
+  leftArm.add(lForearm);
+  const leftRifle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.86), gunMat);
+  leftRifle.position.set(0.08, -0.22, 0.42);
+  const lBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.42, 8), barrelMat);
+  lBarrel.rotateX(Math.PI / 2);
+  lBarrel.position.set(0, 0.03, 0.55);
+  leftRifle.add(lBarrel);
   leftArm.add(leftRifle);
   group.add(leftArm);
 
   const rightArm = new THREE.Group();
-  rightArm.position.set(0.8, -0.05, 0.2);
-  rightArm.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 6, 8), limbMat));
-  const rightRifle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.8), gunMat);
-  rightRifle.position.set(-0.1, -0.25, 0.35);
+  rightArm.position.set(0.82, 0.02, 0.12);
+  const rBicep = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), limbMat);
+  rBicep.scale.set(1.0, 1.35, 1.0);
+  rBicep.position.set(0.06, 0.04, 0);
+  rightArm.add(rBicep);
+  const rBand = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.08, 10), muscleBandMat);
+  rBand.position.set(0.06, 0.06, 0);
+  rightArm.add(rBand);
+  const rForearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.48, 6, 8), limbMat);
+  rForearm.position.set(-0.02, -0.18, 0.18);
+  rForearm.rotation.x = 0.65;
+  rightArm.add(rForearm);
+  const rightRifle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.86), gunMat);
+  rightRifle.position.set(-0.08, -0.22, 0.42);
+  const rBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.42, 8), barrelMat);
+  rBarrel.rotateX(Math.PI / 2);
+  rBarrel.position.set(0, 0.03, 0.55);
+  rightRifle.add(rBarrel);
   rightArm.add(rightRifle);
   group.add(rightArm);
 
@@ -2266,7 +2378,19 @@ export function createAlliedWBCCommando(isLeft: boolean): {
 
   group.add(parachuteGroup);
 
-  return { group, parachuteGroup, leftRifle, rightRifle };
+  return {
+    group,
+    parachuteGroup,
+    headGroup,
+    nucleusGroup,
+    assistBadge,
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    leftRifle,
+    rightRifle,
+  };
 }
 
 // 10. REALISTIC 3D SPITZER RIFLE CARTRIDGE & HEAVY FIN-STABILIZED TANK ARTILLERY SHELL WITH SUPERSONIC BULLET RACE STREAKS!

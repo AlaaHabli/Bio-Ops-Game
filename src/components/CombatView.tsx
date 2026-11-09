@@ -4,7 +4,7 @@ import { LevelConfig, Weapon, HitMarkerInfo, KillfeedEntry, BiologyConceptCard }
 import { sounds } from '../services/soundEffects';
 import { voipManager, OrganVoipClip } from '../services/voipManager';
 import { ORGAN_THEMES, OrganTheme, getOrganThemeForLevel } from '../services/organThemes';
-import { loadSeenConcepts, markConceptAsSeen } from '../services/storage';
+import { loadSeenConcepts, markConceptAsSeen, loadStudentProfile } from '../services/storage';
 import { WeaponBlockyIcon } from './WeaponBlockyIcon';
 import {
   createStreptococcusSoldier,
@@ -132,6 +132,9 @@ interface ActiveSoldier {
   evadeCooldown?: number;
   burstShotsRemaining?: number;
   nextBurstTime?: number;
+  // Low-HP Fire & Structural Distress Tracking
+  lastDamageFireTime?: number;
+  lowHpShatterTriggered?: boolean;
 }
 
 interface ActiveEnemyAirdrop {
@@ -187,11 +190,23 @@ interface ActiveAirdrop {
   allies: Array<{
     group: THREE.Group;
     parachuteGroup: THREE.Group;
+    headGroup: THREE.Group;
+    nucleusGroup: THREE.Group;
+    assistBadge: THREE.Mesh;
+    leftArm: THREE.Group;
+    rightArm: THREE.Group;
+    leftLeg: THREE.Group;
+    rightLeg: THREE.Group;
+    leftRifle: THREE.Mesh;
+    rightRifle: THREE.Mesh;
     landed: boolean;
     targetY: number;
     x: number;
     z: number;
     lastFireTime: number;
+    landedElapsed?: number;
+    recoilTimer?: number;
+    hasCalledAssist?: boolean;
     dodgeTimer?: number;
     isDodging?: boolean;
     dodgeDirection?: number;
@@ -1256,8 +1271,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
     frontLight.position.set(0, 2, 2);
     scene.add(frontLight);
 
-    // 3D Tactical Muzzle Flash Starburst Mesh
-    const flashGeo = new THREE.PlaneGeometry(0.42, 0.42);
+    // 3D Tactical MuzzleFlash Starburst Assembly at Weapon Barrel
+    const flashGeo = new THREE.PlaneGeometry(0.44, 0.44);
     const flashMat = new THREE.MeshBasicMaterial({
       color: 0x67e8f9,
       transparent: true,
@@ -1266,6 +1281,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
       blending: THREE.AdditiveBlending,
     });
     const muzzleSprite = new THREE.Mesh(flashGeo, flashMat);
+    const crossFlashA = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.14), flashMat);
+    crossFlashA.rotation.y = Math.PI / 2;
+    muzzleSprite.add(crossFlashA);
+    const crossFlashB = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.36), flashMat);
+    crossFlashB.rotation.x = Math.PI / 2;
+    muzzleSprite.add(crossFlashB);
     muzzleSprite.position.set(0, 0.03, -1.24);
     muzzleSpriteRef.current = muzzleSprite;
 
@@ -1330,7 +1351,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     wallMesh.position.set(0, 0, -50);
     scene.add(wallMesh);
 
-    // 6. Organ Particles
+    // 6. Organ Particles (Soft circular bioluminescent spheres instead of default WebGL squares)
     const particleCount = 180;
     const particleGeo = new THREE.BufferGeometry();
     const particlePositions = new Float32Array(particleCount * 3);
@@ -1340,11 +1361,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
       particlePositions[i + 2] = -Math.random() * 90;
     }
     particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+    const particleCircleTex = (() => {
+      const pCanvas = document.createElement('canvas');
+      pCanvas.width = 64;
+      pCanvas.height = 64;
+      const pCtx = pCanvas.getContext('2d');
+      if (pCtx) {
+        const grad = pCtx.createRadialGradient(32, 32, 2, 32, 32, 30);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        grad.addColorStop(0.45, 'rgba(255, 255, 255, 0.75)');
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        pCtx.fillStyle = grad;
+        pCtx.beginPath();
+        pCtx.arc(32, 32, 30, 0, Math.PI * 2);
+        pCtx.fill();
+      }
+      const tex = new THREE.CanvasTexture(pCanvas);
+      tex.needsUpdate = true;
+      return tex;
+    })();
     const particleMat = new THREE.PointsMaterial({
       color: organTheme.particleColor,
-      size: organTheme.particleSize,
+      size: organTheme.particleSize * 1.15,
+      map: particleCircleTex,
       transparent: true,
-      opacity: 0.7,
+      alphaTest: 0.05,
+      depthWrite: false,
+      opacity: 0.78,
     });
     const particleSystem = new THREE.Points(particleGeo, particleMat);
     scene.add(particleSystem);
@@ -1734,7 +1777,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (slot.leftArm) slot.leftArm.rotation.set(0, 0, 0);
       if (slot.rightArm) slot.rightArm.rotation.set(0, 0, 0);
       if (slot.turret) slot.turret.rotation.set(0, 0, 0);
-      if (slot.cannon) slot.cannon.position.z = 0;
+      if (slot.cannon) {
+        slot.cannon.position.z = 0;
+        slot.cannon.rotation.set(0, 0, 0);
+      }
       if (slot.scopeGlint) (slot.scopeGlint.material as THREE.MeshBasicMaterial).opacity = 0;
       return slot;
     }
@@ -1785,11 +1831,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
       allyPlane.group.visible = false;
       scene.add(allyPlane.group);
 
-      const leftAlly = createAlliedWBCCommando(true);
+      const savedProfile = loadStudentProfile();
+      const playerCalloutName = savedProfile?.name || 'COMMANDER';
+
+      const leftAlly = createAlliedWBCCommando(true, playerCalloutName);
       leftAlly.group.visible = false;
       scene.add(leftAlly.group);
 
-      const rightAlly = createAlliedWBCCommando(false);
+      const rightAlly = createAlliedWBCCommando(false, playerCalloutName);
       rightAlly.group.visible = false;
       scene.add(rightAlly.group);
 
@@ -2284,6 +2333,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
       new THREE.MeshBasicMaterial({ color: 0xef4444 }),
       new THREE.MeshBasicMaterial({ color: 0xa855f7 }),
     ];
+    const sharedMembraneMats = [
+      new THREE.MeshBasicMaterial({ color: 0x4ade80 }),
+      new THREE.MeshBasicMaterial({ color: 0xa855f7 }),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 }),
+      new THREE.MeshBasicMaterial({ color: 0xf43f5e }),
+    ];
+    const sharedSmokeMat = new THREE.MeshBasicMaterial({ color: 0x1e293b });
     const sharedBagGeo = new THREE.BoxGeometry(0.46, 0.22, 0.32);
     const sharedBagMats = [
       new THREE.MeshLambertMaterial({ color: 0xd4a373 }),
@@ -2306,7 +2362,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     // OBJECT POOLS FOR ENVIRONMENTAL DEBRIS PARTICLES, SHELL CASINGS & PROJECTILES
     // ============================================================================
     const debrisMeshPool: THREE.Mesh[] = [];
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < 64; i++) {
       const m = new THREE.Mesh(sharedExplosionGeo, sharedExplosionMat);
       m.visible = false;
       scene.add(m);
@@ -2534,6 +2590,103 @@ export const CombatView: React.FC<CombatViewProps> = ({
       hazardPool.push({ inUse: false, group: hGroup, warningRing: wRing, plumes });
     }
 
+    // Helper: MuzzleFlash Particle Burst at the Active Weapon's Barrel Position whenever the user fires!
+    function triggerMuzzleFlash(barrelPos: THREE.Vector3, shotDir: THREE.Vector3, weaponCategory: string) {
+      const burstCount = weaponCategory === 'SHOTGUN' ? 8 : 6;
+      const matIndexOffset =
+        weaponCategory === 'SNIPER'
+          ? 2
+          : weaponCategory === 'MACHINE_GUN'
+          ? 3
+          : weaponCategory === 'SHOTGUN'
+          ? 1
+          : 0;
+      for (let i = 0; i < burstCount; i++) {
+        const isSpark = i % 2 === 0;
+        const speed = 10 + Math.random() * 14;
+        spawnPooledParticle(
+          isSpark ? sharedSparkGeo : sharedSandGeo,
+          isSpark
+            ? sharedBulletSparkMat
+            : sharedMuzzleBlastMats[(i + matIndexOffset) % sharedMuzzleBlastMats.length],
+          barrelPos,
+          shotDir.x * speed + (Math.random() - 0.5) * 4.5,
+          shotDir.y * speed + (Math.random() - 0.5) * 4.5,
+          shotDir.z * speed + (Math.random() - 0.5) * 3.5,
+          0.09 + Math.random() * 0.07,
+          0.16
+        );
+      }
+    }
+
+    // Helper: Cellular Membrane Disintegration Effect whenever Bacteria (Strep / Bacillus) are killed!
+    function triggerMembraneDisintegration(pos: THREE.Vector3, enemyType: string) {
+      sounds.playExplosion();
+      cameraShakeRef.current = Math.max(cameraShakeRef.current, 0.38);
+
+      // Trigger expanding osmotic cytolysis membrane ripple
+      triggerSpawnRipple(pos.x, pos.y + 0.18, pos.z, false);
+
+      // Burst 12 cellular lipid-bilayer fragments & glowing cytoplasmic vesicles outward
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+        const outSpeed = 3.5 + Math.random() * 7.5;
+        const mat =
+          enemyType === 'bacillus'
+            ? sharedMembraneMats[(i + 1) % sharedMembraneMats.length]
+            : sharedMembraneMats[i % 3];
+        spawnPooledParticle(
+          i % 3 === 0 ? sharedExplosionGeo : sharedSandGeo,
+          mat,
+          pos,
+          Math.cos(angle) * outSpeed,
+          1.8 + Math.random() * 5.8,
+          Math.sin(angle) * outSpeed,
+          0.48 + Math.random() * 0.28,
+          0.76,
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 14,
+          false
+        );
+      }
+    }
+
+    // Helper: Heavy Structural Destruction & Fireball Pop when a Low-HP Tank or Boss finally pops!
+    function triggerHeavyDestructionPop(pos: THREE.Vector3, isBoss: boolean) {
+      triggerExplosion(pos);
+      cameraShakeRef.current = isBoss ? 0.95 : 0.78;
+      const chunkCount = isBoss ? 10 : 7;
+      for (let i = 0; i < chunkCount; i++) {
+        spawnPooledParticle(
+          i % 2 === 0 ? sharedBagGeo : sharedWoodGeo,
+          i % 2 === 0 ? sharedBagMats[i % sharedBagMats.length] : sharedWoodMat,
+          pos,
+          (Math.random() - 0.5) * 16,
+          5.0 + Math.random() * 8.0,
+          (Math.random() - 0.5) * 14,
+          0.75 + Math.random() * 0.35,
+          1.1,
+          (Math.random() - 0.5) * 22,
+          (Math.random() - 0.5) * 22,
+          (Math.random() - 0.5) * 22,
+          true
+        );
+      }
+      for (let s = 0; s < 6; s++) {
+        spawnPooledParticle(
+          sharedSparkGeo,
+          s % 2 === 0 ? sharedTankSparkMat : sharedBulletSparkMat,
+          pos,
+          (Math.random() - 0.5) * 18,
+          3.0 + Math.random() * 9.0,
+          (Math.random() - 0.5) * 18,
+          0.4 + Math.random() * 0.25,
+          0.65
+        );
+      }
+    }
+
     // Helper: Spawn explosion fireball particles (via zero-GC debris pool)
     function triggerExplosion(pos: THREE.Vector3) {
       sounds.playExplosion();
@@ -2699,7 +2852,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
 
       if (muzzleSpriteRef.current) {
-        (muzzleSpriteRef.current.material as THREE.MeshBasicMaterial).opacity = 0.95;
+        const mMat = muzzleSpriteRef.current.material as THREE.MeshBasicMaterial;
+        mMat.opacity = 0.96;
+        mMat.color.setHex(
+          activeWpn.category === 'SNIPER'
+            ? 0xfda4af
+            : activeWpn.category === 'SHOTGUN'
+            ? 0xfef08a
+            : activeWpn.category === 'MACHINE_GUN'
+            ? 0xd8b4fe
+            : 0x67e8f9
+        );
+        const fScale = activeWpn.category === 'SHOTGUN' ? 1.35 : 1.0 + Math.random() * 0.25;
+        muzzleSpriteRef.current.scale.set(fScale, fScale, fScale);
         muzzleSpriteRef.current.rotation.z = Math.random() * Math.PI * 2;
       }
 
@@ -2797,7 +2962,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       raycaster.setFromCamera(hitVector, camera);
 
-      // Spawn a visible 3D Pointed Spitzer Bullet Projectile from playerTracerPool directly out of the 3D gun barrel!
+      // Spawn MuzzleFlash Particle Effect & 3D Pointed Spitzer Bullet Projectile directly at the active weapon barrel position!
       {
         if (weaponMeshRef.current) {
           _v1.set(0, 0.03, -1.24);
@@ -2809,6 +2974,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             playerPosRef.current.z - 0.85
           );
         }
+        triggerMuzzleFlash(_v1, raycaster.ray.direction, activeWpn.category);
         _v2.copy(raycaster.ray.direction).multiplyScalar(42).add(_v1);
         const tracerColor =
           activeWpn.category === 'SNIPER'
@@ -3040,7 +3206,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         if (isDefeated) {
           eliminatedSoldier = hitSoldier;
-          triggerExplosion(hitSoldier.mesh.position);
+          if (hitSoldier.isTank || hitSoldier.isBoss) {
+            triggerHeavyDestructionPop(hitSoldier.mesh.position, hitSoldier.isBoss);
+          } else {
+            triggerMembraneDisintegration(hitSoldier.mesh.position, hitSoldier.type);
+          }
           releaseSoldierToPool(hitSoldier);
           const sIdx = soldiers.indexOf(hitSoldier);
           if (sIdx !== -1) soldiers.splice(sIdx, 1);
@@ -3625,7 +3795,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
               }
               if (s.hitsLeft <= 0 || s.hp <= 0) {
                 killCount++;
-                triggerExplosion(s.mesh.position);
+                if (s.isTank || s.isBoss) {
+                  triggerHeavyDestructionPop(s.mesh.position, s.isBoss);
+                } else {
+                  triggerMembraneDisintegration(s.mesh.position, s.type);
+                }
                 releaseSoldierToPool(s);
                 activeSoldiersRef.current.splice(j, 1);
                 if (s.isHelicopter || s.isRobot || s.isJet) {
@@ -4103,6 +4277,77 @@ export const CombatView: React.FC<CombatViewProps> = ({
           continue;
         }
 
+        // LOW-HP BOSS & TANK FIRE, SMOKE & PARTIAL STRUCTURAL DESTRUCTION BEFORE THEY POP!
+        const isArmoredUnit = Boolean(soldier.isTank || soldier.isBoss);
+        const unitHpRatio = isArmoredUnit
+          ? Math.min(
+              soldier.hitsLeft / Math.max(1, soldier.maxHits),
+              soldier.hp / Math.max(1, soldier.maxHp)
+            )
+          : 1;
+        const isCriticallyDamaged = isArmoredUnit && unitHpRatio <= 0.45 && unitHpRatio > 0;
+
+        if (isCriticallyDamaged) {
+          // One-time partial structural armor-plate shatter when entering critical low health!
+          if (!soldier.lowHpShatterTriggered) {
+            soldier.lowHpShatterTriggered = true;
+            sounds.playBarricadeHit();
+            for (let dIdx = 0; dIdx < 6; dIdx++) {
+              _v1.copy(soldier.mesh.position);
+              _v1.y += soldier.isRobot ? 1.85 : 0.45;
+              spawnPooledParticle(
+                dIdx % 2 === 0 ? sharedBagGeo : sharedWoodGeo,
+                dIdx % 2 === 0 ? sharedBagMats[dIdx % sharedBagMats.length] : sharedWoodMat,
+                _v1,
+                (Math.random() - 0.5) * 10,
+                3.5 + Math.random() * 5.5,
+                (Math.random() - 0.5) * 8,
+                0.65 + Math.random() * 0.25,
+                0.9,
+                (Math.random() - 0.5) * 20,
+                (Math.random() - 0.5) * 20,
+                (Math.random() - 0.5) * 20,
+                true
+              );
+            }
+          }
+
+          // Continuous burning fire, dark smoke & electrical sparks rising from crippled hull/fuselage (throttled to 85ms)
+          if (nowTime - (soldier.lastDamageFireTime || 0) >= 85) {
+            soldier.lastDamageFireTime = nowTime;
+            _v1.copy(soldier.mesh.position);
+            _v1.x += (Math.random() - 0.5) * (soldier.isBoss ? 1.1 : 0.75);
+            _v1.y += (soldier.isRobot ? 1.95 : soldier.isTank ? 0.52 : 0.25) + (Math.random() - 0.5) * 0.25;
+            _v1.z += (Math.random() - 0.5) * 0.65;
+
+            // Rising orange/yellow/red fire tongues
+            for (let f = 0; f < 2; f++) {
+              spawnPooledParticle(
+                sharedExplosionGeo,
+                sharedMuzzleBlastMats[(f + Math.floor(Math.random() * 3)) % 3],
+                _v1,
+                (Math.random() - 0.5) * 2.2,
+                2.4 + Math.random() * 3.2,
+                (Math.random() - 0.5) * 2.2,
+                0.28 + Math.random() * 0.16,
+                0.44
+              );
+            }
+            // Dark smoke plume or electrical arc spark
+            const emitSpark = Math.random() < 0.45;
+            spawnPooledParticle(
+              emitSpark ? sharedSparkGeo : sharedSandGeo,
+              emitSpark ? sharedTankSparkMat : sharedSmokeMat,
+              _v1,
+              (Math.random() - 0.5) * (emitSpark ? 7.5 : 2.6),
+              emitSpark ? 2.0 + Math.random() * 5.0 : 3.2 + Math.random() * 2.5,
+              (Math.random() - 0.5) * (emitSpark ? 7.5 : 2.6),
+              0.32 + Math.random() * 0.18,
+              0.5
+            );
+          }
+        }
+
         // Update Boss Evasive Dodging Timer & Smooth Juke Interpolation
         if (soldier.isBoss) {
           if (nowTime >= (soldier.nextDodgeTime || 0)) {
@@ -4149,8 +4394,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
           );
           soldier.mesh.rotation.z =
             Math.sin(elapsed * 1.35 + soldier.walkOffset) * 0.14 -
-            ((soldier.dodgeTargetX || 0) - (soldier.dodgeOffsetX || 0)) * 0.15;
-          soldier.mesh.rotation.x = 0.22;
+            ((soldier.dodgeTargetX || 0) - (soldier.dodgeOffsetX || 0)) * 0.15 +
+            (isCriticallyDamaged ? 0.18 + Math.sin(elapsed * 28) * 0.12 : 0);
+          soldier.mesh.rotation.x = 0.22 + (isCriticallyDamaged ? Math.cos(elapsed * 24) * 0.08 : 0);
 
           if (soldier.mesh.position.z < -11.5) {
             soldier.mesh.position.z += soldier.speed * delta;
@@ -4171,6 +4417,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
           soldier.mesh.position.y = -1.5 + Math.abs(Math.sin(elapsed * 4.2 + soldier.walkOffset)) * 0.18;
           soldier.mesh.rotation.y = Math.sin(elapsed * 2.1) * 0.12 - ((soldier.dodgeOffsetX || 0) * 0.08);
+          soldier.mesh.rotation.z = isCriticallyDamaged ? 0.16 + Math.sin(elapsed * 26) * 0.07 : 0;
         } else if (soldier.isJet) {
           soldier.mesh.position.z += soldier.speed * delta;
           const baseJetX = Math.sin(elapsed * 1.5 + soldier.walkOffset) * 2.0 + (soldier.dodgeOffsetX || 0);
@@ -4178,7 +4425,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           soldier.mesh.position.y = 1.25 + Math.sin(elapsed * 2.2) * 0.24 + (soldier.dodgeOffsetY || 0);
           soldier.mesh.rotation.z =
             Math.sin(elapsed * 2.4) * 0.25 -
-            ((soldier.dodgeTargetX || 0) - (soldier.dodgeOffsetX || 0)) * 0.22;
+            ((soldier.dodgeTargetX || 0) - (soldier.dodgeOffsetX || 0)) * 0.22 +
+            (isCriticallyDamaged ? 0.22 + Math.sin(elapsed * 30) * 0.14 : 0);
           if (soldier.afterburnerMesh) {
             soldier.afterburnerMesh.scale.set(1, 1, 1 + Math.random() * 0.85);
           }
@@ -4197,8 +4445,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           soldier.hullRock = THREE.MathUtils.damp(soldier.hullRock || 0, 0, 6, delta);
           if (soldier.cannon) {
             soldier.cannon.position.z = -(soldier.cannonRecoil || 0);
+            soldier.cannon.rotation.x = isCriticallyDamaged ? 0.14 + Math.sin(elapsed * 20) * 0.04 : 0;
           }
           soldier.mesh.rotation.x = soldier.hullRock || 0;
+          soldier.mesh.rotation.z = isCriticallyDamaged ? -0.09 + Math.sin(elapsed * 26) * 0.04 : 0;
+          if (soldier.turret) {
+            soldier.turret.rotation.z = isCriticallyDamaged ? 0.22 + Math.sin(elapsed * 22) * 0.05 : 0;
+          }
 
           if (soldier.stanceState === 'advancing') {
             if (soldier.mesh.position.z < tankStopZ) {
@@ -5085,35 +5338,65 @@ export const CombatView: React.FC<CombatViewProps> = ({
             ad.alliesDropped = true;
 
             const leftAlly = prebuiltAlliedRef.current.leftAlly;
-            leftAlly.group.position.set(-3.2, 4.4, -14);
-            leftAlly.group.rotation.set(0, 0, 0);
+            leftAlly.group.position.set(-2.85, 4.4, -12.5);
+            leftAlly.group.rotation.set(0, Math.PI, 0);
+            leftAlly.headGroup.rotation.set(0, 0, 0);
+            leftAlly.nucleusGroup.scale.set(1, 1, 1);
+            leftAlly.assistBadge.visible = false;
             leftAlly.parachuteGroup.visible = true;
             leftAlly.group.visible = true;
 
             const rightAlly = prebuiltAlliedRef.current.rightAlly;
-            rightAlly.group.position.set(3.2, 4.4, -14);
-            rightAlly.group.rotation.set(0, 0, 0);
+            rightAlly.group.position.set(2.85, 4.4, -12.5);
+            rightAlly.group.rotation.set(0, Math.PI, 0);
+            rightAlly.headGroup.rotation.set(0, 0, 0);
+            rightAlly.nucleusGroup.scale.set(1, 1, 1);
+            rightAlly.assistBadge.visible = false;
             rightAlly.parachuteGroup.visible = true;
             rightAlly.group.visible = true;
 
             ad.allies.push({
               group: leftAlly.group,
               parachuteGroup: leftAlly.parachuteGroup,
+              headGroup: leftAlly.headGroup,
+              nucleusGroup: leftAlly.nucleusGroup,
+              assistBadge: leftAlly.assistBadge,
+              leftArm: leftAlly.leftArm,
+              rightArm: leftAlly.rightArm,
+              leftLeg: leftAlly.leftLeg,
+              rightLeg: leftAlly.rightLeg,
+              leftRifle: leftAlly.leftRifle,
+              rightRifle: leftAlly.rightRifle,
               landed: false,
               targetY: -0.45,
-              x: -3.2,
-              z: -14,
+              x: -2.85,
+              z: -12.5,
               lastFireTime: performance.now(),
+              landedElapsed: 0,
+              recoilTimer: 0,
+              hasCalledAssist: false,
             });
 
             ad.allies.push({
               group: rightAlly.group,
               parachuteGroup: rightAlly.parachuteGroup,
+              headGroup: rightAlly.headGroup,
+              nucleusGroup: rightAlly.nucleusGroup,
+              assistBadge: rightAlly.assistBadge,
+              leftArm: rightAlly.leftArm,
+              rightArm: rightAlly.rightArm,
+              leftLeg: rightAlly.leftLeg,
+              rightLeg: rightAlly.rightLeg,
+              leftRifle: rightAlly.leftRifle,
+              rightRifle: rightAlly.rightRifle,
               landed: false,
               targetY: -0.45,
-              x: 3.2,
-              z: -14,
-              lastFireTime: performance.now() + 300,
+              x: 2.85,
+              z: -12.5,
+              lastFireTime: performance.now() + 280,
+              landedElapsed: 0,
+              recoilTimer: 0,
+              hasCalledAssist: false,
             });
           }
 
@@ -5124,13 +5407,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         }
 
-        // Animate Allied Commandos Falling & Suppressing
+        // Animate Allied Commandos Falling, Flexing Like Tactical Commandos, Turning Head Behind & Shooting Naturally
         const currentNow = performance.now();
         for (let aIdx = 0; aIdx < ad.allies.length; aIdx++) {
           const ally = ad.allies[aIdx];
           if (!ally.landed) {
             ally.group.position.y -= delta * 3.8;
             ally.group.rotation.z = Math.sin(elapsed * 4 + aIdx) * 0.12;
+            // Air-treading legs and riser-gripping arms during parachute descent
+            const airKick = Math.sin(elapsed * 12 + aIdx);
+            ally.leftLeg.rotation.x = airKick * 0.45;
+            ally.rightLeg.rotation.x = -airKick * 0.45;
+            ally.leftArm.rotation.x = -1.15;
+            ally.rightArm.rotation.x = -1.15;
+            ally.leftArm.rotation.z = 0.25;
+            ally.rightArm.rotation.z = -0.25;
+
             if (ally.group.position.y <= ally.targetY) {
               ally.group.position.y = ally.targetY;
               ally.landed = true;
@@ -5139,9 +5431,35 @@ export const CombatView: React.FC<CombatViewProps> = ({
               sounds.playRadioChirp();
             }
           } else {
+            ally.landedElapsed = (ally.landedElapsed || 0) + delta;
+            ally.recoilTimer = Math.max(0, (ally.recoilTimer || 0) - delta * 6.0);
             ally.dodgeTimer = (ally.dodgeTimer || 0) + delta;
 
-            if (ally.dodgeTimer > 2.4 && !ally.isDodging) {
+            // Find nearest active enemy target so the commando aims naturally toward the threat
+            const soldiers = activeSoldiersRef.current;
+            let targetSoldier: ActiveSoldier | null = null;
+            let minD = 999;
+            for (const s of soldiers) {
+              const d = ally.group.position.distanceTo(s.mesh.position);
+              if (d < minD && s.mesh.position.z < -3) {
+                minD = d;
+                targetSoldier = s;
+              }
+            }
+
+            // Smoothly orient commando body toward target soldier (or forward downrange at Math.PI)
+            const targetBodyYaw = targetSoldier
+              ? Math.atan2(
+                  targetSoldier.mesh.position.x - ally.group.position.x,
+                  targetSoldier.mesh.position.z - ally.group.position.z
+                )
+              : Math.PI;
+            ally.group.rotation.y = THREE.MathUtils.damp(ally.group.rotation.y, targetBodyYaw, 8, delta);
+
+            // Tactical Commando Flexing Pose upon landing (first 1.25s) and right before departing (last 1.45s)
+            const isFlexingPose = ally.landedElapsed < 1.25 || ad.activeTimer < 1.45;
+
+            if (ally.dodgeTimer > 3.2 && !ally.isDodging && !isFlexingPose) {
               ally.isDodging = true;
               ally.dodgeTimer = 0;
               ally.dodgeDirection = aIdx === 0 ? 1 : -1;
@@ -5151,77 +5469,146 @@ export const CombatView: React.FC<CombatViewProps> = ({
             if (ally.isDodging) {
               ally.rollProgress = (ally.rollProgress || 0) + delta * 3.5;
               ally.group.rotation.z = (ally.dodgeDirection || 1) * ally.rollProgress * Math.PI * 2;
-              ally.group.position.x += (ally.dodgeDirection || 1) * delta * 3.6;
-              ally.group.position.x = Math.max(-4.2, Math.min(4.2, ally.group.position.x));
+              ally.group.position.x += (ally.dodgeDirection || 1) * delta * 3.2;
+              ally.group.position.x = Math.max(-3.8, Math.min(3.8, ally.group.position.x));
 
               if (ally.rollProgress >= 1.0) {
                 ally.isDodging = false;
                 ally.group.rotation.z = 0;
               }
+            } else if (isFlexingPose) {
+              // TACTICAL COMMANDO DOUBLE-BICEP MUSCLE FLEX!
+              const flexPump = Math.sin(elapsed * 15 + aIdx);
+              ally.group.rotation.z = Math.sin(elapsed * 8 + aIdx) * 0.06;
+              ally.group.position.y = ally.targetY - 0.06 + Math.abs(flexPump) * 0.05;
+              ally.leftLeg.rotation.x = -0.38 + flexPump * 0.16;
+              ally.rightLeg.rotation.x = 0.38 - flexPump * 0.16;
+              ally.leftArm.rotation.x = THREE.MathUtils.damp(ally.leftArm.rotation.x, -0.35, 12, delta);
+              ally.rightArm.rotation.x = THREE.MathUtils.damp(ally.rightArm.rotation.x, -0.35, 12, delta);
+              ally.leftArm.rotation.z = THREE.MathUtils.damp(
+                ally.leftArm.rotation.z,
+                -1.22 - flexPump * 0.25,
+                12,
+                delta
+              );
+              ally.rightArm.rotation.z = THREE.MathUtils.damp(
+                ally.rightArm.rotation.z,
+                1.22 + flexPump * 0.25,
+                12,
+                delta
+              );
             } else {
-              ally.group.rotation.z = Math.sin(elapsed * 6 + aIdx) * 0.05;
-              ally.group.position.y = ally.targetY + Math.abs(Math.sin(elapsed * 8)) * 0.03;
+              // Dynamic Tactical Striding Legs & Natural Shouldered Rifle Shooting Stance
+              const strideCycle = Math.sin(elapsed * 11 + aIdx * 2.1);
+              const recoilKick = ally.recoilTimer || 0;
+              ally.group.rotation.z = Math.sin(elapsed * 6 + aIdx) * 0.04;
+              ally.group.position.y = ally.targetY + Math.abs(strideCycle) * 0.04;
+              ally.leftLeg.rotation.x = strideCycle * 0.52;
+              ally.rightLeg.rotation.x = -strideCycle * 0.52;
+              ally.leftArm.rotation.x = THREE.MathUtils.damp(
+                ally.leftArm.rotation.x,
+                -0.52 + recoilKick * 0.38 + strideCycle * 0.08,
+                14,
+                delta
+              );
+              ally.rightArm.rotation.x = THREE.MathUtils.damp(
+                ally.rightArm.rotation.x,
+                -0.52 + recoilKick * 0.38 - strideCycle * 0.08,
+                14,
+                delta
+              );
+              ally.leftArm.rotation.z = THREE.MathUtils.damp(ally.leftArm.rotation.z, 0.12, 10, delta);
+              ally.rightArm.rotation.z = THREE.MathUtils.damp(ally.rightArm.rotation.z, -0.12, 10, delta);
+              ally.leftRifle.position.z = 0.42 - recoilKick * 0.18;
+              ally.rightRifle.position.z = 0.42 - recoilKick * 0.18;
             }
 
-            if (currentNow - ally.lastFireTime > 750) {
-              ally.lastFireTime = currentNow;
-
-              const soldiers = activeSoldiersRef.current;
-              let targetSoldier: ActiveSoldier | null = null;
-              let minD = 999;
-              for (const s of soldiers) {
-                const d = ally.group.position.distanceTo(s.mesh.position);
-                if (d < minD && s.mesh.position.z < -3) {
-                  minD = d;
-                  targetSoldier = s;
+            // Left WBC Commando turns his head behind toward the player and says "ASSIST US, [NAME]!" revealing his multilobed purple nucleus!
+            const shouldTurnHeadBehind =
+              aIdx === 0 && ((ally.landedElapsed >= 0.75 && ally.landedElapsed <= 6.8) || ad.activeTimer < 1.8);
+            if (shouldTurnHeadBehind) {
+              // Rotate headGroup so it faces directly back toward the player camera (world +Z)
+              const desiredHeadLocalYaw = Math.PI;
+              ally.headGroup.rotation.y = THREE.MathUtils.damp(
+                ally.headGroup.rotation.y,
+                desiredHeadLocalYaw,
+                8,
+                delta
+              );
+              if (Math.abs(ally.headGroup.rotation.y) > 1.75) {
+                ally.assistBadge.visible = true;
+                const nucPulse = 1.24 + Math.sin(elapsed * 12) * 0.12;
+                ally.nucleusGroup.scale.set(nucPulse, nucPulse, nucPulse);
+                if (!ally.hasCalledAssist) {
+                  ally.hasCalledAssist = true;
+                  sounds.playRadioChirp();
+                  const pName = (loadStudentProfile()?.name || 'COMMANDER').trim().toUpperCase();
+                  const assistMsg = `💜 WBC COMMANDO: "ASSIST US, ${pName}!" (MULTILOBED PURPLE NUCLEUS REVEALED!)`;
+                  setCellDistressBanner(assistMsg);
+                  setTimeout(() => {
+                    setCellDistressBanner((prev) => (prev === assistMsg ? null : prev));
+                  }, 4200);
                 }
               }
+            } else {
+              ally.headGroup.rotation.y = THREE.MathUtils.damp(ally.headGroup.rotation.y, 0, 8, delta);
+              ally.assistBadge.visible = false;
+              ally.nucleusGroup.scale.set(1, 1, 1);
+            }
 
-              if (targetSoldier) {
-                sounds.playAlliedShoot();
-                targetSoldier.hp -= 28;
-                targetSoldier.hitsLeft -= 1;
-                targetSoldier.mesh.position.z -= 0.4;
-                if (targetSoldier.hpBarFill) {
-                  const pct = Math.max(0.01, targetSoldier.hitsLeft / targetSoldier.maxHits);
-                  targetSoldier.hpBarFill.scale.x = pct;
-                  targetSoldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
+            // Natural Commando Suppressive Rifle Fire before leaving
+            if (currentNow - ally.lastFireTime > 650 && ad.activeTimer > 0.35 && targetSoldier) {
+              ally.lastFireTime = currentNow;
+              ally.recoilTimer = 1.0;
+
+              sounds.playAlliedShoot();
+              targetSoldier.hp -= 28;
+              targetSoldier.hitsLeft -= 1;
+              targetSoldier.mesh.position.z -= 0.4;
+              if (targetSoldier.hpBarFill) {
+                const pct = Math.max(0.01, targetSoldier.hitsLeft / targetSoldier.maxHits);
+                targetSoldier.hpBarFill.scale.x = pct;
+                targetSoldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
+              }
+              if (targetSoldier.isHelicopter || targetSoldier.isRobot || targetSoldier.isJet) {
+                setBossInfo((prev) => (prev ? { ...prev, hitsLeft: Math.max(0, targetSoldier!.hitsLeft) } : null));
+              }
+
+              // Spawn MuzzleFlash & 3D Pointed Spitzer Bullet from Allied Commando rifle barrel toward target soldier!
+              _v1.copy(ally.group.position);
+              _v1.y += 0.18;
+              _v1.z -= 0.65;
+              _v2.copy(targetSoldier.mesh.position);
+              _v2.y += 0.25;
+              _v3.copy(_v2).sub(_v1).normalize();
+              triggerMuzzleFlash(_v1, _v3, 'RIFLE');
+              const allyBullet = acquirePlayerTracer(0x38bdf8);
+              allyBullet.position.copy(_v1);
+              allyBullet.lookAt(_v2);
+              activePlayerTracersRef.current.push({
+                mesh: allyBullet,
+                vx: _v3.x * 48,
+                vy: _v3.y * 48,
+                vz: _v3.z * 48,
+                life: 0.45,
+              });
+
+              if (targetSoldier.hitsLeft <= 0 || targetSoldier.hp <= 0) {
+                if (targetSoldier.isTank || targetSoldier.isBoss) {
+                  triggerHeavyDestructionPop(targetSoldier.mesh.position, targetSoldier.isBoss);
+                } else {
+                  triggerMembraneDisintegration(targetSoldier.mesh.position, targetSoldier.type);
                 }
+                releaseSoldierToPool(targetSoldier);
+                const sIdx = soldiers.indexOf(targetSoldier);
+                if (sIdx !== -1) soldiers.splice(sIdx, 1);
+                sounds.playKillConfirm();
+                killsRef.current += 1;
+                scoreRef.current += targetSoldier.value;
+                setKills(killsRef.current);
+                setScore(scoreRef.current);
                 if (targetSoldier.isHelicopter || targetSoldier.isRobot || targetSoldier.isJet) {
-                  setBossInfo((prev) => (prev ? { ...prev, hitsLeft: Math.max(0, targetSoldier!.hitsLeft) } : null));
-                }
-
-                // Spawn a realistic 3D Pointed Spitzer Bullet from Allied Commando toward target soldier (from playerTracerPool!)
-                _v1.copy(ally.group.position);
-                _v1.y += 0.25;
-                _v1.z += 0.45;
-                _v2.copy(targetSoldier.mesh.position);
-                _v2.y += 0.25;
-                _v3.copy(_v2).sub(_v1).normalize();
-                const allyBullet = acquirePlayerTracer(0x38bdf8);
-                allyBullet.position.copy(_v1);
-                allyBullet.lookAt(_v2);
-                activePlayerTracersRef.current.push({
-                  mesh: allyBullet,
-                  vx: _v3.x * 48,
-                  vy: _v3.y * 48,
-                  vz: _v3.z * 48,
-                  life: 0.45,
-                });
-
-                if (targetSoldier.hitsLeft <= 0 || targetSoldier.hp <= 0) {
-                  triggerExplosion(targetSoldier.mesh.position);
-                  releaseSoldierToPool(targetSoldier);
-                  const sIdx = soldiers.indexOf(targetSoldier);
-                  if (sIdx !== -1) soldiers.splice(sIdx, 1);
-                  sounds.playKillConfirm();
-                  killsRef.current += 1;
-                  scoreRef.current += targetSoldier.value;
-                  setKills(killsRef.current);
-                  setScore(scoreRef.current);
-                  if (targetSoldier.isHelicopter || targetSoldier.isRobot || targetSoldier.isJet) {
-                    setBossInfo(null);
-                  }
+                  setBossInfo(null);
                 }
               }
             }
@@ -5231,6 +5618,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         ad.activeTimer -= delta;
         if (ad.activeTimer <= 0) {
           ad.allies.forEach((ally) => {
+            ally.assistBadge.visible = false;
             triggerSandDust(ally.group.position);
             ally.group.visible = false;
           });
