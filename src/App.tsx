@@ -29,7 +29,7 @@ import { IntelArchive } from './components/IntelArchive';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
 
-type GameState = 'TITLE' | 'BRIEFING' | 'QUIZ' | 'COMBAT' | 'VICTORY' | 'DEFEAT';
+type GameState = 'TITLE' | 'BRIEFING' | 'QUIZ' | 'COMBAT' | 'MULTIPLAYER' | 'VICTORY' | 'DEFEAT';
 
 export default function App() {
   const [playerStats, setPlayerStats] = useState<PlayerStats>(() => {
@@ -58,6 +58,8 @@ export default function App() {
   const [phaseNumber, setPhaseNumber] = useState<number>(1); // 1, 2, or 3
   const [accumulatedScore, setAccumulatedScore] = useState<number>(0);
   const [accumulatedKills, setAccumulatedKills] = useState<number>(0);
+  const [mpRoomCode, setMpRoomCode] = useState<string>('BIO-FFA');
+  const [mpStartWithQuiz, setMpStartWithQuiz] = useState<boolean>(false);
 
   // Modals
   const [isArmoryOpen, setIsArmoryOpen] = useState<boolean>(false);
@@ -127,6 +129,16 @@ export default function App() {
     setAccumulatedScore(0);
     setAccumulatedKills(0);
     setGameState('COMBAT');
+  };
+
+  const handleStartMultiplayer = (roomCode: string, startWithReviveQuiz: boolean) => {
+    sounds.unlockAudio();
+    setMpRoomCode((roomCode || 'BIO-FFA').trim().toUpperCase());
+    setMpStartWithQuiz(startWithReviveQuiz);
+    setPhaseNumber(1);
+    setAccumulatedScore(0);
+    setAccumulatedKills(0);
+    setGameState('MULTIPLAYER');
   };
 
   const handleCommenceOperation = () => {
@@ -245,6 +257,7 @@ export default function App() {
           onSelectLevel={setSelectedLevel}
           onStartGame={handleStartMission}
           onQuickCombat={handleQuickCombat}
+          onStartMultiplayer={handleStartMultiplayer}
           onOpenArmory={() => setIsArmoryOpen(true)}
           onOpenIntelGuide={() => setIsIntelOpen(true)}
           onToggleSound={handleToggleSound}
@@ -318,6 +331,29 @@ export default function App() {
             availableWeapons={INITIAL_WEAPONS}
           />
         ))}
+
+      {/* 4B. LIVE ONLINE 3D MULTIPLAYER OPEN-WORLD DEATHMATCH */}
+      {gameState === 'MULTIPLAYER' && (
+        <CombatView
+          key={`mp-${mpRoomCode}-${selectedLevel.id}`}
+          level={selectedLevel.isSecret ? CURRICULUM_LEVELS[0] : selectedLevel}
+          phaseNumber={1}
+          activeWeapon={activeWeapon}
+          soundEnabled={soundEnabled}
+          autoAimEnabled={autoAimEnabled}
+          playerXp={playerStats.rankXp || playerStats.totalKills * 50 + playerStats.questionsCorrect * 150}
+          isMultiplayerDeathmatch={true}
+          multiplayerRoomCode={mpRoomCode}
+          startWithReviveQuiz={mpStartWithQuiz}
+          onPhaseComplete={handlePhaseComplete}
+          onPhaseDefeat={handlePhaseDefeat}
+          onToggleSound={handleToggleSound}
+          onToggleAutoAim={handleToggleAutoAim}
+          onExitToMenu={handleMainMenu}
+          onSelectWeapon={handleSelectWeapon}
+          availableWeapons={INITIAL_WEAPONS}
+        />
+      )}
 
       {/* 5. VICTORY DEBRIEF */}
       {gameState === 'VICTORY' && (

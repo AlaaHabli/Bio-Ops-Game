@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { LevelConfig, PlayerStats, Weapon } from '../types/game';
 import { CURRICULUM_LEVELS } from '../data/curriculumData';
 import { sounds } from '../services/soundEffects';
-import { Zap, BookOpen, Volume2, VolumeX, Star, Play, Crosshair, CheckCircle2 } from 'lucide-react';
+import { Zap, BookOpen, Volume2, VolumeX, Star, Play, Crosshair, CheckCircle2, Users, Radio, Snowflake } from 'lucide-react';
 import { Trophy, UserCheck, Shield } from 'lucide-react';
 import { RankBadge } from './RankBadge';
 
@@ -15,6 +15,7 @@ interface TitleScreenProps {
   onSelectLevel: (level: LevelConfig) => void;
   onStartGame: () => void;
   onQuickCombat?: () => void;
+  onStartMultiplayer?: (roomCode: string, startWithReviveQuiz: boolean) => void;
   onOpenArmory: () => void;
   onOpenIntelGuide: () => void;
   onToggleSound: () => void;
@@ -32,6 +33,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onSelectLevel,
   onStartGame,
   onQuickCombat,
+  onStartMultiplayer,
   onOpenArmory,
   onOpenIntelGuide,
   onToggleSound,
@@ -40,6 +42,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenProfile,
 }) => {
   const [stageFilter, setStageFilter] = useState<'ALL' | 'Grade 5' | 'Stage 7' | 'Stage 8' | 'SECRET'>('ALL');
+  const [mpRoomInput, setMpRoomInput] = useState<string>('BIO-FFA');
 
   const secretLevel = CURRICULUM_LEVELS.find((lvl) => lvl.isSecret) || CURRICULUM_LEVELS[CURRICULUM_LEVELS.length - 1];
 
@@ -312,6 +315,71 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                   </button>
                 )}
               </div>
+
+              {/* ONLINE MULTIPLAYER OPEN-WORLD 3D DEATHMATCH LAUNCH BANNER */}
+              {onStartMultiplayer && (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-950/90 via-slate-900/95 to-rose-950/80 border-2 border-cyan-400/90 flex flex-col gap-3 shadow-[0_0_28px_rgba(6,182,212,0.3)]">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-mono font-black text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse shrink-0" />
+                        <span>🌐 LIVE ONLINE MULTIPLAYER • OPEN-WORLD 3D DEATHMATCH (NO REINFORCEMENTS)</span>
+                      </div>
+                      <div className="text-sm sm:text-base font-display font-extrabold text-white mt-0.5">
+                        Shoot &amp; Frag Real Students in 3D • 1-Min Combat Window • Solve 3 Questions to Revive or Unfreeze!
+                      </div>
+                      <div className="text-xs text-slate-300 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span>• Full 3D Weapons &amp; Grenades [G]</span>
+                        <span>• Die in 60s → 3 Questions to Revive</span>
+                        <span className="text-cyan-300 font-semibold flex items-center gap-1">
+                          <Snowflake className="w-3 h-3" /> Survive 60s → Frozen &amp; Stunned until 3 Questions Solved!
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Room Code Box */}
+                    <div className="flex items-center gap-1.5 bg-slate-950/90 border border-cyan-500/50 rounded-lg px-2.5 py-1.5 shrink-0">
+                      <Users className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">ROOM:</span>
+                      <input
+                        type="text"
+                        value={mpRoomInput}
+                        onChange={(e) => setMpRoomInput(e.target.value.toUpperCase())}
+                        maxLength={12}
+                        placeholder="BIO-FFA"
+                        className="w-20 bg-transparent text-xs font-mono font-black text-cyan-300 uppercase focus:outline-none"
+                        title="Enter shared Room Code so classmates join the exact same live 3D arena"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <button
+                      onClick={() => {
+                        sounds.unlockAudio();
+                        sounds.playCombatAlarm();
+                        onStartMultiplayer(mpRoomInput || 'BIO-FFA', false);
+                      }}
+                      className="py-3 px-4 rounded-lg bg-gradient-to-r from-cyan-400 to-sky-400 hover:from-cyan-300 hover:to-sky-300 text-slate-950 font-display font-extrabold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-[0_0_20px_rgba(6,182,212,0.55)] active:scale-98"
+                    >
+                      <Crosshair className="w-4 h-4 shrink-0" />
+                      <span>JOIN LIVE 3D DEATHMATCH (60S COMBAT)</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        sounds.unlockAudio();
+                        sounds.playCombatAlarm();
+                        onStartMultiplayer(mpRoomInput || 'BIO-FFA', true);
+                      }}
+                      className="py-3 px-4 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-display font-extrabold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-[0_0_18px_rgba(244,63,94,0.45)] active:scale-98"
+                    >
+                      <Play className="w-4 h-4 fill-white shrink-0" />
+                      <span>ANSWER 3 QUESTIONS TO DEPLOY &amp; FIGHT</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* CLASSIFIED SECRET SPY ATTACK DIRECT LAUNCH BANNER */}
               {secretLevel && (

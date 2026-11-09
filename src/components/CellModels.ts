@@ -5858,3 +5858,582 @@ export function createTracheaCartilageBarricadeModel(): {
 
   return { group };
 }
+
+// ============================================================================
+// 3D MULTIPLAYER STUDENT COMMANDO OPERATOR (For Simultaneous Online Deathmatch!)
+// Includes Translucent Leukocyte Soma, Multilobed Purple Nucleus, Squad Armor,
+// Articulated Limbs, Scope Glint, Bio-Stasis Freeze Crystal Cage & Live Callsign!
+// ============================================================================
+export function updateStudentOperatorBadge(
+  canvas: HTMLCanvasElement,
+  texture: THREE.CanvasTexture,
+  callsign: string,
+  className: string,
+  isStunned: boolean,
+  isLiveHuman: boolean
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Pill background
+  ctx.fillStyle = isStunned
+    ? 'rgba(8, 51, 68, 0.94)'
+    : isLiveHuman
+    ? 'rgba(15, 23, 42, 0.94)'
+    : 'rgba(24, 24, 27, 0.92)';
+  ctx.strokeStyle = isStunned ? '#22d3ee' : isLiveHuman ? '#f43f5e' : '#f59e0b';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(6, 6, canvas.width - 12, canvas.height - 12, 16);
+  ctx.fill();
+  ctx.stroke();
+
+  // Top line: Student Callsign
+  ctx.fillStyle = isStunned ? '#67e8f9' : '#ffffff';
+  ctx.font = '900 24px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const cleanName = (callsign || 'OPERATIVE').toUpperCase().slice(0, 14);
+  ctx.fillText(isStunned ? `❄️ ${cleanName}` : cleanName, canvas.width / 2, 30);
+
+  // Bottom line: Status or Class Name
+  ctx.fillStyle = isStunned ? '#a5f3fc' : isLiveHuman ? '#fda4af' : '#fcd34d';
+  ctx.font = 'bold 16px monospace';
+  const subText = isStunned
+    ? 'STUNNED [SOLVING 3 Qs]'
+    : isLiveHuman
+    ? `● LIVE · ${(className || 'ONLINE').toUpperCase().slice(0, 12)}`
+    : `${(className || 'UNIT').toUpperCase().slice(0, 14)}`;
+  ctx.fillText(subText, canvas.width / 2, 56);
+
+  texture.needsUpdate = true;
+}
+
+export function createMultiplayerStudentOperator(slotIdx: number = 0): {
+  group: THREE.Group;
+  leftLeg: THREE.Group;
+  rightLeg: THREE.Group;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  scopeGlint: THREE.Mesh;
+  stasisCage: THREE.Group;
+  callsignBadge: THREE.Mesh;
+  callsignCanvas: HTMLCanvasElement;
+  callsignTexture: THREE.CanvasTexture;
+} {
+  const group = new THREE.Group();
+
+  const squadColors = [0xe11d48, 0xd97706, 0x7c3aed, 0x0284c7, 0x059669];
+  const accentHex = squadColors[slotIdx % squadColors.length];
+
+  // Translucent Leukocyte Soma Head
+  const bodyMat = createFastLitMaterial({
+    color: 0xf8fafc,
+    roughness: 0.22,
+    metalness: 0.1,
+    emissive: accentHex,
+    emissiveIntensity: 0.16,
+    transparent: true,
+    opacity: 0.72,
+  });
+  const soma = new THREE.Mesh(new THREE.SphereGeometry(0.66, 16, 16), bodyMat);
+  soma.position.set(0, 0.22, 0);
+  group.add(soma);
+
+  // Visible 3-Lobed Purple Polymorphonuclear Nucleus Inside Leukocyte
+  const purpleLobeMat = createFastLitMaterial({
+    color: 0x9333ea,
+    emissive: 0x7e22ce,
+    emissiveIntensity: 1.25,
+    roughness: 0.25,
+  });
+  [
+    [-0.22, 0.26, 0.12],
+    [0, 0.36, 0.16],
+    [0.22, 0.26, 0.12],
+  ].forEach(([lx, ly, lz]) => {
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), purpleLobeMat);
+    lobe.position.set(lx, ly, lz);
+    group.add(lobe);
+  });
+
+  // Tactical Commando Beret & Visor
+  const beretMat = createFastLitMaterial({ color: accentHex, roughness: 0.45 });
+  const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.16, 14), beretMat);
+  beret.position.set(0.06, 0.78, 0);
+  beret.rotation.z = -0.22;
+  group.add(beret);
+
+  const visor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.58, 0.14, 0.14),
+    createFastLitMaterial({ color: 0x09090b, metalness: 0.9, roughness: 0.1 })
+  );
+  visor.position.set(0, 0.18, 0.58);
+  group.add(visor);
+
+  // Armored Tactical Vest
+  const vest = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.64, 0.68, 0.48, 14),
+    createFastLitMaterial({ color: 0x1e293b, roughness: 0.55 })
+  );
+  vest.position.set(0, -0.18, 0);
+  group.add(vest);
+
+  const chestStripe = new THREE.Mesh(
+    new THREE.BoxGeometry(0.52, 0.22, 0.14),
+    createFastLitMaterial({ color: accentHex, roughness: 0.4 })
+  );
+  chestStripe.position.set(0, -0.16, 0.62);
+  group.add(chestStripe);
+
+  // Articulated Legs
+  const limbMat = createFastLitMaterial({ color: 0xe2e8f0, roughness: 0.35 });
+  const bootMat = createFastLitMaterial({ color: 0x0f172a, roughness: 0.7 });
+
+  const leftLeg = new THREE.Group();
+  leftLeg.position.set(-0.3, -0.52, 0);
+  const lThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.46, 6, 8), limbMat);
+  lThigh.position.set(0, -0.16, 0);
+  leftLeg.add(lThigh);
+  const lBoot = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.32), bootMat);
+  lBoot.position.set(0, -0.42, 0.08);
+  leftLeg.add(lBoot);
+  group.add(leftLeg);
+
+  const rightLeg = new THREE.Group();
+  rightLeg.position.set(0.3, -0.52, 0);
+  const rThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.46, 6, 8), limbMat);
+  rThigh.position.set(0, -0.16, 0);
+  rightLeg.add(rThigh);
+  const rBoot = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.32), bootMat);
+  rBoot.position.set(0, -0.42, 0.08);
+  rightLeg.add(rBoot);
+  group.add(rightLeg);
+
+  // Articulated Arms + Assault Rifle + Scope Glint
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.7, 0.02, 0.12);
+  const lArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 6, 8), limbMat);
+  lArmMesh.position.set(0.06, -0.14, 0.16);
+  lArmMesh.rotation.x = 0.65;
+  leftArm.add(lArmMesh);
+  group.add(leftArm);
+
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.7, 0.02, 0.12);
+  const rArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 6, 8), limbMat);
+  rArmMesh.position.set(-0.06, -0.14, 0.16);
+  rArmMesh.rotation.x = 0.65;
+  rightArm.add(rArmMesh);
+
+  const rifle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, 0.18, 0.88),
+    createFastLitMaterial({ color: 0x334155, metalness: 0.85, roughness: 0.2 })
+  );
+  rifle.position.set(-0.1, -0.18, 0.44);
+  rightArm.add(rifle);
+
+  const scopeGlintMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.0,
+  });
+  const scopeGlint = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), scopeGlintMat);
+  scopeGlint.position.set(-0.1, -0.04, 0.88);
+  rightArm.add(scopeGlint);
+
+  group.add(rightArm);
+
+  // 3D Bio-Stasis Freeze Crystal Cage (Visible when opponent student's 1-minute timer expires and they are stunned solving 3 questions!)
+  const stasisCage = new THREE.Group();
+  const stasisCrystalMat = new THREE.MeshBasicMaterial({
+    color: 0x22d3ee,
+    transparent: true,
+    opacity: 0.38,
+    wireframe: false,
+    side: THREE.DoubleSide,
+  });
+  const stasisWireMat = new THREE.MeshBasicMaterial({
+    color: 0x67e8f9,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.85,
+  });
+  const crystalShell = new THREE.Mesh(new THREE.OctahedronGeometry(1.18, 1), stasisCrystalMat);
+  crystalShell.scale.set(0.88, 1.15, 0.88);
+  crystalShell.position.set(0, -0.05, 0);
+  stasisCage.add(crystalShell);
+
+  const crystalWire = new THREE.Mesh(new THREE.OctahedronGeometry(1.2, 1), stasisWireMat);
+  crystalWire.scale.set(0.88, 1.15, 0.88);
+  crystalWire.position.set(0, -0.05, 0);
+  stasisCage.add(crystalWire);
+
+  stasisCage.visible = false;
+  group.add(stasisCage);
+
+  // Dynamic 3D Overhead Callsign & Status Banner
+  const callsignCanvas = document.createElement('canvas');
+  callsignCanvas.width = 320;
+  callsignCanvas.height = 76;
+  const callsignTexture = new THREE.CanvasTexture(callsignCanvas);
+  updateStudentOperatorBadge(callsignCanvas, callsignTexture, `OPERATIVE ${slotIdx + 1}`, 'ONLINE', false, false);
+
+  const badgeMat = new THREE.MeshBasicMaterial({
+    map: callsignTexture,
+    transparent: true,
+    depthTest: false,
+    side: THREE.DoubleSide,
+  });
+  const callsignBadge = new THREE.Mesh(new THREE.PlaneGeometry(1.85, 0.44), badgeMat);
+  callsignBadge.position.set(0, 1.88, 0);
+  callsignBadge.renderOrder = 12;
+  group.add(callsignBadge);
+
+  return {
+    group,
+    leftLeg,
+    rightLeg,
+    leftArm,
+    rightArm,
+    scopeGlint,
+    stasisCage,
+    callsignBadge,
+    callsignCanvas,
+    callsignTexture,
+  };
+}
+
+// ============================================================================
+// OPEN-WORLD PULMONARY LUNG & ALVEOLI BATTLE ROYALE LANDSCAPE (MULTIPLAYER)
+// Replaces the enclosed cylinder tunnel in Multiplayer Deathmatch with a wide,
+// open 3D Lung Parenchyma battlefield surrounded by breathing grape-like
+// Alveolar Sac clusters, Arterioles/Venules capillary beds, Bronchial Arches,
+// and an open Thoracic Sky Dome!
+// ============================================================================
+export function createOpenLungAlveoliLandscape(): {
+  group: THREE.Group;
+  breathingSacs: Array<{ mesh: THREE.Object3D; phase: number; baseScale: number }>;
+  gasParticles: Array<{ mesh: THREE.Mesh; baseY: number; phase: number; speed: number }>;
+} {
+  const group = new THREE.Group();
+  const breathingSacs: Array<{ mesh: THREE.Object3D; phase: number; baseScale: number }> = [];
+  const gasParticles: Array<{ mesh: THREE.Mesh; baseY: number; phase: number; speed: number }> = [];
+
+  // 1. Open Thoracic Sky Dome (High-visibility oxygenated atmosphere)
+  const skyCanvas = document.createElement('canvas');
+  skyCanvas.width = 256;
+  skyCanvas.height = 256;
+  const skyCtx = skyCanvas.getContext('2d');
+  if (skyCtx) {
+    const skyGrad = skyCtx.createLinearGradient(0, 0, 0, 256);
+    skyGrad.addColorStop(0, '#090d1e');
+    skyGrad.addColorStop(0.38, '#1e102a');
+    skyGrad.addColorStop(0.72, '#3b1534');
+    skyGrad.addColorStop(1, '#591c3b');
+    skyCtx.fillStyle = skyGrad;
+    skyCtx.fillRect(0, 0, 256, 256);
+
+    // Subtle bioluminescent pleural aurora bands
+    skyCtx.strokeStyle = 'rgba(56, 189, 248, 0.16)';
+    skyCtx.lineWidth = 4;
+    for (let y = 30; y < 180; y += 28) {
+      skyCtx.beginPath();
+      skyCtx.moveTo(0, y);
+      skyCtx.bezierCurveTo(85, y - 16, 170, y + 16, 256, y);
+      skyCtx.stroke();
+    }
+  }
+  const skyTex = new THREE.CanvasTexture(skyCanvas);
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(92, 24, 16),
+    new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false })
+  );
+  group.add(skyDome);
+
+  // 2. Expansive Open Lung Parenchyma Floor with Capillary Vascular Network & Surfactant Grid
+  const floorCanvas = document.createElement('canvas');
+  floorCanvas.width = 512;
+  floorCanvas.height = 512;
+  const fCtx = floorCanvas.getContext('2d');
+  if (fCtx) {
+    const fGrad = fCtx.createRadialGradient(256, 256, 30, 256, 256, 260);
+    fGrad.addColorStop(0, '#4c162e');
+    fGrad.addColorStop(0.55, '#3b1124');
+    fGrad.addColorStop(1, '#260a18');
+    fCtx.fillStyle = fGrad;
+    fCtx.fillRect(0, 0, 512, 512);
+
+    // Alveolar epithelial cell polygonal tiling
+    fCtx.strokeStyle = 'rgba(244, 114, 182, 0.22)';
+    fCtx.lineWidth = 2;
+    for (let gx = 0; gx <= 512; gx += 64) {
+      fCtx.beginPath();
+      fCtx.moveTo(gx, 0);
+      fCtx.lineTo(gx, 512);
+      fCtx.stroke();
+    }
+    for (let gy = 0; gy <= 512; gy += 64) {
+      fCtx.beginPath();
+      fCtx.moveTo(0, gy);
+      fCtx.lineTo(512, gy);
+      fCtx.stroke();
+    }
+
+    // Oxygenated (Red) & Deoxygenated (Blue) Capillary Vessels across the Lung Floor
+    for (let v = 0; v < 18; v++) {
+      fCtx.strokeStyle = v % 2 === 0 ? 'rgba(239, 68, 68, 0.38)' : 'rgba(59, 130, 246, 0.34)';
+      fCtx.lineWidth = 3 + (v % 3);
+      fCtx.beginPath();
+      const startX = (v * 37) % 512;
+      fCtx.moveTo(startX, 0);
+      fCtx.bezierCurveTo(
+        (startX + 90) % 512,
+        170,
+        (startX + 420) % 512,
+        340,
+        startX,
+        512
+      );
+      fCtx.stroke();
+    }
+
+    // Glowing Cyan Pulmonary Surfactant Micro-Rings
+    fCtx.strokeStyle = 'rgba(34, 211, 238, 0.24)';
+    fCtx.lineWidth = 1.5;
+    for (let r = 0; r < 24; r++) {
+      const rx = (r * 73 + 29) % 480 + 16;
+      const ry = (r * 113 + 41) % 480 + 16;
+      fCtx.beginPath();
+      fCtx.arc(rx, ry, 14 + (r % 10), 0, Math.PI * 2);
+      fCtx.stroke();
+    }
+  }
+  const floorTex = new THREE.CanvasTexture(floorCanvas);
+  floorTex.wrapS = THREE.RepeatWrapping;
+  floorTex.wrapT = THREE.RepeatWrapping;
+  floorTex.repeat.set(10, 10);
+
+  const floorGeo = new THREE.PlaneGeometry(160, 160, 36, 36);
+  floorGeo.rotateX(-Math.PI / 2);
+  // Subtle natural undulating pleural terrain hills around the outer perimeter while keeping the central combat floor smooth
+  const posAttr = floorGeo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < posAttr.count; i++) {
+    const vx = posAttr.getX(i);
+    const vz = posAttr.getZ(i);
+    const distFromArenaCenter = Math.hypot(vx, vz + 11);
+    const outerRidge =
+      distFromArenaCenter > 22
+        ? Math.min(7.5, (distFromArenaCenter - 22) * 0.22) *
+          (0.65 + 0.35 * Math.sin(vx * 0.18) * Math.cos(vz * 0.18))
+        : Math.sin(vx * 0.25) * Math.cos(vz * 0.25) * 0.14;
+    posAttr.setY(i, outerRidge);
+  }
+  floorGeo.computeVertexNormals();
+
+  const floorMat = createFastLitMaterial({
+    map: floorTex,
+    color: 0xfda4af,
+    roughness: 0.58,
+    metalness: 0.08,
+  });
+  const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+  floorMesh.position.set(0, -1.72, -11);
+  group.add(floorMesh);
+
+  // 3. Glowing Arena Center Gas-Exchange Ring Landmark (Marks the center of the Battle Royale Alveoli Arena at z = -11)
+  const centerRing = new THREE.Mesh(
+    new THREE.RingGeometry(4.2, 4.55, 36),
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.42,
+      side: THREE.DoubleSide,
+    })
+  );
+  centerRing.rotation.x = -Math.PI / 2;
+  centerRing.position.set(0, -1.58, -11);
+  group.add(centerRing);
+
+  // 4. Shared Materials for Grape-Like Alveolar Sac Clusters & Capillary Beds
+  const alveolusPinkMat = createFastLitMaterial({
+    color: 0xfb7185,
+    emissive: 0xe11d48,
+    emissiveIntensity: 0.28,
+    roughness: 0.32,
+    metalness: 0.08,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const alveolusCoralMat = createFastLitMaterial({
+    color: 0xfda4af,
+    emissive: 0xf43f5e,
+    emissiveIntensity: 0.22,
+    roughness: 0.35,
+    metalness: 0.06,
+    transparent: true,
+    opacity: 0.86,
+  });
+  const bronchioleStemMat = createFastLitMaterial({
+    color: 0xfecdd3,
+    roughness: 0.45,
+    metalness: 0.1,
+  });
+  const arterialRedMat = createFastLitMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 0.45,
+    roughness: 0.3,
+  });
+  const venousBlueMat = createFastLitMaterial({
+    color: 0x3b82f6,
+    emissive: 0x2563eb,
+    emissiveIntensity: 0.45,
+    roughness: 0.3,
+  });
+  const o2OrbMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+  });
+  const co2OrbMat = new THREE.MeshBasicMaterial({
+    color: 0xf43f5e,
+    transparent: true,
+    opacity: 0.8,
+  });
+
+  const sacSphereGeo = new THREE.SphereGeometry(1.0, 14, 14);
+  const capillaryRingGeo = new THREE.TorusGeometry(1.03, 0.075, 7, 20);
+  const gasOrbGeo = new THREE.SphereGeometry(0.18, 8, 8);
+
+  // Helper to build a 3D Grape-like Alveolar Sac Cluster with Bronchiole Duct & Capillary Network
+  const buildAlveolarCluster = (cx: number, cy: number, cz: number, scale: number, seed: number) => {
+    const cluster = new THREE.Group();
+    cluster.position.set(cx, cy, cz);
+
+    // Bronchiole Airway Stem with Cartilage Rings
+    const stemHeight = 2.6 * scale;
+    const stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32 * scale, 0.44 * scale, stemHeight, 10),
+      bronchioleStemMat
+    );
+    stem.position.set(0, stemHeight * 0.45, 0);
+    cluster.add(stem);
+
+    // Bunch of 8 Grape-Like Alveolar Sacs + Capillary Web
+    const sacGroup = new THREE.Group();
+    sacGroup.position.set(0, stemHeight * 0.92, 0);
+
+    const offsets: Array<[number, number, number, number]> = [
+      [0, 0.45, 0, 1.15],
+      [-0.85, 0.15, 0.45, 0.92],
+      [0.85, 0.18, 0.42, 0.95],
+      [-0.75, 0.22, -0.65, 0.9],
+      [0.78, 0.2, -0.62, 0.88],
+      [0, -0.35, 0.78, 0.84],
+      [-0.48, 0.88, -0.15, 0.82],
+      [0.52, 0.85, 0.18, 0.84],
+    ];
+
+    offsets.forEach(([ox, oy, oz, r], idx) => {
+      const sacMesh = new THREE.Mesh(
+        sacSphereGeo,
+        idx % 2 === 0 ? alveolusPinkMat : alveolusCoralMat
+      );
+      sacMesh.position.set(ox * scale, oy * scale, oz * scale);
+      sacMesh.scale.setScalar(r * scale);
+      sacGroup.add(sacMesh);
+
+      // Wrap each alveolus in red (oxygenated) and blue (deoxygenated) pulmonary capillaries
+      if (idx % 2 === 0) {
+        const capRed = new THREE.Mesh(capillaryRingGeo, arterialRedMat);
+        capRed.position.copy(sacMesh.position);
+        capRed.scale.setScalar(r * scale);
+        capRed.rotation.set(idx * 0.7, idx * 1.1, 0.4);
+        sacGroup.add(capRed);
+      } else {
+        const capBlue = new THREE.Mesh(capillaryRingGeo, venousBlueMat);
+        capBlue.position.copy(sacMesh.position);
+        capBlue.scale.setScalar(r * scale);
+        capBlue.rotation.set(-idx * 0.6, idx * 0.9, -0.5);
+        sacGroup.add(capBlue);
+      }
+    });
+
+    cluster.add(sacGroup);
+    group.add(cluster);
+
+    breathingSacs.push({
+      mesh: sacGroup,
+      phase: seed,
+      baseScale: 1.0,
+    });
+
+    // Floating O2 / CO2 Gas Exchange Orbs rising around the Alveolar Cluster
+    const orb = new THREE.Mesh(gasOrbGeo, seed % 2 === 0 ? o2OrbMat : co2OrbMat);
+    const orbY = cy + stemHeight + 1.2 * scale;
+    orb.position.set(cx + (Math.sin(seed) * 0.8), orbY, cz + (Math.cos(seed) * 0.8));
+    group.add(orb);
+    gasParticles.push({
+      mesh: orb,
+      baseY: orbY,
+      phase: seed * 1.7,
+      speed: 1.4 + (seed % 3) * 0.4,
+    });
+  };
+
+  // Place 20 Alveolar Sac Clusters all around the Open Lung Landscape
+  // (Flanks, Horizon, Rear & Mid-Field Landmarks — ZERO sandbag barricades!)
+  const clusterPlacements: Array<[number, number, number, number]> = [
+    // Mid-field left & right alveolar clusters
+    [-11.5, -1.7, -5.5, 1.15],
+    [11.5, -1.7, -5.5, 1.15],
+    [-13.5, -1.7, -14.5, 1.3],
+    [13.5, -1.7, -14.5, 1.3],
+    [-10.5, -1.7, -23.5, 1.2],
+    [10.5, -1.7, -23.5, 1.2],
+    // Outer flank giant alveolar sacs
+    [-21.0, -1.2, -2.0, 1.65],
+    [21.0, -1.2, -2.0, 1.65],
+    [-23.5, -1.0, -12.0, 1.85],
+    [23.5, -1.0, -12.0, 1.85],
+    [-22.0, -1.1, -24.0, 1.75],
+    [22.0, -1.1, -24.0, 1.75],
+    [-19.5, -1.2, 6.5, 1.55],
+    [19.5, -1.2, 6.5, 1.55],
+    // Distant forward horizon alveolar clusters
+    [-14.0, -1.2, -35.0, 1.7],
+    [0.0, -1.3, -38.0, 1.95],
+    [14.0, -1.2, -35.0, 1.7],
+    [-25.0, -0.8, -36.0, 2.1],
+    [25.0, -0.8, -36.0, 2.1],
+    // Rear horizon alveolar clusters
+    [0.0, -1.3, 14.5, 1.75],
+  ];
+
+  clusterPlacements.forEach(([x, y, z, sc], idx) => {
+    buildAlveolarCluster(x, y, z, sc, idx + 1);
+  });
+
+  // 5. Overhead Bronchial Cartilage Arches & Pulmonary Capillary Bridges spanning the Open Sky
+  const archMat = createFastLitMaterial({
+    color: 0xfda4af,
+    emissive: 0x9f1239,
+    emissiveIntensity: 0.2,
+    roughness: 0.5,
+  });
+  [-18, -4, -30].forEach((az, aIdx) => {
+    const arch = new THREE.Mesh(
+      new THREE.TorusGeometry(28 + aIdx * 3, 0.65, 8, 32, Math.PI),
+      archMat
+    );
+    arch.position.set(0, -1.5, az);
+    group.add(arch);
+  });
+
+  return { group, breathingSacs, gasParticles };
+}
+
+
