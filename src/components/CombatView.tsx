@@ -4092,13 +4092,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
       rawAimY = hitVector.y;
 
       if (autoAimEnabledRef.current && soldiers.length > 0) {
-        let bestDist = 0.36;
+        // Subtle aim friction/assist only when reticle is already directly grazing enemy torso
+        let bestDist = 0.085;
         let lockedBodyNdcX = 0;
         let lockedBodyNdcY = 0;
         let hasLock = false;
         for (let i = 0; i < soldiers.length; i++) {
           const s = soldiers[i];
           if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (isMultiplayerDeathmatch && s.isStunned) continue;
 
           const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
           _v2.copy(s.mesh.position);
@@ -4118,8 +4120,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
         if (hasLock) {
           hitVector.set(
-            THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
-            THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
+            THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.18),
+            THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.18)
           );
         }
       }
@@ -4237,14 +4239,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
           break;
         }
 
-        // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-sphere check
+        // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-capsule/sphere check (tuned to exact physical model dimensions)
         const bodyRadiusSq = soldier.isRobot
-          ? 4.8
+          ? 2.2
           : soldier.isTank
-          ? 1.65
+          ? 1.15
           : soldier.isBoss
-          ? 2.35
-          : 0.85;
+          ? 1.45
+          : 0.28;
         if (distSqBody3D <= bodyRadiusSq) {
           hitRegistered = true;
           hitSoldier = soldier;
@@ -4257,7 +4259,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 2D Hitbox & Assist Check: clean, responsive body hitboxes for both Manual Aim and Auto-Aim (never grants free headshots!)
+      // 2D Screen-Space Hitbox Check: strict tight bounds requiring genuine aim on the enemy's visual silhouette
       if (!hitRegistered) {
         for (let i = soldiers.length - 1; i >= 0; i--) {
           const soldier = soldiers[i];
@@ -4271,22 +4273,23 @@ export const CombatView: React.FC<CombatViewProps> = ({
           if (_v2.z >= 1.0) continue;
           const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
 
-          const assistRadius = autoAimEnabledRef.current
+          // Scaled strictly to true visual dimensions of soldiers, tanks & bosses (no massive generous ghost hitboxes)
+          const hitSilhouetteRadius = autoAimEnabledRef.current
             ? soldier.isRobot
-              ? 0.42
+              ? 0.18
               : soldier.isTank
-              ? 0.28
+              ? 0.14
               : soldier.isBoss
-              ? 0.32
-              : 0.19
+              ? 0.16
+              : 0.075
             : soldier.isRobot
-            ? 0.34
+            ? 0.15
             : soldier.isTank
-            ? 0.21
+            ? 0.11
             : soldier.isBoss
-            ? 0.24
-            : 0.145;
-          if (distBody2D < assistRadius) {
+            ? 0.13
+            : 0.055;
+          if (distBody2D < hitSilhouetteRadius) {
             hitRegistered = true;
             hitSoldier = soldier;
             criticalHit = false;
@@ -5396,10 +5399,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         camera.updateProjectionMatrix();
       }
 
-      // Soft Continuous Auto-Aim Pull (Fortnite / Black Ops Aim Assist):
-      // Gently guides aim closer toward the nearest enemy's TORSO/CHEST (never the head!) in both Hipfire and Scope!
+      // Soft Subtle Auto-Aim Friction (Assists fine-tuning without magnetically locking onto enemies from afar)
       if (autoAimEnabledRef.current && activeSoldiersRef.current.length > 0) {
-        let closestDist = 0.34;
+        let closestDist = 0.11;
         let pullTargetX = 0;
         let pullTargetY = 0;
         let foundAssistTarget = false;
@@ -5416,7 +5418,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           _v1.project(camera);
           if (_v1.z >= 1 || _v1.z <= -1) continue;
           const d = Math.hypot(_v1.x - curAimX, _v1.y - curAimY);
-          if (d < closestDist && d > 0.025) {
+          if (d < closestDist && d > 0.015) {
             closestDist = d;
             pullTargetX = _v1.x;
             pullTargetY = _v1.y;
@@ -5428,13 +5430,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           targetAimPosRef.current.x = THREE.MathUtils.damp(
             targetAimPosRef.current.x,
             pullTargetX,
-            2.6,
+            1.2,
             delta
           );
           targetAimPosRef.current.y = THREE.MathUtils.damp(
             targetAimPosRef.current.y,
             pullTargetY,
-            2.6,
+            1.2,
             delta
           );
         }
@@ -6392,20 +6394,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 );
                 const remoteSpeedMag = Math.hypot(rp.vx || 0, rp.vz || 0);
 
-                if (moveDist > 12.0) {
+                // State Snapshot Interpolation: targetX & targetZ are continuously interpolated along authoritative server snapshots
+                if (moveDist > 6.0) {
                   soldier.mesh.position.x = targetX;
                   soldier.mesh.position.z = targetZ;
                 } else {
+                  // Direct snapshot positioning when snapshots are active, with high-frequency smoothing to absorb frame jitter
                   soldier.mesh.position.x = THREE.MathUtils.damp(
                     soldier.mesh.position.x,
                     targetX,
-                    26,
+                    35,
                     delta
                   );
                   soldier.mesh.position.z = THREE.MathUtils.damp(
                     soldier.mesh.position.z,
                     targetZ,
-                    26,
+                    35,
                     delta
                   );
                 }

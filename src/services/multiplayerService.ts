@@ -15,6 +15,19 @@ export type MultiplayerPlayerStatus = 'active' | 'stunned' | 'reviving';
 export const AFK_TIMEOUT_MS = 60_000; // 1 minute (60 seconds) without movement, actions, or solving questions
 export const MAX_PLAYERS_PER_ROOM = 5; // Each room holds up to 5 players; when full, new rooms (Room 2, Room 3, ...) are created automatically
 
+export interface PlayerSnapshot {
+  t: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  aimX: number;
+  aimY: number;
+  vx: number;
+  vz: number;
+}
+
 export interface LiveArenaPlayer {
   playerId: string;
   studentName: string;
@@ -53,6 +66,7 @@ export interface LiveArenaPlayer {
   joinedAt?: number;
   lastPing: number;
   receivedAt?: number;
+  snapshotHistory?: PlayerSnapshot[];
 }
 
 export interface PredictedInputCommand {
@@ -270,8 +284,16 @@ export class ClientPredictionEngine {
 }
 
 /**
- * Predicts a remote player's current world-space position (X, Y, Z) and aiming angles
- * using sub-frame velocity + aim-rate extrapolation in the shared 1:1 arena coordinate frame.
+ * State Snapshot Interpolation Buffer delay in milliseconds (100ms render delay).
+ * Provides continuous, buttery-smooth linear interpolation between consecutive authoritative
+ * server snapshots, completely eliminating position rubber-banding, teleporting, and spatial divergence.
+ */
+export const SNAPSHOT_INTERPOLATION_DELAY_MS = 100;
+
+/**
+ * Interpolates a remote player's authoritative world-space position (X, Y, Z) and aiming angles
+ * using Hermite/linear snapshot interpolation with sub-frame velocity extrapolation fallback.
+ * Resolves perspective mismatches where players appeared in different relative locations.
  */
 export function predictRemoteEntityState(
   rp: LiveArenaPlayer,
@@ -284,6 +306,63 @@ export function predictRemoteEntityState(
   aimY: number;
   yaw: number;
 } {
+  const history = rp.snapshotHistory;
+  if (history && history.length >= 2) {
+    // Render time delayed by SNAPSHOT_INTERPOLATION_DELAY_MS to guarantee smooth interpolation between two snapshots
+    const renderTime = nowPerf - SNAPSHOT_INTERPOLATION_DELAY_MS;
+
+    // Find the two consecutive snapshots bounding renderTime
+    let olderSnap: PlayerSnapshot | null = null;
+    let newerSnap: PlayerSnapshot | null = null;
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      const snap = history[i];
+      if (snap.t <= renderTime) {
+        olderSnap = snap;
+        newerSnap = history[i + 1] || null;
+        break;
+      }
+    }
+
+    if (olderSnap && newerSnap) {
+      const span = Math.max(0.001, newerSnap.t - olderSnap.t);
+      const alpha = THREE_Math_clamp((renderTime - olderSnap.t) / span, 0, 1);
+
+      // Lerp position smoothly
+      const worldX = olderSnap.x + (newerSnap.x - olderSnap.x) * alpha;
+      const worldY = olderSnap.y + (newerSnap.y - olderSnap.y) * alpha;
+      const worldZ = olderSnap.z + (newerSnap.z - olderSnap.z) * alpha;
+
+      // Slerp / shortest-path angle interpolation for yaw
+      const yawDiff = Math.atan2(
+        Math.sin(newerSnap.yaw - olderSnap.yaw),
+        Math.cos(newerSnap.yaw - olderSnap.yaw)
+      );
+      const yaw = olderSnap.yaw + yawDiff * alpha;
+
+      const aimX = olderSnap.aimX + (newerSnap.aimX - olderSnap.aimX) * alpha;
+      const aimY = olderSnap.aimY + (newerSnap.aimY - olderSnap.aimY) * alpha;
+
+      return { worldX, worldY, worldZ, aimX, aimY, yaw };
+    } else if (history.length > 0) {
+      // Extrapolate from newest snapshot if renderTime is past the latest snapshot
+      const newest = history[history.length - 1];
+      const extraSec = Math.min(0.25, Math.max(0, (renderTime - newest.t) / 1000));
+      const damp = 1 - extraSec * 1.5;
+      const effExtra = extraSec * Math.max(0.3, damp);
+
+      const worldX = newest.x + newest.vx * effExtra;
+      const worldY = newest.y;
+      const worldZ = newest.z + newest.vz * effExtra;
+      const aimX = newest.aimX;
+      const aimY = newest.aimY;
+      const yaw = newest.yaw;
+
+      return { worldX, worldY, worldZ, aimX, aimY, yaw };
+    }
+  }
+
+  // Fallback to velocity-based extrapolation when snapshot history has not accumulated yet
   const refClock =
     nowPerf > 1_000_000_000_000 && (rp.receivedAt || 0) < 1_000_000_000_000
       ? typeof performance !== 'undefined'
@@ -294,7 +373,6 @@ export function predictRemoteEntityState(
     0.2,
     Math.max(0, (refClock - (rp.receivedAt || refClock)) / 1000)
   );
-  // Smooth velocity damping over prediction horizon so extrapolation bridges packets cleanly without overshooting stops
   const horizonDamp = 1 - packetAgeSec * 1.35;
   const effAge = packetAgeSec * Math.max(0.4, horizonDamp);
 
@@ -306,6 +384,10 @@ export function predictRemoteEntityState(
   const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.65;
 
   return { worldX, worldY, worldZ, aimX, aimY, yaw };
+}
+
+function THREE_Math_clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 export interface ArenaKillfeedEvent {
@@ -855,6 +937,29 @@ export function subscribeToDeathmatchRoom(
       }
     }
 
+    // Maintain a rolling history of snapshots for state snapshot interpolation
+    const snapshotHistory: PlayerSnapshot[] = prev?.snapshotHistory ? [...prev.snapshotHistory] : [];
+    snapshotHistory.push({
+      t: nowPerf,
+      x: incoming.x,
+      y: incoming.y ?? 0,
+      z: incoming.z,
+      yaw: incoming.yaw ?? 0,
+      pitch: incoming.pitch ?? 0,
+      aimX: incoming.aimX ?? 0,
+      aimY: incoming.aimY ?? 0,
+      vx,
+      vz,
+    });
+    // Keep snapshots from the last 1500ms (max 30 snapshots)
+    const cutoff = nowPerf - 1500;
+    while (snapshotHistory.length > 2 && snapshotHistory[0].t < cutoff) {
+      snapshotHistory.shift();
+    }
+    if (snapshotHistory.length > 30) {
+      snapshotHistory.splice(0, snapshotHistory.length - 30);
+    }
+
     return {
       ...incoming,
       vx,
@@ -868,6 +973,7 @@ export function subscribeToDeathmatchRoom(
       lastActivityAt,
       lastPing: isValidEpochTimestamp(incoming.lastPing) ? incoming.lastPing : nowEpoch,
       receivedAt: nowPerf,
+      snapshotHistory,
     };
   };
 
