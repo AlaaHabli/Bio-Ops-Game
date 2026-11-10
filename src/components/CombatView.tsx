@@ -40,6 +40,10 @@ import {
   createAnatomicalCoverCluster,
   getArenaSurfaceElevation,
   createBiologicalPowerUpMesh,
+  createSupplyTransportHelicopter,
+  createSupplyPingBeaconMesh,
+  createSupplyCargoNetMesh,
+  createAnatomicalLadder,
   disposeSceneGraph,
 } from './CellModels';
 import {
@@ -365,6 +369,130 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
 
+// Solid wall collision detection for multiplayer buildings (Bunker at (0, -22) and Tower at (14, -11))
+export function applySolidWallCollisions(
+  prevPos: { x: number; z: number },
+  nextPos: { x: number; z: number },
+  currentElevY: number,
+  isRooftop: boolean,
+  isInside: boolean
+): { x: number; z: number; isRooftop: boolean; isInside: boolean; elevationY: number } {
+  let x = nextPos.x;
+  let z = nextPos.z;
+
+  const surf = getArenaSurfaceElevation(x, z, isRooftop ? 5.66 : currentElevY);
+  let elevationY = surf.elevationY;
+  let insideBuilding = surf.isInsideBuilding;
+  let rooftop = surf.isRooftop;
+
+  // 1. Central Bunker (Centered at X=0, Z=-22, width=18.0, depth=10.0 -> X in [-9.0, 9.0], Z in [-27.0, -17.0])
+  const inBunkerArea = x >= -9.6 && x <= 9.6 && z >= -29.2 && z <= -14.8;
+
+  if (inBunkerArea) {
+    if (isRooftop) {
+      // Check if player stepped into the open roof hatch (X in [-7.2, -5.2], Z in [-25.2, -23.4]) to descend internal ladder
+      const inRoofHatch = x >= -7.15 && x <= -5.25 && z >= -25.15 && z <= -23.45;
+      if (inRoofHatch) {
+        rooftop = false;
+        insideBuilding = true;
+        elevationY = 0.55;
+        z = -23.1; // Place player cleanly inside the ground floor room in front of the ladder
+        return { x, z, isRooftop: false, isInside: true, elevationY };
+      }
+
+      // Keep player standing solidly ON THE ROOF (elevationY = 5.66) inside the rooftop parapet walls
+      rooftop = true;
+      insideBuilding = false;
+      elevationY = 5.66;
+      if (x < -8.55) x = -8.55;
+      if (x > 8.55) x = 8.55;
+      if (z < -26.55) z = -26.55;
+      if (z > -17.45) z = -17.45;
+      return { x, z, isRooftop: true, isInside: false, elevationY };
+    }
+
+    // Check if player inside the room climbed the internal rooftop ladder (X in [-7.2, -5.2], Z in [-25.9, -24.1])
+    if (isInside && x >= -7.2 && x <= -5.2 && z >= -25.95 && z <= -24.15) {
+      rooftop = true;
+      insideBuilding = false;
+      elevationY = 5.66;
+      z = -23.1; // Step out onto the top of the roof slab clear of the hatch opening
+      return { x, z, isRooftop: true, isInside: false, elevationY };
+    }
+
+    // Doorway & Entrance Staircase corridors (South stairs: Z in [-17.4, -14.8], North stairs: Z in [-29.2, -26.6], |X| <= 1.85)
+    const inSouthStairDoor = Math.abs(x) <= 1.82 && z >= -17.55 && z <= -14.8;
+    const inNorthStairDoor = Math.abs(x) <= 1.82 && z >= -29.2 && z <= -26.45;
+
+    if (inSouthStairDoor || inNorthStairDoor) {
+      const enteredRoom = z >= -26.6 && z <= -17.4;
+      insideBuilding = enteredRoom;
+      rooftop = false;
+      elevationY = getArenaSurfaceElevation(x, z, 0.55).elevationY;
+      return { x, z, isRooftop: false, isInside: insideBuilding, elevationY };
+    }
+
+    if (isInside) {
+      // Inside Ground Floor Room: Solid East, West, North, and South walls (windows allow shooting out, not walking through!)
+      insideBuilding = true;
+      rooftop = false;
+      elevationY = 0.55;
+
+      if (x < -8.45) x = -8.45;
+      if (x > 8.45) x = 8.45;
+      if (z > -17.45 && Math.abs(x) > 1.78) z = -17.45;
+      if (z < -26.55 && Math.abs(x) > 1.78) z = -26.55;
+
+      // Solid interior partition wall at X = 0 (central doorway open at Z in [-24.0, -20.0])
+      if (Math.abs(x) < 0.42 && (z < -24.0 || z > -20.0)) {
+        x = prevPos.x < 0 ? -0.45 : 0.45;
+      }
+      return { x, z, isRooftop: false, isInside: true, elevationY };
+    } else {
+      // Outside the building: Solid exterior walls prevent ghosting through walls from outside!
+      insideBuilding = false;
+      rooftop = false;
+      if (x > -9.45 && x < 9.45 && z > -27.45 && z < -16.55) {
+        if (prevPos.z >= -16.55 && Math.abs(x) > 1.78) {
+          z = -16.52;
+        } else if (prevPos.z <= -27.45 && Math.abs(x) > 1.78) {
+          z = -27.48;
+        } else if (prevPos.x <= -9.0) {
+          x = -9.48;
+        } else if (prevPos.x >= 9.0) {
+          x = 9.48;
+        } else {
+          z = prevPos.z >= -22.0 ? -16.52 : -27.48;
+        }
+      }
+      elevationY = getArenaSurfaceElevation(x, z, 0).elevationY;
+      return { x, z, isRooftop: false, isInside: false, elevationY };
+    }
+  }
+
+  // 2. Standalone Watchtower (Centered at X=14.0, Z=-11.0, size 4.6m x 4.6m -> X in [11.7, 16.3], Z in [-13.3, -8.7])
+  const inTowerBounds = x >= 11.4 && x <= 16.6 && z >= -13.6 && z <= -8.0;
+  if (inTowerBounds) {
+    if (rooftop || surf.elevationY >= 2.2) {
+      elevationY = surf.elevationY;
+      if (x < 11.85) x = 11.85;
+      if (x > 16.15) x = 16.15;
+      if (z < -13.15) z = -13.15;
+      if (z > -8.85 && Math.abs(x - 14.0) > 1.1) z = -8.85;
+      return { x, z, isRooftop: surf.elevationY >= 4.5, isInside: false, elevationY };
+    } else {
+      const distTower = Math.hypot(x - 14.0, z - (-11.0));
+      if (distTower < 2.55 && (z < -9.2 || Math.abs(x - 14.0) > 1.1)) {
+        const angle = Math.atan2(z - (-11.0), x - 14.0);
+        x = 14.0 + Math.cos(angle) * 2.75;
+        z = -11.0 + Math.sin(angle) * 2.75;
+      }
+    }
+  }
+
+  return { x, z, isRooftop: rooftop, isInside: insideBuilding, elevationY };
+}
+
 export const CombatView: React.FC<CombatViewProps> = ({
   level,
   phaseNumber,
@@ -445,6 +573,58 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const playerElevationYRef = useRef<number>(0);
   const playerIsRooftopRef = useRef<boolean>(false);
   const playerIsInsideBuildingRef = useRef<boolean>(false);
+
+  // 360-Degree Free Camera Rotation & Aiming (No clamped field of view constraint)
+  const cameraYawRef = useRef<number>(0);
+  const cameraPitchRef = useRef<number>(0);
+
+  // Helicopter Supply Drop & Super Ability System State
+  // Drop interval: Every 15 seconds into death ground randomly
+  // Abilities: Burning Bullets (15s), Supersonic Speed (15s), Immortality (10s), Double XP (30s), Postpone Question (+15s), T-Cytotoxic Laser (10s), Biotoxic RPG (10s)
+  const [activeSuperAbilities, setActiveSuperAbilities] = useState<Record<string, number>>({});
+  const superAbilitiesRef = useRef<Record<string, number>>({});
+
+  const supplyDropStateRef = useRef<{
+    phase: 'idle' | 'pinging' | 'chopper_inbound' | 'dropping' | 'active_crate';
+    nextDropTime: number;
+    pingStartTime: number;
+    targetX: number;
+    targetZ: number;
+    abilityType?: string;
+    abilityLabel?: string;
+    beaconMesh?: THREE.Group;
+    chopperMesh?: THREE.Group;
+    chopperRotor?: THREE.Group;
+    chopperTailRotor?: THREE.Group;
+    chopperSlungNet?: THREE.Group;
+    chopperActive?: boolean;
+    chopperStartX?: number;
+    chopperStartZ?: number;
+    chopperEndX?: number;
+    chopperEndZ?: number;
+    cargoNetMesh?: THREE.Group;
+    crateMesh?: THREE.Group;
+    dropY: number;
+    dropVy: number;
+    lastPingSec?: number;
+  }>({
+    phase: 'idle',
+    nextDropTime: performance.now() + 5000,
+    pingStartTime: 0,
+    targetX: 0,
+    targetZ: -18,
+    dropY: 10.5,
+    dropVy: 0,
+    lastPingSec: -1,
+  });
+
+  const [supplyDropPingAlert, setSupplyDropPingAlert] = useState<{
+    x: number;
+    z: number;
+    dist: number;
+    secondsLeft: number;
+    abilityName: string;
+  } | null>(null);
 
   // Performance-critical direct DOM references (zero React VDOM re-render churn!)
   const liveScoreDomRef = useRef<HTMLSpanElement | null>(null);
@@ -2120,8 +2300,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     // Pre-seed 2 tactical power-up drops on High Grounds (Bunker Rooftop & Watchtower Platform) to reward climbing!
     if (isMultiplayerDeathmatch) {
-      spawnBiologicalDrop(0, -22.0, 'shield', 2.65);
-      spawnBiologicalDrop(-19.0, -11.0, 'atp', 2.25);
+      spawnBiologicalDrop(0, -22.0, 'shield', 4.35);
+      spawnBiologicalDrop(14.0, -11.0, 'atp', 3.45);
     }
 
     // Helper to attach a compact 3D floating health bar to Tanks and Bosses
@@ -2355,13 +2535,41 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
     }
 
-    // Pre-allocate Generous Fixed Enemy Object Pool (In Multiplayer, pre-allocate 24 Strep + 12 Bacillus so up to 20 real human players have dedicated meshes with zero pool collisions!)
-    const strepPoolCount = isMultiplayerDeathmatch ? 24 : 8;
-    const bacillusPoolCount = isMultiplayerDeathmatch ? 12 : 6;
+    // Pre-allocate Fixed Enemy Object Pool (8 Strep + 4 Bacillus in Multiplayer for fast startup and zero frame stutter!)
+    const strepPoolCount = isMultiplayerDeathmatch ? 8 : 8;
+    const bacillusPoolCount = isMultiplayerDeathmatch ? 4 : 6;
     const tankPoolCount = isMultiplayerDeathmatch ? 0 : 4;
     for (let i = 0; i < strepPoolCount; i++) allocateEnemyPoolSlot('strep');
     for (let i = 0; i < bacillusPoolCount; i++) allocateEnemyPoolSlot('bacillus');
     for (let i = 0; i < tankPoolCount; i++) allocateEnemyPoolSlot('tank');
+
+    // Pre-allocate Multiplayer Supply Helicopter, Beacon, Cargo Net & Super Crate at startup so zero mid-game shader compilation occurs!
+    if (isMultiplayerDeathmatch) {
+      const dropState = supplyDropStateRef.current;
+      const bObj = createSupplyPingBeaconMesh();
+      bObj.group.visible = false;
+      scene.add(bObj.group);
+      dropState.beaconMesh = bObj.group;
+
+      const chopperObj = createSupplyTransportHelicopter();
+      chopperObj.group.scale.set(2.35, 2.35, 2.35);
+      chopperObj.group.visible = false;
+      scene.add(chopperObj.group);
+      dropState.chopperMesh = chopperObj.group;
+      dropState.chopperRotor = chopperObj.mainRotor;
+      dropState.chopperTailRotor = chopperObj.tailRotor;
+      dropState.chopperSlungNet = chopperObj.slungCargoNet;
+
+      const netObj = createSupplyCargoNetMesh('burning_bullets');
+      netObj.group.visible = false;
+      scene.add(netObj.group);
+      dropState.cargoNetMesh = netObj.group;
+
+      const crateObj = createBiologicalPowerUpMesh('atp');
+      crateObj.visible = false;
+      scene.add(crateObj);
+      dropState.crateMesh = crateObj;
+    }
 
     // Pre-allocate Allied Reinforcements & Grenade Pool at startup so [T] and [G] never compile shaders mid-combat!
     {
@@ -3472,10 +3680,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (isMultiplayerDeathmatch && mpStatusRef.current !== 'active') return;
       const now = performance.now();
       const activeWpn = currentWeaponRef.current;
-      if (now - lastShotTimeRef.current < activeWpn.fireRate) return;
+
+      const isLaserActive = superAbilitiesRef.current['t_cytotoxic_laser'] && now < superAbilitiesRef.current['t_cytotoxic_laser'];
+      const effectiveFireRate = isLaserActive ? 70 : activeWpn.fireRate;
+
+      if (now - lastShotTimeRef.current < effectiveFireRate) return;
       if (isReloadingRef.current) return;
 
-      if (currentAmmoRef.current <= 0) {
+      if (!isLaserActive && currentAmmoRef.current <= 0) {
         sounds.playDryFire();
         if (reserveAmmoRef.current > 0 && !isReloadingRef.current) {
           handleReloadRef.current?.();
@@ -3487,13 +3699,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
         localShotSeqRef.current += 1;
       }
 
-      currentAmmoRef.current -= 1;
-      syncLiveAmmoDom();
-      if (currentAmmoRef.current === 0 || currentAmmoRef.current === 5) {
-        setCurrentAmmo(currentAmmoRef.current);
+      if (!isLaserActive) {
+        currentAmmoRef.current -= 1;
+        syncLiveAmmoDom();
+        if (currentAmmoRef.current === 0 || currentAmmoRef.current === 5) {
+          setCurrentAmmo(currentAmmoRef.current);
+        }
       }
       lastShotTimeRef.current = now;
-      if (currentAmmoRef.current === 0 && reserveAmmoRef.current > 0) {
+      if (!isLaserActive && currentAmmoRef.current === 0 && reserveAmmoRef.current > 0) {
         setTimeout(() => {
           if (currentAmmoRef.current === 0 && !isReloadingRef.current) {
             handleReloadRef.current?.();
@@ -3501,7 +3715,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }, 180);
       }
 
-      sounds.playShoot(activeWpn.category);
+      if (isLaserActive) {
+        sounds.playLaserDisintegrator();
+      } else {
+        sounds.playShoot(activeWpn.category);
+      }
 
       recoilRef.current.z = isScopedRef.current ? 0.16 : 0.32;
       recoilRef.current.rotX = isScopedRef.current ? 0.09 : 0.18;
@@ -3510,7 +3728,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         activeWpn.category === 'SHOTGUN' ? 0.35 : isScopedRef.current ? 0.1 : 0.18
       );
 
-      // Animate SPAS-12 Pump Shotgun Forend Slide on shot!
       if (activeWpn.category === 'SHOTGUN' && pumpSlideRef.current) {
         pumpSlideRef.current.position.z = -0.32;
         setTimeout(() => {
@@ -3522,7 +3739,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         const mMat = muzzleSpriteRef.current.material as THREE.MeshBasicMaterial;
         mMat.opacity = 0.96;
         mMat.color.setHex(
-          activeWpn.category === 'SNIPER'
+          isLaserActive
+            ? 0x22d3ee
+            : activeWpn.category === 'SNIPER'
             ? 0xfda4af
             : activeWpn.category === 'SHOTGUN'
             ? 0xfef08a
@@ -3535,7 +3754,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         muzzleSpriteRef.current.rotation.z = Math.random() * Math.PI * 2;
       }
 
-      // Eject 3D Brass Bullet Shell Casing from pre-allocated shellMeshPool
       let shell: THREE.Mesh | undefined;
       if (activeShellsRef.current.length >= shellMeshPool.length) {
         const oldShell = activeShellsRef.current.shift();
@@ -3575,59 +3793,61 @@ export const CombatView: React.FC<CombatViewProps> = ({
         sounds.playBrassShellDrop();
       }
 
-      // Ensure camera matrixWorld is 100% up-to-date before raycasting or projecting
       camera.updateMatrixWorld();
 
-      // Unified Aim Vector: When in 3D Black Ops ADS, aim is dead center (0, 0) down the 3D optic axis!
-      if (isScopedRef.current) {
-        hitVector.set(0, 0);
-      } else {
-        hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
-      }
-
-      // Save the player's true unassisted aim point BEFORE any auto-aim torso nudge!
-      // Headshots are ONLY awarded if the player's true unassisted aim is on the head!
-      const rawAimX = hitVector.x;
-      const rawAimY = hitVector.y;
-
       const soldiers = activeSoldiersRef.current;
+      let rawAimX = aimPosRef.current.x;
+      let rawAimY = aimPosRef.current.y;
 
-      // If AUTO-AIM is enabled, gently nudge shot vector PARTWAY closer toward nearest enemy's TORSO/CHEST (NEVER the head!)
-      if (autoAimEnabledRef.current && soldiers.length > 0) {
-        let bestDist = 0.36;
-        let lockedBodyNdcX = 0;
-        let lockedBodyNdcY = 0;
-        let hasLock = false;
-        for (let i = 0; i < soldiers.length; i++) {
-          const s = soldiers[i];
-          if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+      if (isMultiplayerDeathmatch) {
+        hitVector.set(0, 0);
+        rawAimX = 0;
+        rawAimY = 0;
+        raycaster.setFromCamera(hitVector, camera);
+      } else {
+        if (isScopedRef.current) {
+          hitVector.set(0, 0);
+        } else {
+          hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
+        }
 
-          // Project ONLY Enemy Torso / Center-of-Mass (never snap to head!)
-          const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
-          _v2.copy(s.mesh.position);
-          _v2.y += bodyYOffset;
-          _v2.project(camera);
-          const bodyNdcX = _v2.x;
-          const bodyNdcY = _v2.y;
-          const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
+        rawAimX = hitVector.x;
+        rawAimY = hitVector.y;
 
-          if (dBody < bestDist) {
-            bestDist = dBody;
-            lockedBodyNdcX = bodyNdcX;
-            lockedBodyNdcY = bodyNdcY;
-            hasLock = true;
+        if (autoAimEnabledRef.current && soldiers.length > 0) {
+          let bestDist = 0.36;
+          let lockedBodyNdcX = 0;
+          let lockedBodyNdcY = 0;
+          let hasLock = false;
+          for (let i = 0; i < soldiers.length; i++) {
+            const s = soldiers[i];
+            if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+
+            const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
+            _v2.copy(s.mesh.position);
+            _v2.y += bodyYOffset;
+            _v2.project(camera);
+            const bodyNdcX = _v2.x;
+            const bodyNdcY = _v2.y;
+            const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
+
+            if (dBody < bestDist) {
+              bestDist = dBody;
+              lockedBodyNdcX = bodyNdcX;
+              lockedBodyNdcY = bodyNdcY;
+              hasLock = true;
+            }
+          }
+          if (hasLock) {
+            hitVector.set(
+              THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
+              THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
+            );
           }
         }
-        if (hasLock) {
-          // Soft 42% pull toward torso center-of-mass so auto-aim helps you move closer to the enemy without playing for you or auto-headshotting!
-          hitVector.set(
-            THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
-            THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
-          );
-        }
-      }
 
-      raycaster.setFromCamera(hitVector, camera);
+        raycaster.setFromCamera(hitVector, camera);
+      }
 
       // Spawn MuzzleFlash Particle Effect & 3D Pointed Spitzer Bullet Projectile directly at the active weapon barrel position!
       {
@@ -3677,7 +3897,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       for (let i = soldiers.length - 1; i >= 0; i--) {
         const soldier = soldiers[i];
-        if (soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+        if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
         const headYOffset = soldier.isRobot
           ? 2.62
@@ -3693,6 +3913,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         _v1.y += headYOffset;
         const distSqHead3D = raycaster.ray.distanceSqToPoint(_v1);
         _v1.project(camera);
+        if (_v1.z >= 1.0) continue; // Behind camera in 360-degree view
         // Measure headshot precision strictly against the player's TRUE unassisted aim (rawAimX, rawAimY)!
         const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
         const headNdcY = _v1.y;
@@ -3701,6 +3922,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         _v2.y += bodyYOffset;
         const distSqBody3D = raycaster.ray.distanceSqToPoint(_v2);
         _v2.project(camera);
+        if (_v2.z >= 1.0) continue;
         const rawBodyNdcDist = Math.hypot(_v2.x - rawAimX, _v2.y - rawAimY);
         const bodyNdcDist = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
 
@@ -3761,12 +3983,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (!hitRegistered) {
         for (let i = soldiers.length - 1; i >= 0; i--) {
           const soldier = soldiers[i];
-          if (soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
           const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
           _v2.copy(soldier.mesh.position);
           _v2.y += bodyYOffset;
           _v2.project(camera);
+          if (_v2.z >= 1.0) continue;
           const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
 
           const assistRadius = autoAimEnabledRef.current
@@ -3998,10 +4221,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }, 2000);
         }
       } else if (isMultiplayerDeathmatch) {
-        // In Multiplayer, players can also shoot and destroy Destructible Anatomical Cover Structures!
+        // In Multiplayer, players can also shoot and destroy Destructible Anatomical Cover Structures in any 360° direction!
         for (let bIdx = 0; bIdx < barricadesRef.current.length; bIdx++) {
           const bar = barricadesRef.current[bIdx];
-          if (bar.hp <= 0 || bar.z >= playerPosRef.current.z - 0.8) continue;
+          if (bar.hp <= 0) continue;
           _v2.set(bar.x, bar.y + 0.55, bar.z);
           const distSqToCover = raycaster.ray.distanceSqToPoint(_v2);
           if (distSqToCover <= 1.75) {
@@ -4035,10 +4258,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     // Cached container rect avoids synchronous layout reflows on every touchmove/mousemove event!
     let cachedRect = container.getBoundingClientRect();
+    let mouseEdgeNdcX = 0;
+    let isMouseOverCanvas = false;
 
     // Professional FPS Aiming (Fortnite / Black Ops style):
-    // 100% Unified Aim between Hipfire Crosshair & Tactical Scope Reticle!
+    // In Multiplayer: 360-degree camera look keeps crosshair locked at screen center (0, 0)!
+    // In Solo: 100% Unified Aim between Hipfire Crosshair & Tactical Scope Reticle!
     const updateAimPosition = (clientX: number, clientY: number, isRelativeDrag: boolean = false, prevX?: number, prevY?: number) => {
+      if (isMultiplayerDeathmatch) {
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        syncCrosshairDom(0, 0);
+        return;
+      }
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
@@ -4136,6 +4368,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const prevX = lastFiringTouchPosRef.current.x;
           const prevY = lastFiringTouchPosRef.current.y;
           lastFiringTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
+          if (isMultiplayerDeathmatch) {
+            const touchSens = isScopedRef.current ? 0.0042 : 0.0078;
+            cameraYawRef.current -= (touch.clientX - prevX) * touchSens;
+            cameraPitchRef.current = THREE.MathUtils.clamp(
+              cameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.75),
+              -1.15,
+              1.15
+            );
+          }
           updateAimPosition(touch.clientX, touch.clientY, true, prevX, prevY);
         }
       }
@@ -4193,6 +4434,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         handleToggleScope();
         return;
       }
+      if (document.pointerLockElement !== container) {
+        container.requestPointerLock?.();
+      }
       isPointerDownRef.current = true;
       startHoldShootScopeTimer();
       updateAimPosition(e.clientX, e.clientY, false);
@@ -4202,8 +4446,44 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      isMouseOverCanvas = true;
+      if (cachedRect.width === 0 || cachedRect.height === 0) {
+        cachedRect = container.getBoundingClientRect();
+      }
+      const w = cachedRect.width || window.innerWidth;
+      mouseEdgeNdcX = THREE.MathUtils.clamp(((e.clientX - cachedRect.left) / w) * 2 - 1, -1, 1);
+
+      const sens = isScopedRef.current ? 0.0022 : 0.0038;
+      const isLocked = document.pointerLockElement === container;
+
+      if (isLocked) {
+        cameraYawRef.current -= e.movementX * sens;
+        cameraPitchRef.current = THREE.MathUtils.clamp(
+          cameraPitchRef.current - e.movementY * (sens * 0.75),
+          -1.18,
+          1.18
+        );
+      } else {
+        const fallbackDx = lastMouseClientPosRef.current ? e.clientX - lastMouseClientPosRef.current.x : 0;
+        const fallbackDy = lastMouseClientPosRef.current ? e.clientY - lastMouseClientPosRef.current.y : 0;
+        const dx = typeof e.movementX === 'number' && e.movementX !== 0 ? e.movementX : fallbackDx;
+        const dy = typeof e.movementY === 'number' && e.movementY !== 0 ? e.movementY : fallbackDy;
+
+        cameraYawRef.current -= dx * (sens * 1.35);
+        cameraPitchRef.current = THREE.MathUtils.clamp(
+          cameraPitchRef.current - dy * (sens * 0.85),
+          -1.18,
+          1.18
+        );
+      }
+
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       updateAimPosition(e.clientX, e.clientY, false);
+    };
+
+    const handleMouseLeave = () => {
+      isMouseOverCanvas = false;
+      mouseEdgeNdcX = 0;
     };
 
     const handleMouseUp = (e: MouseEvent) => {
@@ -4307,6 +4587,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     container.addEventListener('contextmenu', handleContextMenu);
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('mouseleave', handleMouseLeave);
     window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('wheel', handleWheel, { passive: false });
 
@@ -4366,11 +4647,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       cameraRollShakeRef.current = sideSign * shakePower * 0.085;
     };
 
-    // Adaptive Resolution Scaling (Dynamic Pixel Ratio) for guaranteed locked 60 FPS
-    let fpsRollingFrames = 0;
-    let fpsRollingStartTime = performance.now();
-    let dynamicPixelRatio = Math.min(1.25, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
-
     function animate() {
       const nowTime = performance.now();
       // Freeze 3D simulation & timer delta when paused for a Concept Popup or User Pause Menu!
@@ -4387,21 +4663,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       lastFrameTime = nowTime;
       elapsedAccumulator += delta;
       const elapsed = elapsedAccumulator;
-
-      // Adaptive Resolution Scaling Monitor (adjusts pixel ratio to eliminate any stutter/frame drop)
-      fpsRollingFrames++;
-      if (nowTime - fpsRollingStartTime >= 1000) {
-        const liveFps = (fpsRollingFrames * 1000) / (nowTime - fpsRollingStartTime);
-        fpsRollingFrames = 0;
-        fpsRollingStartTime = nowTime;
-        if (liveFps < 46 && dynamicPixelRatio > 0.8) {
-          dynamicPixelRatio = Math.max(0.75, dynamicPixelRatio - 0.15);
-          renderer.setPixelRatio(dynamicPixelRatio);
-        } else if (liveFps > 56 && dynamicPixelRatio < Math.min(1.25, window.devicePixelRatio || 1)) {
-          dynamicPixelRatio = Math.min(Math.min(1.25, window.devicePixelRatio || 1), dynamicPixelRatio + 0.1);
-          renderer.setPixelRatio(dynamicPixelRatio);
-        }
-      }
 
       // 1. UPDATE PLAYER 3D POSITION (Left/Right & Front/Back Movement)
       let inputX = moveInputRef.current.x;
@@ -4488,9 +4749,65 @@ export const CombatView: React.FC<CombatViewProps> = ({
         : isSprintingRef.current
         ? 1.68
         : 1.0;
-      const moveSpeed = baseMoveSpeed * postureSpeedMult;
-      playerPosRef.current.x += inputX * moveSpeed * delta;
-      playerPosRef.current.z += inputZ * moveSpeed * delta;
+      const speedMultSuper = superAbilitiesRef.current['supersonic_speed'] && nowTime < superAbilitiesRef.current['supersonic_speed'] ? 1.6 : 1.0;
+      const moveSpeed = baseMoveSpeed * postureSpeedMult * speedMultSuper;
+
+      if (isMultiplayerDeathmatch) {
+        // Continuous 360-degree loop rotation when cursor is held near the left or right edge of the viewport (works seamlessly even without Pointer Lock!)
+        if (document.pointerLockElement !== container && isMouseOverCanvas) {
+          if (mouseEdgeNdcX < -0.52) {
+            const leftEdgeIntensity = Math.min(1, (-mouseEdgeNdcX - 0.52) / 0.44);
+            cameraYawRef.current += (1.6 + leftEdgeIntensity * 2.4) * delta;
+          } else if (mouseEdgeNdcX > 0.52) {
+            const rightEdgeIntensity = Math.min(1, (mouseEdgeNdcX - 0.52) / 0.44);
+            cameraYawRef.current -= (1.6 + rightEdgeIntensity * 2.4) * delta;
+          }
+        }
+
+        // Normalize cameraYawRef into a clean 360-degree loop (-PI to +PI)
+        if (cameraYawRef.current > Math.PI) cameraYawRef.current -= Math.PI * 2;
+        if (cameraYawRef.current < -Math.PI) cameraYawRef.current += Math.PI * 2;
+
+        const yaw = cameraYawRef.current;
+        const cosY = Math.cos(yaw);
+        const sinY = Math.sin(yaw);
+
+        const worldMoveX = inputX * cosY + inputZ * sinY;
+        const worldMoveZ = -inputX * sinY + inputZ * cosY;
+
+        const prevPos = { x: playerPosRef.current.x, z: playerPosRef.current.z };
+        const nextPos = {
+          x: playerPosRef.current.x + worldMoveX * moveSpeed * delta,
+          z: playerPosRef.current.z + worldMoveZ * moveSpeed * delta,
+        };
+
+        const wallRes = applySolidWallCollisions(
+          prevPos,
+          nextPos,
+          playerElevationYRef.current,
+          playerIsRooftopRef.current,
+          playerIsInsideBuildingRef.current
+        );
+        playerPosRef.current.x = wallRes.x;
+        playerPosRef.current.z = wallRes.z;
+        playerIsRooftopRef.current = wallRes.isRooftop;
+        playerIsInsideBuildingRef.current = wallRes.isInside;
+        playerElevationYRef.current = THREE.MathUtils.damp(
+          playerElevationYRef.current,
+          wallRes.elevationY,
+          18,
+          delta
+        );
+
+        camera.rotation.order = 'YXZ';
+        camera.rotation.y = cameraYawRef.current;
+        camera.rotation.x = cameraPitchRef.current;
+        camera.rotation.z = 0;
+      } else {
+        playerPosRef.current.x += inputX * moveSpeed * delta;
+        playerPosRef.current.z += inputZ * moveSpeed * delta;
+        playerElevationYRef.current = 0;
+      }
 
       // Clamp movement within organ tunnel (Solo) / expansive 20-Player Open Lung & Alveoli Landscape (Multiplayer: 64m wide x 58m deep!)
       const maxLateralBound = isMultiplayerDeathmatch ? 32.0 : 3.5;
@@ -4505,7 +4822,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       smoothedPlayerVelX = THREE.MathUtils.damp(smoothedPlayerVelX, instVelX, 8, delta);
 
       // 2. UPDATE CAMERA, DYNAMIC HP-SCALED SCREEN SHAKE, CROUCH POSTURE, SIGHT SCOPE ZOOM (ADS) & RESPONSIVE PITCH/YAW AIMING
-      const shakeAmt = cameraShakeRef.current;
+      const shakeAmt = isMultiplayerDeathmatch ? 0 : cameraShakeRef.current;
       const shakeX =
         shakeAmt > 0.005
           ? (Math.sin(elapsed * 58) * 0.65 + (Math.random() - 0.5) * 0.75) * shakeAmt
@@ -4518,27 +4835,223 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const targetCrouchY = isCrouchingRef.current ? -0.52 : 0;
       crouchCameraYRef.current = THREE.MathUtils.damp(crouchCameraYRef.current, targetCrouchY, 14, delta);
 
-      if (isMultiplayerDeathmatch) {
-        const surf = getArenaSurfaceElevation(
-          playerPosRef.current.x,
-          playerPosRef.current.z,
-          playerElevationYRef.current
-        );
-        playerElevationYRef.current = THREE.MathUtils.damp(
-          playerElevationYRef.current,
-          surf.elevationY,
-          16,
-          delta
-        );
-        playerIsRooftopRef.current = surf.isRooftop;
-        playerIsInsideBuildingRef.current = surf.isInsideBuilding;
-      } else {
-        playerElevationYRef.current = 0;
-      }
-
       camera.position.x = playerPosRef.current.x + shakeX;
       camera.position.y = playerElevationYRef.current + crouchCameraYRef.current + shakeY;
       camera.position.z = playerPosRef.current.z;
+
+      // ------------------------------------------------------------------
+      // HELICOPTER SUPPLY DROP & SUPER-ABILITY SYSTEM (EVERY 15s)
+      // ------------------------------------------------------------------
+      if (isMultiplayerDeathmatch) {
+        const dropState = supplyDropStateRef.current;
+
+        // Keep flying the military transport helicopter across the sky to the far horizon even after dropping the cargo net!
+        if (dropState.chopperActive && dropState.chopperMesh) {
+          if (dropState.chopperRotor) dropState.chopperRotor.rotation.y += 28 * delta;
+          if (dropState.chopperTailRotor) dropState.chopperTailRotor.rotation.x += 34 * delta;
+
+          const endX = dropState.chopperEndX ?? dropState.targetX + 90;
+          const endZ = dropState.chopperEndZ ?? dropState.targetZ + 70;
+          const dxEnd = endX - dropState.chopperMesh.position.x;
+          const dzEnd = endZ - dropState.chopperMesh.position.z;
+          const distToEnd = Math.hypot(dxEnd, dzEnd);
+
+          if (distToEnd <= 2.5) {
+            dropState.chopperActive = false;
+            dropState.chopperMesh.visible = false;
+          } else {
+            const flySpeed = 28.0;
+            dropState.chopperMesh.position.x += (dxEnd / distToEnd) * flySpeed * delta;
+            dropState.chopperMesh.position.z += (dzEnd / distToEnd) * flySpeed * delta;
+            dropState.chopperMesh.position.y = 9.6 + Math.sin(nowTime * 0.006) * 0.18;
+          }
+        }
+
+        if (dropState.phase === 'idle' && nowTime >= dropState.nextDropTime - 2500) {
+          dropState.phase = 'pinging';
+          dropState.pingStartTime = nowTime;
+          dropState.lastPingSec = -1;
+          // Choose an open drop zone near the arena where the player can clearly see the incoming helicopter
+          const sideSign = Math.random() < 0.5 ? -1 : 1;
+          dropState.targetX = sideSign * (11.5 + Math.random() * 9.5);
+          dropState.targetZ = -12.0 - Math.random() * 14.0;
+
+          const abilityOptions = [
+            { type: 'burning_bullets', label: 'BURNING BULLETS (15s)' },
+            { type: 'supersonic_speed', label: 'SUPERSONIC SPEED (15s)' },
+            { type: 'immortality', label: 'IMMORTALITY (10s)' },
+            { type: 'double_xp', label: 'DOUBLE XP (30s)' },
+            { type: 'postpone_question', label: 'POSTPONE QUESTION (+15s)' },
+            { type: 't_cytotoxic_laser', label: 'T-CYTOTOXIC LASER (10s)' },
+            { type: 'biotoxic_rpg', label: 'BIOTOXIC RPG (10s)' },
+          ];
+          const chosen = abilityOptions[Math.floor(Math.random() * abilityOptions.length)];
+          dropState.abilityType = chosen.type;
+          dropState.abilityLabel = chosen.label;
+
+          if (dropState.beaconMesh) {
+            const groundElev = getArenaSurfaceElevation(dropState.targetX, dropState.targetZ, 0).elevationY;
+            dropState.beaconMesh.position.set(dropState.targetX, groundElev - 1.62, dropState.targetZ);
+            dropState.beaconMesh.visible = true;
+          }
+          sounds.playSupplyDropPing();
+        }
+
+        if (dropState.phase === 'pinging') {
+          const elapsedPing = (nowTime - dropState.pingStartTime) / 1000;
+          const secsLeft = Math.max(0, Math.ceil(2.5 - elapsedPing));
+
+          // Update React state only once per second (1Hz) instead of every frame (60Hz) to eliminate VDOM stutter!
+          if (secsLeft !== dropState.lastPingSec) {
+            dropState.lastPingSec = secsLeft;
+            const distToPing = Math.hypot(
+              playerPosRef.current.x - dropState.targetX,
+              playerPosRef.current.z - dropState.targetZ
+            );
+            setSupplyDropPingAlert({
+              x: Math.round(dropState.targetX),
+              z: Math.round(dropState.targetZ),
+              dist: Math.round(distToPing),
+              secondsLeft: secsLeft,
+              abilityName: dropState.abilityLabel || 'SUPER POWER-UP',
+            });
+          }
+
+          if (dropState.beaconMesh) {
+            dropState.beaconMesh.rotation.y += 2.0 * delta;
+            const pulse = 1.0 + Math.sin(nowTime * 0.012) * 0.25;
+            dropState.beaconMesh.scale.set(pulse, 1, pulse);
+          }
+
+          if (elapsedPing >= 2.5) {
+            dropState.phase = 'chopper_inbound';
+            setSupplyDropPingAlert(null);
+
+            // Spawn military supply helicopter on the distant horizon flying across the drop zone to the opposite horizon!
+            const startX = dropState.targetX - 65;
+            const startZ = dropState.targetZ - 65;
+            const endX = dropState.targetX + 75;
+            const endZ = dropState.targetZ + 75;
+            dropState.chopperStartX = startX;
+            dropState.chopperStartZ = startZ;
+            dropState.chopperEndX = endX;
+            dropState.chopperEndZ = endZ;
+            dropState.chopperActive = true;
+
+            if (dropState.chopperSlungNet) {
+              dropState.chopperSlungNet.visible = true;
+            }
+            if (dropState.chopperMesh) {
+              dropState.chopperMesh.position.set(startX, 9.6, startZ);
+              dropState.chopperMesh.lookAt(endX, 9.6, endZ);
+              dropState.chopperMesh.visible = true;
+            }
+            sounds.playHelicopterRotor();
+          }
+        }
+
+        if (dropState.phase === 'chopper_inbound') {
+          if (dropState.chopperMesh) {
+            const distToDropZone = Math.hypot(
+              dropState.chopperMesh.position.x - dropState.targetX,
+              dropState.chopperMesh.position.z - dropState.targetZ
+            );
+
+            // Release the supply net when the flying helicopter passes over the drop zone!
+            if (distToDropZone <= 3.2 || dropState.chopperMesh.position.z >= dropState.targetZ) {
+              dropState.phase = 'dropping';
+              dropState.dropY = 8.4;
+              dropState.dropVy = -2.0;
+
+              if (dropState.chopperSlungNet) {
+                dropState.chopperSlungNet.visible = false;
+              }
+              if (dropState.cargoNetMesh) {
+                dropState.cargoNetMesh.position.set(dropState.targetX, dropState.dropY, dropState.targetZ);
+                dropState.cargoNetMesh.visible = true;
+              }
+            }
+          }
+        }
+
+        if (dropState.phase === 'dropping') {
+          if (dropState.cargoNetMesh) {
+            dropState.dropVy -= 18.0 * delta;
+            dropState.dropY += dropState.dropVy * delta;
+
+            const groundY = getArenaSurfaceElevation(dropState.targetX, dropState.targetZ, 0).elevationY - 1.25;
+
+            if (dropState.dropY <= groundY) {
+              dropState.dropY = groundY;
+              dropState.phase = 'active_crate';
+              dropState.cargoNetMesh.visible = false;
+
+              triggerExplosion(new THREE.Vector3(dropState.targetX, groundY + 0.5, dropState.targetZ));
+              sounds.playSupplyNetImpact();
+
+              if (dropState.crateMesh) {
+                dropState.crateMesh.position.set(dropState.targetX, groundY + 0.45, dropState.targetZ);
+                dropState.crateMesh.visible = true;
+              }
+
+              if (dropState.beaconMesh) dropState.beaconMesh.visible = false;
+            } else {
+              dropState.cargoNetMesh.position.y = dropState.dropY;
+              dropState.cargoNetMesh.rotation.y += 2.6 * delta;
+            }
+          }
+        }
+
+        if (dropState.phase === 'active_crate') {
+          if (dropState.crateMesh) {
+            dropState.crateMesh.rotation.y += 1.8 * delta;
+            const baseCrateY = getArenaSurfaceElevation(dropState.targetX, dropState.targetZ, 0).elevationY - 1.15;
+            dropState.crateMesh.position.y = baseCrateY + Math.sin(nowTime * 0.005) * 0.15;
+
+            const dPlayer = Math.hypot(
+              playerPosRef.current.x - dropState.targetX,
+              playerPosRef.current.z - dropState.targetZ
+            );
+            if (dPlayer < 2.6) {
+              const type = dropState.abilityType || 'burning_bullets';
+              const label = dropState.abilityLabel || 'SUPER POWER-UP';
+              const durationMs =
+                type === 'double_xp'
+                  ? 30000
+                  : type === 'immortality' || type === 't_cytotoxic_laser' || type === 'biotoxic_rpg'
+                  ? 10000
+                  : 15000;
+
+              if (type === 'postpone_question') {
+                timeLeftRef.current += 15;
+                setTimeLeft(timeLeftRef.current);
+              }
+
+              superAbilitiesRef.current[type] = nowTime + durationMs;
+              setActiveSuperAbilities({ ...superAbilitiesRef.current });
+              sounds.playSuperAbilityAward();
+
+              setPowerUpToast({ text: `AWARDED: ${label}!`, icon: '⚡', color: '#f59e0b' });
+              setTimeout(() => setPowerUpToast(null), 3500);
+
+              dropState.crateMesh.visible = false;
+              dropState.phase = 'idle';
+              dropState.nextDropTime = nowTime + 15000;
+            }
+          }
+        }
+
+        let abChanged = false;
+        Object.keys(superAbilitiesRef.current).forEach((k) => {
+          if (superAbilitiesRef.current[k] && nowTime > superAbilitiesRef.current[k]) {
+            delete superAbilitiesRef.current[k];
+            abChanged = true;
+          }
+        });
+        if (abChanged) {
+          setActiveSuperAbilities({ ...superAbilitiesRef.current });
+        }
+      }
 
       // Smoothly zoom camera FOV when Black Ops Sight Scope (ADS) is engaged!
       const targetFov = isScopedRef.current
@@ -4612,9 +5125,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const targetPitch = isScopedRef.current
         ? aimPosRef.current.y * 0.45
         : aimPosRef.current.y * 0.07 + Math.abs(cameraRollShakeRef.current) * 0.25;
-      camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 16, delta);
-      camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, 22, delta);
-      camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, 22, delta);
+      if (!isMultiplayerDeathmatch) {
+        camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 16, delta);
+        camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, 22, delta);
+        camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, targetPitch, 22, delta);
+      }
       camera.updateMatrixWorld();
 
       // Continuous fire while holding Shoot (runs AFTER camera & aimPosRef update so every shot uses fresh current-frame matrices!)
@@ -5532,7 +6047,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 const targetZ = THREE.MathUtils.clamp(
                   -18.0 - rp.z - deadReckonVz,
                   -46.0,
-                  playerPosRef.current.z - 2.4
+                  10.0
                 );
                 const moveDist = Math.hypot(
                   targetX - soldier.mesh.position.x,
@@ -6895,7 +7410,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         let s2: ActiveSoldier | null = null;
         for (let idx = 0; idx < activeSoldiersRef.current.length; idx++) {
           const s = activeSoldiersRef.current[idx];
-          if (s.mesh.position.z < playerPosRef.current.z - 1.2) {
+          if (isMultiplayerDeathmatch || s.mesh.position.z < playerPosRef.current.z - 1.2) {
             if (!s1 || s.mesh.position.z > s1.mesh.position.z) {
               s2 = s1;
               s1 = s;
@@ -7173,6 +7688,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       registerWarmup(debrisMeshPool[0]);
       registerWarmup(playerTracerPool[0]);
       registerWarmup(shellMeshPool[0]);
+      registerWarmup(supplyDropStateRef.current.beaconMesh);
+      registerWarmup(supplyDropStateRef.current.chopperMesh);
+      registerWarmup(supplyDropStateRef.current.cargoNetMesh);
+      registerWarmup(supplyDropStateRef.current.crateMesh);
       renderer.compile(scene, camera);
       renderer.render(scene, camera);
       for (const item of warmupMeshes) {
@@ -8489,6 +9008,47 @@ export const CombatView: React.FC<CombatViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* 15-SECOND HELICOPTER SUPPLY DROP PING INDICATOR ALERT BANNER */}
+      {isMultiplayerDeathmatch && supplyDropPingAlert && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none font-mono">
+          <div className="px-4 py-2 bg-amber-950/95 border-2 border-amber-400 rounded-xl shadow-[0_0_25px_rgba(245,158,11,0.85)] flex items-center gap-3 animate-pulse text-amber-200">
+            <Radio className="w-5 h-5 text-amber-400 animate-spin" />
+            <div className="flex flex-col">
+              <div className="text-[10px] tracking-widest text-amber-400 uppercase font-black">
+                SUPPLY DROP INBOUND IN {supplyDropPingAlert.secondsLeft}S
+              </div>
+              <div className="text-xs font-black text-white">
+                POS: X={supplyDropPingAlert.x} Z={supplyDropPingAlert.z} ({supplyDropPingAlert.dist}M) • {supplyDropPingAlert.abilityName}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ACTIVE SUPER ABILITIES BADGES DISPLAY */}
+      {isMultiplayerDeathmatch && Object.keys(activeSuperAbilities).length > 0 && (
+        <div className="fixed top-28 left-4 z-30 pointer-events-none flex flex-col gap-1.5 font-mono">
+          {Object.entries(activeSuperAbilities).map(([key, expireTime]) => {
+            const secs = Math.max(0, Math.ceil((expireTime - performance.now()) / 1000));
+            const labels: Record<string, string> = {
+              burning_bullets: '🔥 BURNING BULLETS',
+              supersonic_speed: '⚡ SUPERSONIC SPEED',
+              immortality: '🛡️ IMMORTALITY',
+              double_xp: '⭐ DOUBLE XP',
+              t_cytotoxic_laser: '💥 T-CYTOTOXIC LASER',
+              biotoxic_rpg: '🚀 BIOTOXIC RPG',
+            };
+            return (
+              <div key={key} className="px-2.5 py-1 bg-amber-500/90 border border-amber-200 rounded-lg shadow-md text-[10px] font-black text-zinc-950 flex items-center gap-2">
+                <span>{labels[key] || key.toUpperCase()}</span>
+                <span className="px-1.5 py-0.5 bg-black/40 text-amber-200 rounded font-bold">{secs}s</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
 
       {/* CLASSIFIED BLACK OPS INTEL DOSSIER POPUP (1-2 sentence Biology Note, max 1 per phase) */}
       {activeConceptCard && (

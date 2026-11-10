@@ -6463,9 +6463,15 @@ export function createOpenLungAlveoliLandscape(): {
     group.add(arch);
   });
 
-  // 6. Central Alveolar Research Bunker & High-Ground Rooftop Complex (Walk-Through Rooms, Doors, Windows, Ramps & Rooftop Vantage Point)
+  // 6. Central Alveolar Research Bunker & High-Ground Rooftop Complex
+  // Anchored at Y = -1.72 (true arena ground level) so it sits 100% flush on the ground without floating!
+  // Features:
+  // - Exterior stepped staircases at South & North doors leading into the Ground Floor (elevationY = 0.55m)
+  // - Extra-high 5.40m ceiling (4.85m room height, >3.1m above player eyes) so the ceiling never blocks view
+  // - True open-cutout tactical shooting windows on South, North, East & West walls at eye level
+  // - Internal climbable ladder inside the room rising through an open roof hatch to stand ON THE ROOF (elevationY = 5.66m)
   const bunkerGroup = new THREE.Group();
-  bunkerGroup.position.set(0, -0.32, -22.0);
+  bunkerGroup.position.set(0, -1.72, -22.0);
 
   // Anatomical Theme Materials: Cancellous Ivory Bone, Vertebral Cartilage, Costal Ribcage
   const slabMat = createFastLitMaterial({
@@ -6495,29 +6501,104 @@ export function createOpenLungAlveoliLandscape(): {
   const interiorLightCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
   const interiorLightPinkMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
 
-  // Ground Floor Foundation Slab (18m wide x 10m deep)
-  const groundSlab = new THREE.Mesh(new THREE.BoxGeometry(18, 0.22, 10), slabMat);
-  groundSlab.position.set(0, 0.11, 0);
+  // Solid Ground Foundation Base (18.4m wide x 10.4m deep x 0.55m high, flush with ground Y = -1.72)
+  const groundSlab = new THREE.Mesh(new THREE.BoxGeometry(18.4, 0.55, 10.4), slabMat);
+  groundSlab.position.set(0, 0.275, 0);
   bunkerGroup.add(groundSlab);
 
-  // Elevated Rooftop Platform Slab (18m wide x 10m deep at Y = 2.4m)
-  const roofSlab = new THREE.Mesh(new THREE.BoxGeometry(18, 0.25, 10), slabMat);
-  roofSlab.position.set(0, 2.4 + 0.125, 0);
-  bunkerGroup.add(roofSlab);
+  // Exterior Stepped Staircases (South & North Entrances) to walk smoothly from ground (0.0m) onto Ground Floor (0.55m)
+  const buildEntranceStaircase = (zSign: 1 | -1) => {
+    const stairGroup = new THREE.Group();
+    const numSteps = 5;
+    const stairWidth = 3.8;
+    const totalDepth = 2.0; // local z from 5.0 to 7.0
+    const stepDepth = totalDepth / numSteps;
+    for (let s = 0; s < numSteps; s++) {
+      // s = 0 is highest step against doorway (0.55m), s = 4 is lowest step at ground (0.11m)
+      const stepHeight = 0.55 * ((numSteps - s) / numSteps);
+      const stepMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(stairWidth, stepHeight, stepDepth + 0.04),
+        slabMat
+      );
+      const localZ = zSign * (5.0 + (s + 0.5) * stepDepth);
+      stepMesh.position.set(0, stepHeight * 0.5, localZ);
+      stairGroup.add(stepMesh);
+    }
+    // Side stair stringer curbs
+    [-stairWidth / 2 - 0.12, stairWidth / 2 + 0.12].forEach((railX) => {
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.72, totalDepth + 0.2), parapetMat);
+      curb.position.set(railX, 0.36, zSign * (5.0 + totalDepth * 0.5));
+      curb.rotation.x = zSign * 0.24;
+      stairGroup.add(curb);
+    });
+    bunkerGroup.add(stairGroup);
+  };
+  buildEntranceStaircase(1);  // South Entrance Stairs (world Z: -17.0 to -15.0)
+  buildEntranceStaircase(-1); // North Entrance Stairs (world Z: -27.0 to -29.0)
 
-  // Support Columns (Corners & Perimeter)
-  const columnGeo = new THREE.CylinderGeometry(0.24, 0.28, 2.4, 10);
+  // High Ceiling / Rooftop Platform Slab at local Y = 5.40 to 5.66 (4.85m above room floor!)
+  // Constructed around the open Internal Ladder Roof Hatch at local X in [-7.4, -5.0], local Z in [-3.8, -1.2]
+  const roofThickness = 0.26;
+  const roofCenterY = 5.40 + roofThickness * 0.5; // top surface at local Y = 5.66
+  // Main East Roof Section (X from -5.0 to +9.2, full Z from -5.2 to +5.2)
+  const roofEast = new THREE.Mesh(new THREE.BoxGeometry(14.2, roofThickness, 10.4), slabMat);
+  roofEast.position.set(2.1, roofCenterY, 0);
+  bunkerGroup.add(roofEast);
+  // West Outer Strip (X from -9.2 to -7.4, full Z from -5.2 to +5.2)
+  const roofWestOuter = new THREE.Mesh(new THREE.BoxGeometry(1.8, roofThickness, 10.4), slabMat);
+  roofWestOuter.position.set(-8.3, roofCenterY, 0);
+  bunkerGroup.add(roofWestOuter);
+  // Hatch South Strip (X from -7.4 to -5.0, Z from -1.2 to +5.2 -> depth 6.4)
+  const roofHatchSouth = new THREE.Mesh(new THREE.BoxGeometry(2.4, roofThickness, 6.4), slabMat);
+  roofHatchSouth.position.set(-6.2, roofCenterY, 2.0);
+  bunkerGroup.add(roofHatchSouth);
+  // Hatch North Strip (X from -7.4 to -5.0, Z from -5.2 to -3.8 -> depth 1.4)
+  const roofHatchNorth = new THREE.Mesh(new THREE.BoxGeometry(2.4, roofThickness, 1.4), slabMat);
+  roofHatchNorth.position.set(-6.2, roofCenterY, -4.5);
+  bunkerGroup.add(roofHatchNorth);
+
+  // Glowing Hatch Rim Frame around the open rooftop ladder access hole (X in [-7.4, -5.0], Z in [-3.8, -1.2])
+  const hatchTrimN = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.32, 0.14), windowTrimMat);
+  hatchTrimN.position.set(-6.2, roofCenterY, -3.8);
+  bunkerGroup.add(hatchTrimN);
+  const hatchTrimS = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.32, 0.14), windowTrimMat);
+  hatchTrimS.position.set(-6.2, roofCenterY, -1.2);
+  bunkerGroup.add(hatchTrimS);
+  const hatchTrimW = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.32, 2.7), windowTrimMat);
+  hatchTrimW.position.set(-7.4, roofCenterY, -2.5);
+  bunkerGroup.add(hatchTrimW);
+  const hatchTrimE = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.32, 2.7), windowTrimMat);
+  hatchTrimE.position.set(-5.0, roofCenterY, -2.5);
+  bunkerGroup.add(hatchTrimE);
+
+  // Internal Climbable Ladder inside the room (at local X = -6.2, Z = -3.55, rising from floor 0.55m to roof 5.66m)
+  const internalLadderHeight = 5.66 - 0.55;
+  const internalLadder = createAnatomicalLadder(internalLadderHeight, 1.15);
+  internalLadder.position.set(-6.2, 0.55, -3.55);
+  bunkerGroup.add(internalLadder);
+
+  // Glowing floor guide ring at base of internal ladder inside the room
+  const ladderFloorRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.75, 1.05, 24),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide })
+  );
+  ladderFloorRing.rotation.x = -Math.PI / 2;
+  ladderFloorRing.position.set(-6.2, 0.58, -2.6);
+  bunkerGroup.add(ladderFloorRing);
+
+  // Support Columns (Corners & Doorway Piers, height 4.85m from Y=0.55 to Y=5.40)
+  const colHeight = 4.85;
+  const colCenterY = 0.55 + colHeight * 0.5;
+  const columnGeo = new THREE.CylinderGeometry(0.26, 0.3, colHeight, 10);
   const colCoords = [
-    [-8.6, 1.2, -4.6],
-    [8.6, 1.2, -4.6],
-    [-8.6, 1.2, 4.6],
-    [8.6, 1.2, 4.6],
-    [-1.6, 1.2, -4.6],
-    [1.6, 1.2, -4.6],
-    [-1.6, 1.2, 4.6],
-    [1.6, 1.2, 4.6],
-    [0, 1.2, -1.8],
-    [0, 1.2, 1.8],
+    [-8.8, colCenterY, -4.8],
+    [8.8, colCenterY, -4.8],
+    [-8.8, colCenterY, 4.8],
+    [8.8, colCenterY, 4.8],
+    [-1.95, colCenterY, -4.8],
+    [1.95, colCenterY, -4.8],
+    [-1.95, colCenterY, 4.8],
+    [1.95, colCenterY, 4.8],
   ];
   colCoords.forEach(([cx, cy, cz]) => {
     const col = new THREE.Mesh(columnGeo, wallMat);
@@ -6525,168 +6606,197 @@ export function createOpenLungAlveoliLandscape(): {
     bunkerGroup.add(col);
   });
 
-  // Outer Walls with Walk-Through Doorways and Windows
-  // South (Front) Walls leaving central doorway (x: -1.6 to 1.6) open for walking straight through
-  const frontWallGeo = new THREE.BoxGeometry(7.0, 2.4, 0.25);
-  const southWallWest = new THREE.Mesh(frontWallGeo, wallMat);
-  southWallWest.position.set(-5.3, 1.2, 4.88);
-  bunkerGroup.add(southWallWest);
+  // Helper to build a solid wall section with a REAL OPEN SHOOTING WINDOW CUTOUT at player eye level!
+  // Room floor = 0.55m, ceiling = 5.40m. Player standing eye level = 2.27m (world Y = +0.55m).
+  // Window opening spans local Y = 1.45m to 3.25m (1.80m tall open view!)
+  const buildWallWithOpenWindow = (
+    centerX: number,
+    centerZ: number,
+    totalWidth: number,
+    winWidth: number,
+    isAlongZ: boolean
+  ) => {
+    const wallThickness = 0.28;
+    const yFloor = 0.55;
+    const yWinBot = 1.45;
+    const yWinTop = 3.25;
+    const yCeil = 5.40;
 
-  const southWallEast = new THREE.Mesh(frontWallGeo, wallMat);
-  southWallEast.position.set(5.3, 1.2, 4.88);
-  bunkerGroup.add(southWallEast);
+    // 1. Bottom sill wall (from 0.55 to 1.45)
+    const sillH = yWinBot - yFloor;
+    const sillGeo = isAlongZ
+      ? new THREE.BoxGeometry(wallThickness, sillH, totalWidth)
+      : new THREE.BoxGeometry(totalWidth, sillH, wallThickness);
+    const sillMesh = new THREE.Mesh(sillGeo, wallMat);
+    sillMesh.position.set(centerX, yFloor + sillH * 0.5, centerZ);
+    bunkerGroup.add(sillMesh);
 
-  // North (Back) Walls leaving central doorway open
-  const northWallWest = new THREE.Mesh(frontWallGeo, wallMat);
-  northWallWest.position.set(-5.3, 1.2, -4.88);
-  bunkerGroup.add(northWallWest);
+    // 2. Top lintel wall (from 3.25 to 5.40)
+    const lintelH = yCeil - yWinTop;
+    const lintelGeo = isAlongZ
+      ? new THREE.BoxGeometry(wallThickness, lintelH, totalWidth)
+      : new THREE.BoxGeometry(totalWidth, lintelH, wallThickness);
+    const lintelMesh = new THREE.Mesh(lintelGeo, wallMat);
+    lintelMesh.position.set(centerX, yWinTop + lintelH * 0.5, centerZ);
+    bunkerGroup.add(lintelMesh);
 
-  const northWallEast = new THREE.Mesh(frontWallGeo, wallMat);
-  northWallEast.position.set(5.3, 1.2, -4.88);
-  bunkerGroup.add(northWallEast);
+    // 3. Left & Right solid piers flanking the open window cutout
+    const winH = yWinTop - yWinBot;
+    const pierW = Math.max(0.4, (totalWidth - winWidth) * 0.5);
+    const pierOffset = winWidth * 0.5 + pierW * 0.5;
+    const pierGeo = isAlongZ
+      ? new THREE.BoxGeometry(wallThickness, winH, pierW)
+      : new THREE.BoxGeometry(pierW, winH, wallThickness);
 
-  // West & East Outer Walls with doorways in center
-  const sideWallPieceGeo = new THREE.BoxGeometry(0.25, 2.4, 3.8);
-  const westWallNorth = new THREE.Mesh(sideWallPieceGeo, wallMat);
-  westWallNorth.position.set(-8.88, 1.2, -2.9);
-  bunkerGroup.add(westWallNorth);
-  const westWallSouth = new THREE.Mesh(sideWallPieceGeo, wallMat);
-  westWallSouth.position.set(-8.88, 1.2, 2.9);
-  bunkerGroup.add(westWallSouth);
+    const pier1 = new THREE.Mesh(pierGeo, wallMat);
+    const pier2 = new THREE.Mesh(pierGeo, wallMat);
+    if (isAlongZ) {
+      pier1.position.set(centerX, yWinBot + winH * 0.5, centerZ - pierOffset);
+      pier2.position.set(centerX, yWinBot + winH * 0.5, centerZ + pierOffset);
+    } else {
+      pier1.position.set(centerX - pierOffset, yWinBot + winH * 0.5, centerZ);
+      pier2.position.set(centerX + pierOffset, yWinBot + winH * 0.5, centerZ);
+    }
+    bunkerGroup.add(pier1);
+    bunkerGroup.add(pier2);
 
-  const eastWallNorth = new THREE.Mesh(sideWallPieceGeo, wallMat);
-  eastWallNorth.position.set(8.88, 1.2, -2.9);
-  bunkerGroup.add(eastWallNorth);
-  const eastWallSouth = new THREE.Mesh(sideWallPieceGeo, wallMat);
-  eastWallSouth.position.set(8.88, 1.2, 2.9);
-  bunkerGroup.add(eastWallSouth);
+    // 4. Glowing Bioluminescent Frame Bars around the open window cutout (100% hollow center for shooting!)
+    const trimThick = 0.09;
+    const trimDepth = wallThickness + 0.06;
+    const horizTrimGeo = isAlongZ
+      ? new THREE.BoxGeometry(trimDepth, trimThick, winWidth + 0.16)
+      : new THREE.BoxGeometry(winWidth + 0.16, trimThick, trimDepth);
+    const topTrim = new THREE.Mesh(horizTrimGeo, windowTrimMat);
+    topTrim.position.set(centerX, yWinTop, centerZ);
+    bunkerGroup.add(topTrim);
 
-  // Interior Partition Wall separating West Lab Room and East Diagnostic Chamber with open archway
-  const partitionNorth = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.4, 3.2), wallMat);
-  partitionNorth.position.set(0, 1.2, -3.2);
-  bunkerGroup.add(partitionNorth);
-  const partitionSouth = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.4, 3.2), wallMat);
-  partitionSouth.position.set(0, 1.2, 3.2);
-  bunkerGroup.add(partitionSouth);
+    const botTrim = new THREE.Mesh(horizTrimGeo, windowTrimMat);
+    botTrim.position.set(centerX, yWinBot, centerZ);
+    bunkerGroup.add(botTrim);
 
-  // Tactical Windows on South and North Walls with glowing energy frames
-  const windowCoords = [
-    [-5.3, 1.25, 4.88],
-    [5.3, 1.25, 4.88],
-    [-5.3, 1.25, -4.88],
-    [5.3, 1.25, -4.88],
-  ];
-  windowCoords.forEach(([wx, wy, wz]) => {
-    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.95, 0.32), windowTrimMat);
-    winFrame.position.set(wx, wy, wz);
-    bunkerGroup.add(winFrame);
-  });
+    const vertTrimGeo = isAlongZ
+      ? new THREE.BoxGeometry(trimDepth, winH + 0.16, trimThick)
+      : new THREE.BoxGeometry(trimThick, winH + 0.16, trimDepth);
+    const sideTrim1 = new THREE.Mesh(vertTrimGeo, windowTrimMat);
+    const sideTrim2 = new THREE.Mesh(vertTrimGeo, windowTrimMat);
+    if (isAlongZ) {
+      sideTrim1.position.set(centerX, yWinBot + winH * 0.5, centerZ - winWidth * 0.5);
+      sideTrim2.position.set(centerX, yWinBot + winH * 0.5, centerZ + winWidth * 0.5);
+    } else {
+      sideTrim1.position.set(centerX - winWidth * 0.5, yWinBot + winH * 0.5, centerZ);
+      sideTrim2.position.set(centerX + winWidth * 0.5, yWinBot + winH * 0.5, centerZ);
+    }
+    bunkerGroup.add(sideTrim1);
+    bunkerGroup.add(sideTrim2);
+  };
 
-  // Interior Bioluminescent Light Nodes
-  const lightSphereGeo = new THREE.SphereGeometry(0.25, 8, 8);
+  // South (Front) Walls with Open Shooting Windows (leaving central doorway x in [-1.9, 1.9] open for stair entry)
+  buildWallWithOpenWindow(-5.45, 4.88, 7.1, 3.6, false);
+  buildWallWithOpenWindow(5.45, 4.88, 7.1, 3.6, false);
+
+  // North (Back) Walls with Open Shooting Windows (leaving central doorway x in [-1.9, 1.9] open for stair entry)
+  buildWallWithOpenWindow(-5.45, -4.88, 7.1, 3.6, false);
+  buildWallWithOpenWindow(5.45, -4.88, 7.1, 3.6, false);
+
+  // West & East Solid Outer Walls with Wide Open Shooting Windows (entry to building is strictly via stairs!)
+  buildWallWithOpenWindow(-8.88, 0, 9.8, 4.6, true);
+  buildWallWithOpenWindow(8.88, 0, 9.8, 4.6, true);
+
+  // Interior Bioluminescent Ceiling Light Nodes (high up at Y = 5.1m)
+  const lightSphereGeo = new THREE.SphereGeometry(0.28, 8, 8);
   const lightWest = new THREE.Mesh(lightSphereGeo, interiorLightCyanMat);
-  lightWest.position.set(-4.5, 2.2, 0);
+  lightWest.position.set(-4.2, 5.1, 0);
   bunkerGroup.add(lightWest);
 
   const lightEast = new THREE.Mesh(lightSphereGeo, interiorLightPinkMat);
-  lightEast.position.set(4.5, 2.2, 0);
+  lightEast.position.set(4.2, 5.1, 0);
   bunkerGroup.add(lightEast);
 
-  // Rooftop High-Ground Defensive Parapet Railings (0.85m tall)
-  const parapetShortGeo = new THREE.BoxGeometry(0.24, 0.85, 10.2);
+  // Rooftop High-Ground Defensive Parapet Railings (0.90m tall above roof surface Y = 5.66m)
+  const roofTopY = 5.66;
+  const parapetH = 0.90;
+  const parapetCenterY = roofTopY + parapetH * 0.5;
+  const parapetShortGeo = new THREE.BoxGeometry(0.26, parapetH, 10.4);
 
-  const southParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
-  southParapetWest.position.set(-5.4, 2.52 + 0.425, 5.0);
+  const southParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, parapetH, 0.26), parapetMat);
+  southParapetWest.position.set(-5.4, parapetCenterY, 5.05);
   bunkerGroup.add(southParapetWest);
-  const southParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
-  southParapetEast.position.set(5.4, 2.52 + 0.425, 5.0);
+  const southParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, parapetH, 0.26), parapetMat);
+  southParapetEast.position.set(5.4, parapetCenterY, 5.05);
   bunkerGroup.add(southParapetEast);
 
-  const northParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
-  northParapetWest.position.set(-5.4, 2.52 + 0.425, -5.0);
+  const northParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, parapetH, 0.26), parapetMat);
+  northParapetWest.position.set(-5.4, parapetCenterY, -5.05);
   bunkerGroup.add(northParapetWest);
-  const northParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
-  northParapetEast.position.set(5.4, 2.52 + 0.425, -5.0);
+  const northParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, parapetH, 0.26), parapetMat);
+  northParapetEast.position.set(5.4, parapetCenterY, -5.05);
   bunkerGroup.add(northParapetEast);
 
   const westParapet = new THREE.Mesh(parapetShortGeo, parapetMat);
-  westParapet.position.set(-9.0, 2.52 + 0.425, 0);
+  westParapet.position.set(-9.05, parapetCenterY, 0);
   bunkerGroup.add(westParapet);
   const eastParapet = new THREE.Mesh(parapetShortGeo, parapetMat);
-  eastParapet.position.set(9.0, 2.52 + 0.425, 0);
+  eastParapet.position.set(9.05, parapetCenterY, 0);
   bunkerGroup.add(eastParapet);
-
-  // Exterior Climbable Anatomical Bone & Cartilage Ladders
-  // South Ladder on exterior South wall climbing from ground Y = 0 to rooftop Y = 2.4m
-  const southLadder = createAnatomicalLadder(2.4, 1.1);
-  southLadder.position.set(0, 0, 5.08);
-  bunkerGroup.add(southLadder);
-
-  // North Ladder on exterior North wall climbing from ground Y = 0 to rooftop Y = 2.4m
-  const northLadder = createAnatomicalLadder(2.4, 1.1);
-  northLadder.position.set(0, 0, -5.08);
-  northLadder.rotation.y = Math.PI;
-  bunkerGroup.add(northLadder);
 
   group.add(bunkerGroup);
 
-  // 7. Standalone Anatomical Vertebral Watchtower in the Fight Ground (X = 14.0, Z = -11.0)
-  // Features segmented vertebral disc pillars, elevated deck at Y = 3.6m, costal rib parapet railings,
-  // and a climbable anatomical bone ladder on its south face climbing from ground Y = 0 up to Y = 3.6m!
+  // 7. Standalone Anatomical Vertebral Watchtower in the Fight Ground (X = 14.0, Y = -1.72, Z = -11.0)
+  // Anchored flush on the ground at Y = -1.72!
   const towerGroup = new THREE.Group();
-  towerGroup.position.set(14.0, -0.32, -11.0);
+  towerGroup.position.set(14.0, -1.72, -11.0);
 
   // 4 Segmented Spinal Vertebral Disc Pillars
-  const vertColGeo = new THREE.CylinderGeometry(0.24, 0.28, 3.6, 10);
+  const vertColGeo = new THREE.CylinderGeometry(0.24, 0.28, 4.8, 10);
   [
-    [-1.9, 1.8, -1.9],
-    [1.9, 1.8, -1.9],
-    [-1.9, 1.8, 1.9],
-    [1.9, 1.8, 1.9],
+    [-1.9, 2.4, -1.9],
+    [1.9, 2.4, -1.9],
+    [-1.9, 2.4, 1.9],
+    [1.9, 2.4, 1.9],
   ].forEach(([tx, ty, tz]) => {
     const col = new THREE.Mesh(vertColGeo, wallMat);
     col.position.set(tx, ty, tz);
     towerGroup.add(col);
   });
 
-  // Elevated Cancellous Bone Observation Deck at Y = 3.6m (4.6m x 4.6m)
+  // Elevated Cancellous Bone Observation Deck at local Y = 4.8m (4.6m x 4.6m)
   const towerDeck = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.24, 4.6), slabMat);
-  towerDeck.position.set(0, 3.6 + 0.12, 0);
+  towerDeck.position.set(0, 4.8 + 0.12, 0);
   towerGroup.add(towerDeck);
 
   // Costal Ribcage Parapet Railings around 3 sides (North, West, East)
   const tParapetNorth = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.85, 0.2), parapetMat);
-  tParapetNorth.position.set(0, 3.72 + 0.425, -2.25);
+  tParapetNorth.position.set(0, 4.92 + 0.425, -2.25);
   towerGroup.add(tParapetNorth);
 
   const tParapetWest = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.85, 4.7), parapetMat);
-  tParapetWest.position.set(-2.25, 3.72 + 0.425, 0);
+  tParapetWest.position.set(-2.25, 4.92 + 0.425, 0);
   towerGroup.add(tParapetWest);
 
   const tParapetEast = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.85, 4.7), parapetMat);
-  tParapetEast.position.set(2.25, 3.72 + 0.425, 0);
+  tParapetEast.position.set(2.25, 4.92 + 0.425, 0);
   towerGroup.add(tParapetEast);
 
   // South Parapet split leaving ladder access in center
   const tParapetSouthL = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.85, 0.2), parapetMat);
-  tParapetSouthL.position.set(-1.5, 3.72 + 0.425, 2.25);
+  tParapetSouthL.position.set(-1.5, 4.92 + 0.425, 2.25);
   towerGroup.add(tParapetSouthL);
   const tParapetSouthR = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.85, 0.2), parapetMat);
-  tParapetSouthR.position.set(1.5, 3.72 + 0.425, 2.25);
+  tParapetSouthR.position.set(1.5, 4.92 + 0.425, 2.25);
   towerGroup.add(tParapetSouthR);
 
-  // Vertical Climbable Bone Ladder on South Face (Climbs from ground Y = 0 to deck Y = 3.6m)
-  const towerLadder = createAnatomicalLadder(3.6, 1.05);
+  // Vertical Climbable Bone Ladder on South Face (Climbs from ground to deck)
+  const towerLadder = createAnatomicalLadder(4.8, 1.05);
   towerLadder.position.set(0, 0, 2.32);
   towerGroup.add(towerLadder);
 
   group.add(towerGroup);
 
-  // 8. Flanking West Pulmonary High Ground Ridge Structure (X = -19.0, Z = -11.0)
+  // 8. Flanking West Pulmonary High Ground Ridge Structure (X = -19.0, Y = -1.72, Z = -11.0)
   const westRidgeTerrace = new THREE.Group();
-  westRidgeTerrace.position.set(-19.0, -0.32, -11.0);
-  const wDeck = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.35, 6.2), slabMat);
-  wDeck.position.set(0, 1.5, 0);
+  westRidgeTerrace.position.set(-19.0, -1.72, -11.0);
+  const wDeck = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.5, 6.2), slabMat);
+  wDeck.position.set(0, 0.75, 0);
   westRidgeTerrace.add(wDeck);
   group.add(westRidgeTerrace);
 
@@ -6699,40 +6809,68 @@ export function getArenaSurfaceElevation(
   z: number,
   currentElevY: number = 0
 ): { elevationY: number; isRooftop: boolean; isInsideBuilding: boolean } {
-  // 1. Central Bunker South Ladder (x in [-1.2, 1.2], z from -17.5 to -16.3, vertical climb 0 to 2.4m)
-  if (x >= -1.2 && x <= 1.2 && z <= -16.3 && z >= -17.5) {
-    const t = (-16.3 - z) / 1.2;
-    return { elevationY: Math.max(0, Math.min(2.4, t * 2.4)), isRooftop: true, isInsideBuilding: false };
-  }
-
-  // 2. Central Bunker North Ladder (x in [-1.2, 1.2], z from -27.7 to -26.5, vertical climb 0 to 2.4m)
-  if (x >= -1.2 && x <= 1.2 && z >= -27.7 && z <= -26.5) {
-    const t = (z - (-27.7)) / 1.2;
-    return { elevationY: Math.max(0, Math.min(2.4, t * 2.4)), isRooftop: true, isInsideBuilding: false };
-  }
-
-  // 3. Central Bunker Rooftop Deck (x in [-9.2, 9.2], z in [-27.2, -16.8])
-  if (x >= -9.2 && x <= 9.2 && z >= -27.2 && z <= -16.8) {
-    if (currentElevY >= 0.8) {
-      return { elevationY: 2.4, isRooftop: true, isInsideBuilding: false };
+  // 1. Central Bunker South Entrance Staircase (x in [-1.95, 1.95], z from -15.0 to -17.0, climbs 0.0m to 0.55m)
+  if (Math.abs(x) <= 1.95 && z <= -15.0 && z >= -17.0) {
+    if (currentElevY >= 4.2) {
+      return { elevationY: 5.66, isRooftop: true, isInsideBuilding: false };
     }
-    return { elevationY: 0, isRooftop: false, isInsideBuilding: true };
+    const t = THREE.MathUtils.clamp((-15.0 - z) / 2.0, 0, 1);
+    return { elevationY: t * 0.55, isRooftop: false, isInsideBuilding: z <= -16.6 };
   }
 
-  // 4. Fight Ground Vertebral Watchtower Ladder (x in [13.0, 15.0], z in [-9.7, -8.4], vertical climb 0 to 3.6m)
-  if (x >= 13.0 && x <= 15.0 && z >= -9.7 && z <= -8.4) {
-    const t = (z - (-9.7)) / 1.3;
-    return { elevationY: Math.max(0, Math.min(3.6, t * 3.6)), isRooftop: true, isInsideBuilding: false };
+  // 2. Central Bunker North Entrance Staircase (x in [-1.95, 1.95], z from -29.0 to -27.0, climbs 0.0m to 0.55m)
+  if (Math.abs(x) <= 1.95 && z >= -29.0 && z <= -27.0) {
+    if (currentElevY >= 4.2) {
+      return { elevationY: 5.66, isRooftop: true, isInsideBuilding: false };
+    }
+    const t = THREE.MathUtils.clamp((z - (-29.0)) / 2.0, 0, 1);
+    return { elevationY: t * 0.55, isRooftop: false, isInsideBuilding: z >= -27.4 };
   }
 
-  // 5. Fight Ground Vertebral Watchtower Observation Deck (x in [11.6, 16.4], z in [-13.4, -8.6])
+  // 3. Central Bunker Footprint (x in [-9.0, 9.0], z in [-27.0, -17.0])
+  if (x >= -9.0 && x <= 9.0 && z >= -27.0 && z <= -17.0) {
+    // Internal Ladder Hatch Zone inside the West-North corner of the room:
+    // World X in [-7.4, -5.0], World Z in [-25.8, -23.0] (local Z in [-3.8, -1.0])
+    const inInternalLadderZone = x >= -7.4 && x <= -5.0 && z >= -25.8 && z <= -23.0;
+
+    if (currentElevY >= 4.2) {
+      // Player is currently standing ON THE ROOF (elevationY = 5.66m)
+      // If they walk directly into the open hatch descent slot (x in [-7.2, -5.2], z in [-25.2, -23.4]), they climb down into the room
+      if (x >= -7.2 && x <= -5.2 && z >= -25.2 && z <= -23.4) {
+        return { elevationY: 0.55, isRooftop: false, isInsideBuilding: true };
+      }
+      return { elevationY: 5.66, isRooftop: true, isInsideBuilding: false };
+    }
+
+    // Player is inside the Ground Floor room: check if they are climbing the Internal Ladder to the roof!
+    if (inInternalLadderZone) {
+      const climbT = THREE.MathUtils.clamp((-23.0 - z) / 2.2, 0, 1);
+      const climbElev = 0.55 + climbT * (5.66 - 0.55);
+      const reachedRoof = climbT >= 0.82;
+      return {
+        elevationY: reachedRoof ? 5.66 : climbElev,
+        isRooftop: reachedRoof,
+        isInsideBuilding: !reachedRoof,
+      };
+    }
+
+    return { elevationY: 0.55, isRooftop: false, isInsideBuilding: true };
+  }
+
+  // 4. Standalone Watchtower Ladder (x in [12.5, 15.5], z in [-9.5, -8.2], vertical climb 0 to 4.8m)
+  if (x >= 12.5 && x <= 15.5 && z >= -9.5 && z <= -8.2) {
+    const t = THREE.MathUtils.clamp((-8.2 - z) / 1.3, 0, 1);
+    return { elevationY: t * 4.8, isRooftop: t >= 0.85, isInsideBuilding: false };
+  }
+
+  // 5. Standalone Watchtower Deck (x in [11.6, 16.4], z in [-13.4, -8.6])
   if (x >= 11.6 && x <= 16.4 && z >= -13.4 && z <= -8.6) {
-    if (currentElevY >= 1.0) {
-      return { elevationY: 3.6, isRooftop: true, isInsideBuilding: false };
+    if (currentElevY >= 2.2) {
+      return { elevationY: 4.8, isRooftop: true, isInsideBuilding: false };
     }
   }
 
-  // 6. Terrain: Central Respiratory Valley (|x| <= 13.5m) and Flanking High Ground Ridges (|x| >= 16.0m at Y = +1.5m)
+  // 6. Flanking High Ground Ridges (|x| >= 16.0m at Y = +1.5m)
   const absX = Math.abs(x);
   if (absX >= 16.0) {
     return { elevationY: 1.5, isRooftop: false, isInsideBuilding: false };
@@ -6742,7 +6880,7 @@ export function getArenaSurfaceElevation(
     return { elevationY: slopeT * 1.5, isRooftop: false, isInsideBuilding: false };
   }
 
-  return { elevationY: 0, isRooftop: false, isInsideBuilding: false };
+  return { elevationY: 0.0, isRooftop: false, isInsideBuilding: false };
 }
 
 // ============================================================================
@@ -6816,12 +6954,237 @@ export function createAnatomicalLadder(height: number, width: number = 0.95): TH
 }
 
 // ============================================================================
+// HEAVY MILITARY TRANSPORT HELICOPTER (Matches reference military helicopter)
+// Flies in from the horizon carrying the supply cargo net underneath, drops
+// the crate while flying over the target zone, and flies away to the horizon!
+// ============================================================================
+export function createSupplyTransportHelicopter(): {
+  group: THREE.Group;
+  mainRotor: THREE.Group;
+  tailRotor: THREE.Group;
+  slungCargoNet: THREE.Group;
+} {
+  const group = new THREE.Group();
+
+  const bodyMat = createFastLitMaterial({ color: 0x525b56, roughness: 0.42, metalness: 0.48 });
+  const armorBellyMat = createFastLitMaterial({ color: 0x3b433f, roughness: 0.5, metalness: 0.55 });
+  const darkMat = createFastLitMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.72 });
+  const turbineMat = createFastLitMaterial({ color: 0x0f172a, roughness: 0.22, metalness: 0.85 });
+  const glassMat = createFastLitMaterial({ color: 0x1e3a4c, transparent: true, opacity: 0.78, roughness: 0.12, metalness: 0.3 });
+  const tanTipMat = new THREE.MeshBasicMaterial({ color: 0xd6b88a });
+  const redLightMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+  const whiteTipMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
+
+  // 1. Sculpted Heavy Armored Fuselage & Tapered Belly Hull
+  const mainHull = new THREE.Mesh(new THREE.BoxGeometry(1.72, 1.25, 4.4), bodyMat);
+  mainHull.position.set(0, 0.05, 0);
+  group.add(mainHull);
+
+  const bellyKeel = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.28, 4.1), armorBellyMat);
+  bellyKeel.position.set(0, -0.62, 0.1);
+  group.add(bellyKeel);
+
+  // Side Cabin Windows & Sliding Cargo Door Panels
+  [-0.87, 0.87].forEach((sx) => {
+    for (let w = 0; w < 3; w++) {
+      const sideWin = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.42), glassMat);
+      sideWin.position.set(sx, 0.22, 0.85 - w * 0.68);
+      group.add(sideWin);
+    }
+  });
+
+  // 2. Stepped Armored Cockpit, Multi-Pane Windshields, Wipers & Nose FLIR Radar Turret
+  const cockpitUpper = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.96, 1.45), bodyMat);
+  cockpitUpper.position.set(0, -0.04, 2.55);
+  group.add(cockpitUpper);
+
+  const noseCone = new THREE.Mesh(new THREE.SphereGeometry(0.68, 14, 12), bodyMat);
+  noseCone.scale.set(1.05, 0.78, 1.15);
+  noseCone.position.set(0, -0.22, 3.35);
+  group.add(noseCone);
+
+  // Front FLIR / Electro-Optical Chin Sensor Box & Gimbal Turret
+  const flirHousing = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.38, 0.42), armorBellyMat);
+  flirHousing.position.set(0, -0.18, 3.95);
+  group.add(flirHousing);
+
+  const flirLens = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), turbineMat);
+  flirLens.position.set(0, -0.45, 3.65);
+  group.add(flirLens);
+
+  // Multi-pane angled cockpit glass windshields + lower chin observation windows
+  const windshieldMain = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.56, 0.85), glassMat);
+  windshieldMain.position.set(0, 0.3, 2.55);
+  windshieldMain.rotation.x = 0.32;
+  group.add(windshieldMain);
+
+  const chinWindowL = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.28, 0.45), glassMat);
+  chinWindowL.position.set(-0.38, -0.12, 3.22);
+  group.add(chinWindowL);
+  const chinWindowR = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.28, 0.45), glassMat);
+  chinWindowR.position.set(0.38, -0.12, 3.22);
+  group.add(chinWindowR);
+
+  // 3. Twin Top Turboshaft Engine Nacelles with Dark Air Intakes (Exact silhouette from image)
+  [-0.58, 0.58].forEach((ex) => {
+    const nacelle = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.32, 2.2, 12), bodyMat);
+    nacelle.rotateX(Math.PI / 2);
+    nacelle.position.set(ex, 0.82, 0.35);
+    group.add(nacelle);
+
+    const intake = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.16, 12), turbineMat);
+    intake.rotateX(Math.PI / 2);
+    intake.position.set(ex, 0.82, 1.44);
+    group.add(intake);
+  });
+
+  // Central Rotor Pylon Doghouse Fairing
+  const doghouse = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.45, 2.1), armorBellyMat);
+  doghouse.position.set(0, 0.82, 0.2);
+  group.add(doghouse);
+
+  // 4. 6-Blade Heavy Main Rotor Hub, Swashplate & Tan-Tipped Blades
+  const mainRotor = new THREE.Group();
+  mainRotor.position.set(0, 1.28, 0.35);
+
+  const rotorMast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.42, 10), turbineMat);
+  rotorMast.position.y = -0.12;
+  mainRotor.add(rotorMast);
+
+  const rotorHub = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.34, 0.18, 12), darkMat);
+  mainRotor.add(rotorHub);
+
+  const bladeGeo = new THREE.BoxGeometry(0.22, 0.025, 4.4);
+  const tipGeo = new THREE.BoxGeometry(0.23, 0.028, 0.32);
+  for (let i = 0; i < 6; i++) {
+    const bladePivot = new THREE.Group();
+    bladePivot.rotation.y = (i * Math.PI * 2) / 6;
+
+    const blade = new THREE.Mesh(bladeGeo, turbineMat);
+    blade.position.set(0, 0, 2.35);
+    blade.rotation.z = 0.08;
+    bladePivot.add(blade);
+
+    const tip = new THREE.Mesh(tipGeo, tanTipMat);
+    tip.position.set(0, 0, 4.42);
+    bladePivot.add(tip);
+
+    mainRotor.add(bladePivot);
+  }
+  group.add(mainRotor);
+
+  // 5. Tail Boom, Tall Vertical Fin, Horizontal Stabilizer & 4-Blade Tail Rotor
+  const tailBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.24, 3.6, 10), bodyMat);
+  tailBoom.rotateX(Math.PI / 2);
+  tailBoom.position.set(0, 0.26, -3.35);
+  group.add(tailBoom);
+
+  const tailFin = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.45, 0.78), bodyMat);
+  tailFin.position.set(0, 0.92, -4.85);
+  tailFin.rotation.x = -0.26;
+  group.add(tailFin);
+
+  const horizStabilizer = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.08, 0.48), armorBellyMat);
+  horizStabilizer.position.set(0, 0.35, -4.65);
+  group.add(horizStabilizer);
+
+  const tailRotor = new THREE.Group();
+  tailRotor.position.set(0.2, 1.38, -4.95);
+  const tailBladeGeo = new THREE.BoxGeometry(0.05, 0.14, 0.95);
+  for (let i = 0; i < 4; i++) {
+    const tBlade = new THREE.Mesh(tailBladeGeo, turbineMat);
+    tBlade.position.set(0, 0, 0.46);
+    tBlade.rotation.x = (i * Math.PI) / 2;
+    tailRotor.add(tBlade);
+  }
+  group.add(tailRotor);
+
+  // 6. Side Stub Wings (Sponsons) with External Fuel Tanks & Multi-Barrel Rocket Pods (Matches Image!)
+  [-1, 1].forEach((side) => {
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.14, 0.68), bodyMat);
+    wing.position.set(side * 1.38, -0.12, 0.15);
+    wing.rotation.z = side * -0.08;
+    group.add(wing);
+
+    // Outer Aux Fuel Tank
+    const fuelTank = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.45, 10), armorBellyMat);
+    fuelTank.rotateX(Math.PI / 2);
+    fuelTank.position.set(side * 1.85, -0.32, 0.18);
+    group.add(fuelTank);
+
+    // Inner Multi-Tube Rocket Pod with visible white/red rocket warhead tips
+    const rocketPod = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 1.15, 12), darkMat);
+    rocketPod.rotateX(Math.PI / 2);
+    rocketPod.position.set(side * 1.32, -0.32, 0.25);
+    group.add(rocketPod);
+
+    for (let r = 0; r < 6; r++) {
+      const ang = (r * Math.PI * 2) / 6;
+      const tip = new THREE.Mesh(
+        new THREE.SphereGeometry(0.048, 6, 6),
+        r === 0 ? redLightMat : whiteTipMat
+      );
+      tip.position.set(
+        side * 1.32 + Math.cos(ang) * 0.13,
+        -0.32 + Math.sin(ang) * 0.13,
+        0.84
+      );
+      group.add(tip);
+    }
+  });
+
+  // 7. Tricycle Wheeled Landing Gear with Oleo Struts
+  const wheelGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.14, 12);
+  wheelGeo.rotateZ(Math.PI / 2);
+  const strutGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.48, 8);
+
+  const noseStrut = new THREE.Mesh(strutGeo, darkMat);
+  noseStrut.position.set(0, -0.72, 2.35);
+  group.add(noseStrut);
+  const wheelNose = new THREE.Mesh(wheelGeo, turbineMat);
+  wheelNose.position.set(0, -0.95, 2.35);
+  group.add(wheelNose);
+
+  [-1.08, 1.08].forEach((wx) => {
+    const mainStrut = new THREE.Mesh(strutGeo, darkMat);
+    mainStrut.position.set(wx, -0.68, -0.2);
+    group.add(mainStrut);
+    const wheelMain = new THREE.Mesh(wheelGeo, turbineMat);
+    wheelMain.position.set(wx, -0.92, -0.2);
+    group.add(wheelMain);
+  });
+
+  // Belly Red Anti-Collision Beacons
+  const beacon1 = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 6), redLightMat);
+  beacon1.position.set(-0.35, -0.77, 1.2);
+  group.add(beacon1);
+  const beacon2 = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 6), redLightMat);
+  beacon2.position.set(0.35, -0.77, 1.2);
+  group.add(beacon2);
+
+  // 8. Slung Cargo Net Crate hanging beneath the Helicopter Belly while flying in from the horizon!
+  const slungCargoNet = new THREE.Group();
+  slungCargoNet.position.set(0, -1.65, 0.1);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.85, 6), darkMat);
+  cable.position.y = 0.55;
+  slungCargoNet.add(cable);
+  const previewCrate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.68, 0.52, 0.68),
+    createFastLitMaterial({ color: 0xf59e0b, emissive: 0xb45309, emissiveIntensity: 0.35, roughness: 0.4 })
+  );
+  slungCargoNet.add(previewCrate);
+  group.add(slungCargoNet);
+
+  return { group, mainRotor, tailRotor, slungCargoNet };
+}
+
+// ============================================================================
 // HELICOPTER SUPPLY DROPPING CARGO NET & BIO-CAPSULE CRATE
 // Dropped every 15s by military/medical transport into the active combat basin.
 // Features woven cargo webbing straps, reinforced biohazard capsule container,
 // status strobe lamps, and a rotating 3D holographic super-ability insignia.
 // ============================================================================
-export function createSupplyCargoNetMesh(abilityType: SuperAbilityType): {
+export function createSupplyCargoNetMesh(abilityType: string = 'burning_bullets'): {
   group: THREE.Group;
   emblemMesh: THREE.Group;
   strobeLight: THREE.Mesh;
