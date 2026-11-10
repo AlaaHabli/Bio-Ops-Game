@@ -35,10 +35,19 @@ export interface BiologyConceptCard {
   tacticalTip: string;
 }
 
+export type SuperAbilityType =
+  | 'burning_bullets'
+  | 'supersonic_speed'
+  | 'immortality'
+  | 'double_xp'
+  | 'postpone_question'
+  | 't_cytotoxic'
+  | 'biotoxic_rpg';
+
 export interface Weapon {
   id: string;
   name: string;
-  category: 'ASSAULT' | 'SHOTGUN' | 'SNIPER' | 'MACHINE_GUN';
+  category: 'ASSAULT' | 'SHOTGUN' | 'SNIPER' | 'MACHINE_GUN' | 'HEAVY';
   rarity: 'COMMON' | 'UNCOMMON' | 'RARE' | 'EPIC' | 'LEGENDARY';
   description: string;
   damage: number;

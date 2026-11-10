@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { SuperAbilityType } from '../types/game';
+
 
 /**
  * Recursively disposes GPU BufferGeometries, Materials, and Textures inside a Three.js Object3D tree,
@@ -6218,18 +6220,29 @@ export function createOpenLungAlveoliLandscape(): {
 
   const floorGeo = new THREE.PlaneGeometry(280, 280, 44, 44);
   floorGeo.rotateX(-Math.PI / 2);
-  // Wide, flat 90m+ central combat basin so 20 players can walk, sprint & crouch smoothly, surrounded by outer pleural hills
+  // Wide Central Respiratory Valley flanked by elevated High Ground Ridges (Y = +1.5m)
   const posAttr = floorGeo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < posAttr.count; i++) {
     const vx = posAttr.getX(i);
     const vz = posAttr.getZ(i);
     const distFromArenaCenter = Math.hypot(vx, vz + 20);
-    const outerRidge =
-      distFromArenaCenter > 46
-        ? Math.min(11.0, (distFromArenaCenter - 46) * 0.22) *
-          (0.65 + 0.35 * Math.sin(vx * 0.12) * Math.cos(vz * 0.12))
-        : Math.sin(vx * 0.16) * Math.cos(vz * 0.16) * 0.1;
-    posAttr.setY(i, outerRidge);
+    let elevation = 0;
+    if (distFromArenaCenter > 46) {
+      elevation =
+        Math.min(11.0, (distFromArenaCenter - 46) * 0.22) *
+        (0.65 + 0.35 * Math.sin(vx * 0.12) * Math.cos(vz * 0.12));
+    } else {
+      const absVx = Math.abs(vx);
+      if (absVx >= 16.0) {
+        elevation = 1.5;
+      } else if (absVx > 13.5) {
+        elevation = ((absVx - 13.5) / 2.5) * 1.5;
+      } else {
+        elevation = 0;
+      }
+      elevation += Math.sin(vx * 0.16) * Math.cos(vz * 0.16) * 0.08;
+    }
+    posAttr.setY(i, elevation);
   }
   floorGeo.computeVertexNormals();
 
@@ -6450,7 +6463,665 @@ export function createOpenLungAlveoliLandscape(): {
     group.add(arch);
   });
 
+  // 6. Central Alveolar Research Bunker & High-Ground Rooftop Complex (Walk-Through Rooms, Doors, Windows, Ramps & Rooftop Vantage Point)
+  const bunkerGroup = new THREE.Group();
+  bunkerGroup.position.set(0, -0.32, -22.0);
+
+  // Anatomical Theme Materials: Cancellous Ivory Bone, Vertebral Cartilage, Costal Ribcage
+  const slabMat = createFastLitMaterial({
+    color: 0xfef3c7, // ivory cancellous osteoid bone
+    emissive: 0x78350f,
+    emissiveIntensity: 0.18,
+    roughness: 0.45,
+  });
+  const wallMat = createFastLitMaterial({
+    color: 0xffedd5, // osteoblast cortical bone matrix
+    emissive: 0x9a3412,
+    emissiveIntensity: 0.12,
+    roughness: 0.42,
+  });
+  const parapetMat = createFastLitMaterial({
+    color: 0xfda4af, // costal rib bone arches
+    emissive: 0xbe123c,
+    emissiveIntensity: 0.32,
+    roughness: 0.35,
+  });
+  const windowTrimMat = createFastLitMaterial({
+    color: 0x38bdf8, // bioluminescent endothelial frame
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.55,
+    roughness: 0.2,
+  });
+  const interiorLightCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const interiorLightPinkMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+
+  // Ground Floor Foundation Slab (18m wide x 10m deep)
+  const groundSlab = new THREE.Mesh(new THREE.BoxGeometry(18, 0.22, 10), slabMat);
+  groundSlab.position.set(0, 0.11, 0);
+  bunkerGroup.add(groundSlab);
+
+  // Elevated Rooftop Platform Slab (18m wide x 10m deep at Y = 2.4m)
+  const roofSlab = new THREE.Mesh(new THREE.BoxGeometry(18, 0.25, 10), slabMat);
+  roofSlab.position.set(0, 2.4 + 0.125, 0);
+  bunkerGroup.add(roofSlab);
+
+  // Support Columns (Corners & Perimeter)
+  const columnGeo = new THREE.CylinderGeometry(0.24, 0.28, 2.4, 10);
+  const colCoords = [
+    [-8.6, 1.2, -4.6],
+    [8.6, 1.2, -4.6],
+    [-8.6, 1.2, 4.6],
+    [8.6, 1.2, 4.6],
+    [-1.6, 1.2, -4.6],
+    [1.6, 1.2, -4.6],
+    [-1.6, 1.2, 4.6],
+    [1.6, 1.2, 4.6],
+    [0, 1.2, -1.8],
+    [0, 1.2, 1.8],
+  ];
+  colCoords.forEach(([cx, cy, cz]) => {
+    const col = new THREE.Mesh(columnGeo, wallMat);
+    col.position.set(cx, cy, cz);
+    bunkerGroup.add(col);
+  });
+
+  // Outer Walls with Walk-Through Doorways and Windows
+  // South (Front) Walls leaving central doorway (x: -1.6 to 1.6) open for walking straight through
+  const frontWallGeo = new THREE.BoxGeometry(7.0, 2.4, 0.25);
+  const southWallWest = new THREE.Mesh(frontWallGeo, wallMat);
+  southWallWest.position.set(-5.3, 1.2, 4.88);
+  bunkerGroup.add(southWallWest);
+
+  const southWallEast = new THREE.Mesh(frontWallGeo, wallMat);
+  southWallEast.position.set(5.3, 1.2, 4.88);
+  bunkerGroup.add(southWallEast);
+
+  // North (Back) Walls leaving central doorway open
+  const northWallWest = new THREE.Mesh(frontWallGeo, wallMat);
+  northWallWest.position.set(-5.3, 1.2, -4.88);
+  bunkerGroup.add(northWallWest);
+
+  const northWallEast = new THREE.Mesh(frontWallGeo, wallMat);
+  northWallEast.position.set(5.3, 1.2, -4.88);
+  bunkerGroup.add(northWallEast);
+
+  // West & East Outer Walls with doorways in center
+  const sideWallPieceGeo = new THREE.BoxGeometry(0.25, 2.4, 3.8);
+  const westWallNorth = new THREE.Mesh(sideWallPieceGeo, wallMat);
+  westWallNorth.position.set(-8.88, 1.2, -2.9);
+  bunkerGroup.add(westWallNorth);
+  const westWallSouth = new THREE.Mesh(sideWallPieceGeo, wallMat);
+  westWallSouth.position.set(-8.88, 1.2, 2.9);
+  bunkerGroup.add(westWallSouth);
+
+  const eastWallNorth = new THREE.Mesh(sideWallPieceGeo, wallMat);
+  eastWallNorth.position.set(8.88, 1.2, -2.9);
+  bunkerGroup.add(eastWallNorth);
+  const eastWallSouth = new THREE.Mesh(sideWallPieceGeo, wallMat);
+  eastWallSouth.position.set(8.88, 1.2, 2.9);
+  bunkerGroup.add(eastWallSouth);
+
+  // Interior Partition Wall separating West Lab Room and East Diagnostic Chamber with open archway
+  const partitionNorth = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.4, 3.2), wallMat);
+  partitionNorth.position.set(0, 1.2, -3.2);
+  bunkerGroup.add(partitionNorth);
+  const partitionSouth = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.4, 3.2), wallMat);
+  partitionSouth.position.set(0, 1.2, 3.2);
+  bunkerGroup.add(partitionSouth);
+
+  // Tactical Windows on South and North Walls with glowing energy frames
+  const windowCoords = [
+    [-5.3, 1.25, 4.88],
+    [5.3, 1.25, 4.88],
+    [-5.3, 1.25, -4.88],
+    [5.3, 1.25, -4.88],
+  ];
+  windowCoords.forEach(([wx, wy, wz]) => {
+    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.95, 0.32), windowTrimMat);
+    winFrame.position.set(wx, wy, wz);
+    bunkerGroup.add(winFrame);
+  });
+
+  // Interior Bioluminescent Light Nodes
+  const lightSphereGeo = new THREE.SphereGeometry(0.25, 8, 8);
+  const lightWest = new THREE.Mesh(lightSphereGeo, interiorLightCyanMat);
+  lightWest.position.set(-4.5, 2.2, 0);
+  bunkerGroup.add(lightWest);
+
+  const lightEast = new THREE.Mesh(lightSphereGeo, interiorLightPinkMat);
+  lightEast.position.set(4.5, 2.2, 0);
+  bunkerGroup.add(lightEast);
+
+  // Rooftop High-Ground Defensive Parapet Railings (0.85m tall)
+  const parapetShortGeo = new THREE.BoxGeometry(0.24, 0.85, 10.2);
+
+  const southParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
+  southParapetWest.position.set(-5.4, 2.52 + 0.425, 5.0);
+  bunkerGroup.add(southParapetWest);
+  const southParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
+  southParapetEast.position.set(5.4, 2.52 + 0.425, 5.0);
+  bunkerGroup.add(southParapetEast);
+
+  const northParapetWest = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
+  northParapetWest.position.set(-5.4, 2.52 + 0.425, -5.0);
+  bunkerGroup.add(northParapetWest);
+  const northParapetEast = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.85, 0.24), parapetMat);
+  northParapetEast.position.set(5.4, 2.52 + 0.425, -5.0);
+  bunkerGroup.add(northParapetEast);
+
+  const westParapet = new THREE.Mesh(parapetShortGeo, parapetMat);
+  westParapet.position.set(-9.0, 2.52 + 0.425, 0);
+  bunkerGroup.add(westParapet);
+  const eastParapet = new THREE.Mesh(parapetShortGeo, parapetMat);
+  eastParapet.position.set(9.0, 2.52 + 0.425, 0);
+  bunkerGroup.add(eastParapet);
+
+  // Exterior Climbable Anatomical Bone & Cartilage Ladders
+  // South Ladder on exterior South wall climbing from ground Y = 0 to rooftop Y = 2.4m
+  const southLadder = createAnatomicalLadder(2.4, 1.1);
+  southLadder.position.set(0, 0, 5.08);
+  bunkerGroup.add(southLadder);
+
+  // North Ladder on exterior North wall climbing from ground Y = 0 to rooftop Y = 2.4m
+  const northLadder = createAnatomicalLadder(2.4, 1.1);
+  northLadder.position.set(0, 0, -5.08);
+  northLadder.rotation.y = Math.PI;
+  bunkerGroup.add(northLadder);
+
+  group.add(bunkerGroup);
+
+  // 7. Standalone Anatomical Vertebral Watchtower in the Fight Ground (X = 14.0, Z = -11.0)
+  // Features segmented vertebral disc pillars, elevated deck at Y = 3.6m, costal rib parapet railings,
+  // and a climbable anatomical bone ladder on its south face climbing from ground Y = 0 up to Y = 3.6m!
+  const towerGroup = new THREE.Group();
+  towerGroup.position.set(14.0, -0.32, -11.0);
+
+  // 4 Segmented Spinal Vertebral Disc Pillars
+  const vertColGeo = new THREE.CylinderGeometry(0.24, 0.28, 3.6, 10);
+  [
+    [-1.9, 1.8, -1.9],
+    [1.9, 1.8, -1.9],
+    [-1.9, 1.8, 1.9],
+    [1.9, 1.8, 1.9],
+  ].forEach(([tx, ty, tz]) => {
+    const col = new THREE.Mesh(vertColGeo, wallMat);
+    col.position.set(tx, ty, tz);
+    towerGroup.add(col);
+  });
+
+  // Elevated Cancellous Bone Observation Deck at Y = 3.6m (4.6m x 4.6m)
+  const towerDeck = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.24, 4.6), slabMat);
+  towerDeck.position.set(0, 3.6 + 0.12, 0);
+  towerGroup.add(towerDeck);
+
+  // Costal Ribcage Parapet Railings around 3 sides (North, West, East)
+  const tParapetNorth = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.85, 0.2), parapetMat);
+  tParapetNorth.position.set(0, 3.72 + 0.425, -2.25);
+  towerGroup.add(tParapetNorth);
+
+  const tParapetWest = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.85, 4.7), parapetMat);
+  tParapetWest.position.set(-2.25, 3.72 + 0.425, 0);
+  towerGroup.add(tParapetWest);
+
+  const tParapetEast = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.85, 4.7), parapetMat);
+  tParapetEast.position.set(2.25, 3.72 + 0.425, 0);
+  towerGroup.add(tParapetEast);
+
+  // South Parapet split leaving ladder access in center
+  const tParapetSouthL = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.85, 0.2), parapetMat);
+  tParapetSouthL.position.set(-1.5, 3.72 + 0.425, 2.25);
+  towerGroup.add(tParapetSouthL);
+  const tParapetSouthR = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.85, 0.2), parapetMat);
+  tParapetSouthR.position.set(1.5, 3.72 + 0.425, 2.25);
+  towerGroup.add(tParapetSouthR);
+
+  // Vertical Climbable Bone Ladder on South Face (Climbs from ground Y = 0 to deck Y = 3.6m)
+  const towerLadder = createAnatomicalLadder(3.6, 1.05);
+  towerLadder.position.set(0, 0, 2.32);
+  towerGroup.add(towerLadder);
+
+  group.add(towerGroup);
+
+  // 8. Flanking West Pulmonary High Ground Ridge Structure (X = -19.0, Z = -11.0)
+  const westRidgeTerrace = new THREE.Group();
+  westRidgeTerrace.position.set(-19.0, -0.32, -11.0);
+  const wDeck = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.35, 6.2), slabMat);
+  wDeck.position.set(0, 1.5, 0);
+  westRidgeTerrace.add(wDeck);
+  group.add(westRidgeTerrace);
+
   return { group, breathingSacs, gasParticles };
+}
+
+// Elevation & High-Ground Physics for Multiplayer Arena
+export function getArenaSurfaceElevation(
+  x: number,
+  z: number,
+  currentElevY: number = 0
+): { elevationY: number; isRooftop: boolean; isInsideBuilding: boolean } {
+  // 1. Central Bunker South Ladder (x in [-1.2, 1.2], z from -17.5 to -16.3, vertical climb 0 to 2.4m)
+  if (x >= -1.2 && x <= 1.2 && z <= -16.3 && z >= -17.5) {
+    const t = (-16.3 - z) / 1.2;
+    return { elevationY: Math.max(0, Math.min(2.4, t * 2.4)), isRooftop: true, isInsideBuilding: false };
+  }
+
+  // 2. Central Bunker North Ladder (x in [-1.2, 1.2], z from -27.7 to -26.5, vertical climb 0 to 2.4m)
+  if (x >= -1.2 && x <= 1.2 && z >= -27.7 && z <= -26.5) {
+    const t = (z - (-27.7)) / 1.2;
+    return { elevationY: Math.max(0, Math.min(2.4, t * 2.4)), isRooftop: true, isInsideBuilding: false };
+  }
+
+  // 3. Central Bunker Rooftop Deck (x in [-9.2, 9.2], z in [-27.2, -16.8])
+  if (x >= -9.2 && x <= 9.2 && z >= -27.2 && z <= -16.8) {
+    if (currentElevY >= 0.8) {
+      return { elevationY: 2.4, isRooftop: true, isInsideBuilding: false };
+    }
+    return { elevationY: 0, isRooftop: false, isInsideBuilding: true };
+  }
+
+  // 4. Fight Ground Vertebral Watchtower Ladder (x in [13.0, 15.0], z in [-9.7, -8.4], vertical climb 0 to 3.6m)
+  if (x >= 13.0 && x <= 15.0 && z >= -9.7 && z <= -8.4) {
+    const t = (z - (-9.7)) / 1.3;
+    return { elevationY: Math.max(0, Math.min(3.6, t * 3.6)), isRooftop: true, isInsideBuilding: false };
+  }
+
+  // 5. Fight Ground Vertebral Watchtower Observation Deck (x in [11.6, 16.4], z in [-13.4, -8.6])
+  if (x >= 11.6 && x <= 16.4 && z >= -13.4 && z <= -8.6) {
+    if (currentElevY >= 1.0) {
+      return { elevationY: 3.6, isRooftop: true, isInsideBuilding: false };
+    }
+  }
+
+  // 6. Terrain: Central Respiratory Valley (|x| <= 13.5m) and Flanking High Ground Ridges (|x| >= 16.0m at Y = +1.5m)
+  const absX = Math.abs(x);
+  if (absX >= 16.0) {
+    return { elevationY: 1.5, isRooftop: false, isInsideBuilding: false };
+  }
+  if (absX > 13.5) {
+    const slopeT = (absX - 13.5) / 2.5;
+    return { elevationY: slopeT * 1.5, isRooftop: false, isInsideBuilding: false };
+  }
+
+  return { elevationY: 0, isRooftop: false, isInsideBuilding: false };
+}
+
+// ============================================================================
+// ANATOMICAL CLIMBABLE BONE & CARTILAGE LADDER
+// Replaces sloped ramps with ivory osteoid bone stanchions, glowing cartilage
+// rungs spaced every 0.28m, and curved costal ribcage grab hooks at the top.
+// Players can look forward and walk smoothly straight up to the high grounds!
+// ============================================================================
+export function createAnatomicalLadder(height: number, width: number = 0.95): THREE.Group {
+  const ladder = new THREE.Group();
+
+  const boneStanchionMat = createFastLitMaterial({
+    color: 0xfef3c7, // ivory cancellous osteoid bone
+    emissive: 0x78350f,
+    emissiveIntensity: 0.18,
+    roughness: 0.45,
+    metalness: 0.08,
+  });
+  const cartilageRungMat = createFastLitMaterial({
+    color: 0xfde047, // glowing cartilage golden amber
+    emissive: 0xd97706,
+    emissiveIntensity: 0.35,
+    roughness: 0.3,
+  });
+  const ribCurveMat = createFastLitMaterial({
+    color: 0xfda4af, // costal rib cartilage arch
+    emissive: 0xbe123c,
+    emissiveIntensity: 0.25,
+    roughness: 0.35,
+  });
+
+  const railRadius = 0.045;
+  const railGeo = new THREE.CylinderGeometry(railRadius, railRadius, height, 10);
+
+  // Left upright bone rail
+  const leftRail = new THREE.Mesh(railGeo, boneStanchionMat);
+  leftRail.position.set(-width / 2, height / 2, 0);
+  ladder.add(leftRail);
+
+  // Right upright bone rail
+  const rightRail = new THREE.Mesh(railGeo, boneStanchionMat);
+  rightRail.position.set(width / 2, height / 2, 0);
+  ladder.add(rightRail);
+
+  // Cartilage rungs spaced every 0.28m
+  const rungGeo = new THREE.CylinderGeometry(0.028, 0.028, width, 8);
+  rungGeo.rotateZ(Math.PI / 2);
+  const rungSpacing = 0.28;
+  const numRungs = Math.floor(height / rungSpacing);
+  for (let r = 1; r <= numRungs; r++) {
+    const rung = new THREE.Mesh(rungGeo, cartilageRungMat);
+    rung.position.set(0, r * rungSpacing, 0);
+    ladder.add(rung);
+  }
+
+  // Costal ribcage safety grab arches at top curving over onto the platform deck
+  const hookGeo = new THREE.TorusGeometry(0.22, 0.035, 6, 12, Math.PI);
+  const leftHook = new THREE.Mesh(hookGeo, ribCurveMat);
+  leftHook.position.set(-width / 2, height, -0.15);
+  leftHook.rotation.y = Math.PI / 2;
+  leftHook.rotation.z = Math.PI / 2;
+  ladder.add(leftHook);
+
+  const rightHook = new THREE.Mesh(hookGeo, ribCurveMat);
+  rightHook.position.set(width / 2, height, -0.15);
+  rightHook.rotation.y = Math.PI / 2;
+  rightHook.rotation.z = Math.PI / 2;
+  ladder.add(rightHook);
+
+  return ladder;
+}
+
+// ============================================================================
+// HELICOPTER SUPPLY DROPPING CARGO NET & BIO-CAPSULE CRATE
+// Dropped every 15s by military/medical transport into the active combat basin.
+// Features woven cargo webbing straps, reinforced biohazard capsule container,
+// status strobe lamps, and a rotating 3D holographic super-ability insignia.
+// ============================================================================
+export function createSupplyCargoNetMesh(abilityType: SuperAbilityType): {
+  group: THREE.Group;
+  emblemMesh: THREE.Group;
+  strobeLight: THREE.Mesh;
+} {
+  const group = new THREE.Group();
+
+  // 1. Reinforced Tactical Bio-Capsule Crate
+  const crateMat = createFastLitMaterial({
+    color: 0x18181b, // tactical matte slate
+    emissive: 0x09090b,
+    roughness: 0.5,
+    metalness: 0.6,
+  });
+  const edgeTrimMat = createFastLitMaterial({
+    color: 0xf59e0b, // high-visibility hazard amber trim
+    emissive: 0xb45309,
+    emissiveIntensity: 0.45,
+    roughness: 0.35,
+  });
+  const netMat = createFastLitMaterial({
+    color: 0x27272a, // heavy-duty nylon tactical webbing
+    roughness: 0.7,
+  });
+
+  const crateBody = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.72, 0.92), crateMat);
+  crateBody.position.y = 0.36;
+  group.add(crateBody);
+
+  // Corner protective hazard bumpers
+  const bumperGeo = new THREE.BoxGeometry(0.12, 0.76, 0.12);
+  [
+    [-0.44, 0.36, -0.44],
+    [0.44, 0.36, -0.44],
+    [-0.44, 0.36, 0.44],
+    [0.44, 0.36, 0.44],
+  ].forEach(([bx, by, bz]) => {
+    const bumper = new THREE.Mesh(bumperGeo, edgeTrimMat);
+    bumper.position.set(bx, by, bz);
+    group.add(bumper);
+  });
+
+  // 2. Intersecting Diamond Woven Cargo Net Strapping
+  const strapGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.35, 6);
+  for (let s = 0; s < 4; s++) {
+    const strapX = new THREE.Mesh(strapGeo, netMat);
+    strapX.position.set((s - 1.5) * 0.28, 0.42, 0);
+    strapX.rotation.z = 0.25 * (s % 2 === 0 ? 1 : -1);
+    group.add(strapX);
+
+    const strapZ = new THREE.Mesh(strapGeo, netMat);
+    strapZ.position.set(0, 0.42, (s - 1.5) * 0.28);
+    strapZ.rotation.x = 0.25 * (s % 2 === 0 ? 1 : -1);
+    group.add(strapZ);
+  }
+
+  // Heavy steel cargo carabiner ring at apex
+  const ringMat = createFastLitMaterial({
+    color: 0x94a3b8,
+    metalness: 0.8,
+    roughness: 0.2,
+  });
+  const topRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.035, 6, 16), ringMat);
+  topRing.position.set(0, 0.85, 0);
+  topRing.rotation.x = Math.PI / 2;
+  group.add(topRing);
+
+  // Bioluminescent status strobe light
+  const strobeLight = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0x22d3ee })
+  );
+  strobeLight.position.set(0, 0.74, 0.45);
+  group.add(strobeLight);
+
+  // 3. Rotating 3D Holographic Ability Emblem
+  const emblemGroup = new THREE.Group();
+  emblemGroup.position.set(0, 1.25, 0);
+
+  if (abilityType === 'burning_bullets') {
+    // 3D Incendiary Flame & Bullet Spitze
+    const flameMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    const flameCone = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.58, 8), flameMat);
+    emblemGroup.add(flameCone);
+    const innerFlame = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.38, 8), coreMat);
+    innerFlame.position.y = -0.05;
+    emblemGroup.add(innerFlame);
+  } else if (abilityType === 'supersonic_speed') {
+    // 3D Supersonic Lightning Chevron
+    const boltMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    const boltGeo = new THREE.BoxGeometry(0.08, 0.55, 0.12);
+    const b1 = new THREE.Mesh(boltGeo, boltMat);
+    b1.rotation.z = -0.45;
+    b1.position.set(-0.1, 0.1, 0);
+    emblemGroup.add(b1);
+    const b2 = new THREE.Mesh(boltGeo, boltMat);
+    b2.rotation.z = 0.45;
+    b2.position.set(0.1, -0.1, 0);
+    emblemGroup.add(b2);
+  } else if (abilityType === 'immortality') {
+    // 3D Golden Aegis Shield + Radiant Halo
+    const shieldMat = createFastLitMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.7,
+      roughness: 0.2,
+      metalness: 0.4,
+    });
+    const sBody = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.04, 0.55, 6), shieldMat);
+    sBody.rotation.x = Math.PI;
+    emblemGroup.add(sBody);
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.42, 0.035, 6, 16),
+      new THREE.MeshBasicMaterial({ color: 0xfef08a })
+    );
+    halo.rotation.x = Math.PI / 2;
+    emblemGroup.add(halo);
+  } else if (abilityType === 'double_xp') {
+    // 3D Golden 2X Star Emblem
+    const starMat = createFastLitMaterial({
+      color: 0xf59e0b,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.6,
+      roughness: 0.25,
+      metalness: 0.5,
+    });
+    const oct = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 1), starMat);
+    emblemGroup.add(oct);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.44, 0.04, 6, 16),
+      new THREE.MeshBasicMaterial({ color: 0xfde047 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    emblemGroup.add(ring);
+  } else if (abilityType === 'postpone_question') {
+    // 3D Biological Chronometer / Hourglass
+    const timeMat = new THREE.MeshBasicMaterial({ color: 0x2dd4bf });
+    const topCone = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.28, 8), timeMat);
+    topCone.rotation.x = Math.PI;
+    topCone.position.y = 0.14;
+    emblemGroup.add(topCone);
+    const btmCone = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.28, 8), timeMat);
+    btmCone.position.y = -0.14;
+    emblemGroup.add(btmCone);
+  } else if (abilityType === 't_cytotoxic') {
+    // 3D T-Cytotoxic Laser Disintegrator Crystal
+    const laserMat = createFastLitMaterial({
+      color: 0x10b981,
+      emissive: 0x059669,
+      emissiveIntensity: 0.85,
+      roughness: 0.15,
+      metalness: 0.3,
+    });
+    const crystal = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 0.58, 6), laserMat);
+    emblemGroup.add(crystal);
+    const focusRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.36, 0.035, 6, 16),
+      new THREE.MeshBasicMaterial({ color: 0x34d399 })
+    );
+    focusRing.rotation.x = Math.PI / 2;
+    emblemGroup.add(focusRing);
+  } else {
+    // 3D Biotoxic RPG Heavy Rocket Warhead
+    const warheadMat = createFastLitMaterial({
+      color: 0x84cc16,
+      emissive: 0x65a30d,
+      emissiveIntensity: 0.65,
+      roughness: 0.35,
+    });
+    const noseMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+    const rocketBody = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.52, 8), warheadMat);
+    emblemGroup.add(rocketBody);
+    const noseCone = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.24, 8), noseMat);
+    noseCone.position.y = 0.38;
+    emblemGroup.add(noseCone);
+    for (let f = 0; f < 4; f++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.14, 0.02), warheadMat);
+      fin.rotation.y = (f * Math.PI) / 2;
+      fin.position.y = -0.18;
+      emblemGroup.add(fin);
+    }
+  }
+
+  group.add(emblemGroup);
+
+  return { group, emblemMesh: emblemGroup, strobeLight };
+}
+
+// ============================================================================
+// 3D PRE-DROP PING BEACON & SONAR INDICATOR
+// Appears 3 seconds before supply net drops to guide players to the drop zone!
+// Features a towering 18m beacon pillar + expanding concentric ground sonar rings.
+// ============================================================================
+export function createSupplyPingBeaconMesh(): {
+  group: THREE.Group;
+  sonarRing: THREE.Mesh;
+  pillarMesh: THREE.Mesh;
+} {
+  const group = new THREE.Group();
+
+  // 18m Vertical Cyan/Gold Warning Light Pillar
+  const pillarGeo = new THREE.CylinderGeometry(0.45, 1.6, 18, 16, 1, true);
+  const pillarMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.35,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const pillarMesh = new THREE.Mesh(pillarGeo, pillarMat);
+  pillarMesh.position.y = 9.0;
+  group.add(pillarMesh);
+
+  // Concentric Ground Sonar Ring
+  const ringGeo = new THREE.RingGeometry(1.6, 2.1, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x22d3ee,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const sonarRing = new THREE.Mesh(ringGeo, ringMat);
+  sonarRing.rotation.x = -Math.PI / 2;
+  sonarRing.position.y = 0.08;
+  group.add(sonarRing);
+
+  // Inner Tactical Crosshair Ring
+  const innerRingGeo = new THREE.RingGeometry(0.65, 0.82, 24);
+  const innerRing = new THREE.Mesh(innerRingGeo, ringMat);
+  innerRing.rotation.x = -Math.PI / 2;
+  innerRing.position.y = 0.09;
+  group.add(innerRing);
+
+  // Crosshair Hash Ticks
+  const hashGeo = new THREE.PlaneGeometry(0.12, 1.4);
+  const hash1 = new THREE.Mesh(hashGeo, ringMat);
+  hash1.rotation.x = -Math.PI / 2;
+  hash1.position.y = 0.1;
+  group.add(hash1);
+  const hash2 = new THREE.Mesh(hashGeo, ringMat);
+  hash2.rotation.x = -Math.PI / 2;
+  hash2.rotation.z = Math.PI / 2;
+  hash2.position.y = 0.1;
+  group.add(hash2);
+
+  return { group, sonarRing, pillarMesh };
+}
+
+// Biological Power-Up 3D Mesh
+export function createBiologicalPowerUpMesh(type: 'atp' | 'shield'): THREE.Group {
+  const group = new THREE.Group();
+  if (type === 'atp') {
+    const cyanAuraMat = new THREE.MeshBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const coreMat = createFastLitMaterial({
+      color: 0x06b6d4,
+      emissive: 0x0891b2,
+      emissiveIntensity: 0.6,
+      roughness: 0.2,
+    });
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 1), coreMat);
+    group.add(core);
+
+    for (let i = 0; i < 3; i++) {
+      const pOrb = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), cyanAuraMat);
+      const angle = (i * Math.PI * 2) / 3;
+      pOrb.position.set(Math.cos(angle) * 0.42, Math.sin(angle) * 0.15, Math.sin(angle) * 0.42);
+      group.add(pOrb);
+    }
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.48, 0.035, 6, 20),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    group.add(ring);
+  } else {
+    const goldMat = createFastLitMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.7,
+      roughness: 0.2,
+      metalness: 0.3,
+    });
+    const shieldBody = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.05, 0.55, 6), goldMat);
+    shieldBody.rotation.x = Math.PI;
+    group.add(shieldBody);
+
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.48, 0.04, 6, 20),
+      new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.8 })
+    );
+    halo.rotation.x = Math.PI / 2;
+    group.add(halo);
+  }
+  return group;
 }
 
 // ============================================================================

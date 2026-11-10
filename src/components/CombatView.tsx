@@ -4,7 +4,7 @@ import { LevelConfig, Weapon, HitMarkerInfo, KillfeedEntry, BiologyConceptCard }
 import { sounds } from '../services/soundEffects';
 import { voipManager, OrganVoipClip } from '../services/voipManager';
 import { ORGAN_THEMES, OrganTheme, getOrganThemeForLevel } from '../services/organThemes';
-import { loadSeenConcepts, markConceptAsSeen, loadStudentProfile } from '../services/storage';
+import { loadSeenConcepts, markConceptAsSeen, loadStudentProfile, recordScoreToLeaderboard } from '../services/storage';
 import { WeaponBlockyIcon } from './WeaponBlockyIcon';
 import {
   createStreptococcusSoldier,
@@ -38,6 +38,8 @@ import {
   updateStudentOperatorBadge,
   createOpenLungAlveoliLandscape,
   createAnatomicalCoverCluster,
+  getArenaSurfaceElevation,
+  createBiologicalPowerUpMesh,
   disposeSceneGraph,
 } from './CellModels';
 import {
@@ -56,6 +58,7 @@ import { RankBadge } from './RankBadge';
 import {
   Shield,
   Zap,
+  Tv,
   RotateCcw,
   Crosshair,
   ChevronRight,
@@ -438,6 +441,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const sprintBarFillDomRef = useRef<HTMLDivElement | null>(null);
   const sprintBarTextDomRef = useRef<HTMLSpanElement | null>(null);
 
+  // Multiplayer High Ground, Climbable Ramps & Walk-Through Building Physics
+  const playerElevationYRef = useRef<number>(0);
+  const playerIsRooftopRef = useRef<boolean>(false);
+  const playerIsInsideBuildingRef = useRef<boolean>(false);
+
+  // Performance-critical direct DOM references (zero React VDOM re-render churn!)
+  const liveScoreDomRef = useRef<HTMLSpanElement | null>(null);
+  const liveTimerDomRef = useRef<HTMLSpanElement | null>(null);
+
+  // Teacher / Spectator Classroom Broadcast Mode
+  const [showSpectatorBoard, setShowSpectatorBoard] = useState<boolean>(false);
+
+  // Biological Power-Up Pickup Toast
+  const [powerUpToast, setPowerUpToast] = useState<{ text: string; icon: string; color: string } | null>(null);
+  const powerUpToastTimerRef = useRef<number | null>(null);
+
   // Stage-relative level number (1 to 5) so adding new grades/missions never inflates difficulty
   const stageLevels = CURRICULUM_LEVELS.filter((l) => l.stage === level.stage && !l.isSecret);
   const stageIdx = stageLevels.findIndex((l) => l.id === level.id);
@@ -673,7 +692,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [opticsTimeRemaining, setOpticsTimeRemaining] = useState<number>(15);
   const [opticsCooldown, setOpticsCooldown] = useState<number>(0);
   const opticsCooldownRef = useRef<number>(0);
-  const [radarBlips, setRadarBlips] = useState<Array<{ x: number; y: number; isTank: boolean; isAllied: boolean }>>([]);
+  const [radarBlips, setRadarBlips] = useState<Array<{ x: number; y: number; isTank: boolean; isAllied: boolean; callsign?: string }>>([]);
   const [compassBlips, setCompassBlips] = useState<Array<{ id: number; offsetPercent: number; isTank: boolean }>>([]);
   const [targetLocks, setTargetLocks] = useState<TargetHudLock[]>([]);
 
@@ -841,6 +860,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const activeSoldiersRef = useRef<ActiveSoldier[]>([]);
   const activeEnemyBulletsRef = useRef<ActiveEnemyBullet[]>([]);
   const barricadesRef = useRef<ActiveBarricade[]>([]);
+  const activeBiologicalDropsRef = useRef<
+    Array<{
+      id: number;
+      type: 'atp' | 'shield';
+      mesh: THREE.Group;
+      active: boolean;
+      x: number;
+      y: number;
+      z: number;
+      bobPhase: number;
+    }>
+  >([]);
+  const spawnBiologicalDropRef = useRef<
+    ((x: number, z: number, prefType?: 'atp' | 'shield', yOverride?: number) => void) | null
+  >(null);
   const activeGrenadesRef = useRef<ActiveGrenade[]>([]);
   const activeParticlesRef = useRef<ActiveExplosionParticle[]>([]);
   const activeShellsRef = useRef<ActiveShellCasing[]>([]);
@@ -1011,7 +1045,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
       x: playerPosRef.current.x,
-      y: 0,
+      y: Number(playerElevationYRef.current.toFixed(2)),
       z: playerPosRef.current.z,
       aimX: aimPosRef.current.x,
       aimY: aimPosRef.current.y,
@@ -1055,7 +1089,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
       x: playerPosRef.current.x,
-      y: 0,
+      y: Number(playerElevationYRef.current.toFixed(2)),
       z: playerPosRef.current.z,
       aimX: aimPosRef.current.x,
       aimY: aimPosRef.current.y,
@@ -1135,7 +1169,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             studentName: prof?.name || 'Operative',
             className: prof?.className || 'Science Unit',
             x: playerPosRef.current.x,
-            y: 0,
+            y: Number(playerElevationYRef.current.toFixed(2)),
             z: playerPosRef.current.z,
             aimX: aimPosRef.current.x,
             aimY: aimPosRef.current.y,
@@ -1216,8 +1250,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
         studentName: curProf?.name || 'Operative',
         className: curProf?.className || 'Science Unit',
         x: Number(playerPosRef.current.x.toFixed(2)),
-        y: 0,
+        y: Number(playerElevationYRef.current.toFixed(2)),
         z: Number(playerPosRef.current.z.toFixed(2)),
+        vx: Number((moveInputRef.current.x * (isSprintingRef.current ? 7.8 : 4.4)).toFixed(2)),
+        vz: Number((moveInputRef.current.z * (isSprintingRef.current ? 7.8 : 4.4)).toFixed(2)),
         aimX: Number(aimPosRef.current.x.toFixed(2)),
         aimY: Number(aimPosRef.current.y.toFixed(2)),
         weaponId: currentWeaponRef.current.id,
@@ -2045,6 +2081,47 @@ export const CombatView: React.FC<CombatViewProps> = ({
           bounds: bioCover.bounds,
         });
       });
+    }
+
+    // 9. BIOLOGICAL POWER-UP POOL (Pre-allocated zero-GC drops: ATP Overcharge & Immunoglobulin Shield)
+    activeBiologicalDropsRef.current = [];
+    const bioDropPoolSize = 8;
+    for (let bi = 0; bi < bioDropPoolSize; bi++) {
+      const dropType: 'atp' | 'shield' = bi % 2 === 0 ? 'atp' : 'shield';
+      const dropMesh = createBiologicalPowerUpMesh(dropType);
+      dropMesh.visible = false;
+      scene.add(dropMesh);
+      activeBiologicalDropsRef.current.push({
+        id: bi + 1,
+        type: dropType,
+        mesh: dropMesh,
+        active: false,
+        x: 0,
+        y: 0,
+        z: 0,
+        bobPhase: bi * 1.5,
+      });
+    }
+
+    const spawnBiologicalDrop = (x: number, z: number, prefType?: 'atp' | 'shield', yOverride?: number) => {
+      const drop = activeBiologicalDropsRef.current.find((d) => !d.active);
+      if (!drop) return;
+      const targetType = prefType || (Math.random() > 0.5 ? 'atp' : 'shield');
+      drop.type = targetType;
+      drop.x = x;
+      drop.z = z;
+      const elevY = yOverride !== undefined ? yOverride : getArenaSurfaceElevation(x, z, 0).elevationY;
+      drop.y = elevY + 0.35;
+      drop.mesh.position.set(drop.x, drop.y, drop.z);
+      drop.mesh.visible = true;
+      drop.active = true;
+    };
+    spawnBiologicalDropRef.current = spawnBiologicalDrop;
+
+    // Pre-seed 2 tactical power-up drops on High Grounds (Bunker Rooftop & Watchtower Platform) to reward climbing!
+    if (isMultiplayerDeathmatch) {
+      spawnBiologicalDrop(0, -22.0, 'shield', 2.65);
+      spawnBiologicalDrop(-19.0, -11.0, 'atp', 2.25);
     }
 
     // Helper to attach a compact 3D floating health bar to Tanks and Bosses
@@ -3821,6 +3898,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           } else {
             triggerMembraneDisintegration(hitSoldier.mesh.position, hitSoldier.type);
           }
+          if (isMultiplayerDeathmatch) {
+            spawnBiologicalDropRef.current?.(
+              hitSoldier.mesh.position.x,
+              hitSoldier.mesh.position.z,
+              Math.random() > 0.5 ? 'atp' : 'shield'
+            );
+          }
           releaseSoldierToPool(hitSoldier);
           const sIdx = soldiers.indexOf(hitSoldier);
           if (sIdx !== -1) soldiers.splice(sIdx, 1);
@@ -3856,7 +3940,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               studentName: prof?.name || 'Operative',
               className: prof?.className || 'Science Unit',
               x: playerPosRef.current.x,
-              y: 0,
+              y: Number(playerElevationYRef.current.toFixed(2)),
               z: playerPosRef.current.z,
               aimX: aimPosRef.current.x,
               aimY: aimPosRef.current.y,
@@ -4282,6 +4366,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       cameraRollShakeRef.current = sideSign * shakePower * 0.085;
     };
 
+    // Adaptive Resolution Scaling (Dynamic Pixel Ratio) for guaranteed locked 60 FPS
+    let fpsRollingFrames = 0;
+    let fpsRollingStartTime = performance.now();
+    let dynamicPixelRatio = Math.min(1.25, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+
     function animate() {
       const nowTime = performance.now();
       // Freeze 3D simulation & timer delta when paused for a Concept Popup or User Pause Menu!
@@ -4298,6 +4387,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
       lastFrameTime = nowTime;
       elapsedAccumulator += delta;
       const elapsed = elapsedAccumulator;
+
+      // Adaptive Resolution Scaling Monitor (adjusts pixel ratio to eliminate any stutter/frame drop)
+      fpsRollingFrames++;
+      if (nowTime - fpsRollingStartTime >= 1000) {
+        const liveFps = (fpsRollingFrames * 1000) / (nowTime - fpsRollingStartTime);
+        fpsRollingFrames = 0;
+        fpsRollingStartTime = nowTime;
+        if (liveFps < 46 && dynamicPixelRatio > 0.8) {
+          dynamicPixelRatio = Math.max(0.75, dynamicPixelRatio - 0.15);
+          renderer.setPixelRatio(dynamicPixelRatio);
+        } else if (liveFps > 56 && dynamicPixelRatio < Math.min(1.25, window.devicePixelRatio || 1)) {
+          dynamicPixelRatio = Math.min(Math.min(1.25, window.devicePixelRatio || 1), dynamicPixelRatio + 0.1);
+          renderer.setPixelRatio(dynamicPixelRatio);
+        }
+      }
 
       // 1. UPDATE PLAYER 3D POSITION (Left/Right & Front/Back Movement)
       let inputX = moveInputRef.current.x;
@@ -4414,8 +4518,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const targetCrouchY = isCrouchingRef.current ? -0.52 : 0;
       crouchCameraYRef.current = THREE.MathUtils.damp(crouchCameraYRef.current, targetCrouchY, 14, delta);
 
+      if (isMultiplayerDeathmatch) {
+        const surf = getArenaSurfaceElevation(
+          playerPosRef.current.x,
+          playerPosRef.current.z,
+          playerElevationYRef.current
+        );
+        playerElevationYRef.current = THREE.MathUtils.damp(
+          playerElevationYRef.current,
+          surf.elevationY,
+          16,
+          delta
+        );
+        playerIsRooftopRef.current = surf.isRooftop;
+        playerIsInsideBuildingRef.current = surf.isInsideBuilding;
+      } else {
+        playerElevationYRef.current = 0;
+      }
+
       camera.position.x = playerPosRef.current.x + shakeX;
-      camera.position.y = crouchCameraYRef.current + shakeY;
+      camera.position.y = playerElevationYRef.current + crouchCameraYRef.current + shakeY;
       camera.position.z = playerPosRef.current.z;
 
       // Smoothly zoom camera FOV when Black Ops Sight Scope (ADS) is engaged!
@@ -4677,6 +4799,64 @@ export const CombatView: React.FC<CombatViewProps> = ({
           p.mesh.visible = false;
           particles[i] = particles[particles.length - 1];
           particles.pop();
+        }
+      }
+
+      // Update Biological Power-Up Drops (Bob, spin, and proximity pickup for ATP Overcharge & Shield)
+      if (activeBiologicalDropsRef.current.length > 0) {
+        const drops = activeBiologicalDropsRef.current;
+        const pX = playerPosRef.current.x;
+        const pZ = playerPosRef.current.z;
+        const pY = playerElevationYRef.current;
+        for (let di = 0; di < drops.length; di++) {
+          const drop = drops[di];
+          if (!drop.active) continue;
+          drop.mesh.rotation.y += delta * 2.4;
+          drop.mesh.position.y = drop.y + Math.sin(elapsed * 4.2 + drop.bobPhase) * 0.12;
+
+          // Check distance to local operative
+          const distXZ = Math.hypot(pX - drop.x, pZ - drop.z);
+          const distY = Math.abs(pY - drop.y);
+          if (distXZ <= 1.95 && distY <= 2.2) {
+            drop.active = false;
+            drop.mesh.visible = false;
+            sounds.playStimInject();
+            sounds.triggerHaptic([30, 20, 40], 'heavy');
+
+            if (drop.type === 'atp') {
+              sprintEnergyRef.current = 100;
+              isSprintExhaustedRef.current = false;
+              setIsSprintExhausted(false);
+              if (sprintBarFillDomRef.current) {
+                sprintBarFillDomRef.current.style.width = '100%';
+                sprintBarFillDomRef.current.className =
+                  'h-full transition-all duration-75 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-300';
+              }
+              if (sprintBarTextDomRef.current) {
+                sprintBarTextDomRef.current.textContent = '⚡ SPRINT: 100% (OVERCHARGED)';
+                sprintBarTextDomRef.current.className =
+                  'text-[9px] font-black text-amber-300 uppercase tracking-widest';
+              }
+              setPowerUpToast({
+                text: '⚡ ATP OVERCHARGE! SPRINT ENERGY 100% REFILLED',
+                icon: 'Zap',
+                color: 'text-amber-300 border-amber-400/80 bg-amber-950/90',
+              });
+            } else {
+              playerHpRef.current = Math.min(100, playerHpRef.current + 25);
+              setPlayerHp(playerHpRef.current);
+              setPowerUpToast({
+                text: '🛡️ IMMUNOGLOBULIN SHIELD (+25 BIO-HP RESTORED)',
+                icon: 'Shield',
+                color: 'text-cyan-300 border-cyan-400/80 bg-cyan-950/90',
+              });
+            }
+
+            if (powerUpToastTimerRef.current) window.clearTimeout(powerUpToastTimerRef.current);
+            powerUpToastTimerRef.current = window.setTimeout(() => {
+              setPowerUpToast(null);
+            }, 3000);
+          }
         }
       }
 
@@ -5345,10 +5525,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
             if (soldier.remotePlayerId) {
               const rp = mpOnlinePlayersRef.current.find((p) => p.playerId === soldier.remotePlayerId);
               if (rp) {
-                // Smoothly interpolate real opponent's 3D open-world position in the Alveoli landscape
-                const targetX = THREE.MathUtils.clamp(-rp.x, -30.0, 30.0);
+                // Smoothly interpolate real opponent's 3D open-world position in the Alveoli landscape with dead reckoning
+                const deadReckonVx = (rp.vx || 0) * delta * 0.35;
+                const deadReckonVz = (rp.vz || 0) * delta * 0.35;
+                const targetX = THREE.MathUtils.clamp(-rp.x - deadReckonVx, -30.0, 30.0);
                 const targetZ = THREE.MathUtils.clamp(
-                  -18.0 - rp.z,
+                  -18.0 - rp.z - deadReckonVz,
                   -46.0,
                   playerPosRef.current.z - 2.4
                 );
@@ -5394,8 +5576,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   soldier.stasisCage.visible = false;
                 }
 
-                // If remote player is crouched, drop avatar height into cover!
-                const targetBaseY = rp.isCrouched ? -0.68 : -0.32;
+                // Surface elevation across ramps, high ground rooftop (Y=2.4) and watchtowers (Y=2.0)
+                const surfaceElev = getArenaSurfaceElevation(soldier.mesh.position.x, soldier.mesh.position.z, soldier.mesh.position.y).elevationY;
+                const targetElevY = rp.y !== undefined && rp.y > 0.05 ? rp.y : surfaceElev;
+                const targetBaseY = targetElevY + (rp.isCrouched ? -0.68 : -0.32);
 
                 // Animate limbs based on whether the real opponent is actively moving or aiming
                 if (moveDist > 0.06) {
@@ -5699,6 +5883,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           triggerExplosion(shatterCenter);
           if (isMultiplayerDeathmatch) {
             triggerMembraneDisintegration(shatterCenter, 'bacillus');
+            spawnBiologicalDropRef.current?.(bar.x, bar.z, Math.random() > 0.5 ? 'atp' : 'shield');
           }
           triggerBarricadeShatter(shatterCenter);
           bar.group.visible = false;
@@ -6749,7 +6934,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         // Sync live radar blips for Minimap
-        const blips: Array<{ x: number; y: number; isTank: boolean; isAllied: boolean }> = [];
+        const blips: Array<{ x: number; y: number; isTank: boolean; isAllied: boolean; callsign?: string }> = [];
         const lateralRadarScale = isMultiplayerDeathmatch ? 15.0 : 9.0;
         const depthRadarScale = isMultiplayerDeathmatch ? 32.0 : 42.0;
         for (let idx = 0; idx < activeSoldiersRef.current.length; idx++) {
@@ -6761,6 +6946,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             y: Math.round(ry),
             isTank: Boolean(s.isTank || s.isBoss),
             isAllied: false,
+            callsign: isMultiplayerDeathmatch && s.name ? s.name.slice(0, 3).toUpperCase() : undefined,
           });
         }
         if (airdropRef.current) {
@@ -6772,7 +6958,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         }
 
-        const blipsKey = blips.map((b) => `${b.x}_${b.y}_${b.isTank}_${b.isAllied}`).join('|');
+        const blipsKey = blips.map((b) => `${b.x}_${b.y}_${b.isTank}_${b.isAllied}_${b.callsign || ''}`).join('|');
         if (blipsKey !== prevBlipsKey) {
           prevBlipsKey = blipsKey;
           setRadarBlips(blips);
@@ -7433,8 +7619,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     }`}
                   >
                     <Snowflake className="w-3 h-3 text-cyan-300" />
-                    <span>STUN IN: {timeLeft}S</span>
+                    <span>STUN IN: </span>
+                    <span ref={liveTimerDomRef}>{timeLeft}S</span>
                   </span>
+                  <span className="text-slate-600">|</span>
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      setShowSpectatorBoard((prev) => !prev);
+                    }}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-400/80 text-emerald-300 text-[8px] sm:text-[9.5px] font-black cursor-pointer transition-colors shadow-sm"
+                    title="Open Live Classroom Spectator Board"
+                  >
+                    <Tv className="w-3 h-3 text-emerald-400" />
+                    <span>BROADCAST / SPECTATE</span>
+                  </button>
                 </div>
 
                 {/* Waiting / Active Real Players Status */}
@@ -7568,17 +7767,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
               {/* Live Enemy & Allied Blips on Minimap */}
               {radarBlips.map((blip, bIdx) => (
-                <span
+                <div
                   key={bIdx}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none ${
-                    blip.isAllied
-                      ? 'w-2 h-2 rounded-full bg-sky-400 border border-white shadow-[0_0_6px_#38bdf8]'
-                      : blip.isTank
-                      ? 'w-2.5 h-2.5 rotate-45 bg-amber-400 border border-rose-600 shadow-[0_0_8px_#f59e0b]'
-                      : 'w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_5px_#f43f5e]'
-                  }`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center"
                   style={{ left: `${blip.x}%`, top: `${blip.y}%` }}
-                />
+                >
+                  <span
+                    className={`${
+                      blip.isAllied
+                        ? 'w-2 h-2 rounded-full bg-sky-400 border border-white shadow-[0_0_6px_#38bdf8]'
+                        : blip.isTank
+                        ? 'w-2.5 h-2.5 rotate-45 bg-amber-400 border border-rose-600 shadow-[0_0_8px_#f59e0b]'
+                        : 'w-2 h-2 rounded-full bg-rose-500 border border-rose-300 shadow-[0_0_6px_#f43f5e]'
+                    }`}
+                  />
+                  {blip.callsign && (
+                    <span className="text-[6px] font-mono font-black text-amber-200 bg-slate-950/90 px-0.5 rounded leading-none mt-0.5 scale-90">
+                      {blip.callsign}
+                    </span>
+                  )}
+                </div>
               ))}
 
               {/* Player White Arrow Marker on Minimap */}
@@ -7652,7 +7860,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 <span className="w-4 h-4 rounded-full bg-slate-800 border border-white/25 flex items-center justify-center text-[9px] text-amber-300 font-black">
                   ★
                 </span>
-                <span className="text-[10px] sm:text-xs font-black text-amber-300 tabular-nums">
+                <span ref={liveScoreDomRef} className="text-[10px] sm:text-xs font-black text-amber-300 tabular-nums">
                   {score}
                 </span>
               </div>
@@ -8482,6 +8690,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 <button
                   onClick={() => {
                     sounds.unlockAudio();
+                    if (isMultiplayerDeathmatch && scoreRef.current > 0) {
+                      const prof = loadStudentProfile();
+                      recordScoreToLeaderboard({
+                        studentName: prof?.name || 'Operative',
+                        className: prof?.className || 'Class 7',
+                        score: scoreRef.current,
+                        kills: killsRef.current,
+                        levelTitle: `Arena [${multiplayerRoomCode}] PvP`,
+                        stage: 'Multiplayer',
+                        rankTitle: 'Commando',
+                        isVictory: killsRef.current > 0,
+                      }).catch(() => {});
+                    }
                     onExitToMenu();
                   }}
                   className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-rose-950 border border-white/15 hover:border-rose-500/60 text-zinc-300 hover:text-rose-200 font-bold uppercase cursor-pointer transition-colors"
@@ -8489,6 +8710,143 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   LEAVE MATCH
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Biological Power-Up Pickup Toast Banner */}
+      {powerUpToast && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-bounce">
+          <div
+            className={`px-3.5 py-1.5 rounded-lg border-2 shadow-2xl flex items-center gap-2 text-xs sm:text-sm font-mono font-black ${powerUpToast.color}`}
+          >
+            <span>{powerUpToast.text}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Teacher / Classroom Live Arena Broadcast Modal */}
+      {showSpectatorBoard && (
+        <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 pointer-events-auto">
+          <div className="bg-zinc-950 border-2 border-emerald-400/80 rounded-xl max-w-3xl w-full p-4 sm:p-6 shadow-[0_0_40px_rgba(16,185,129,0.3)] flex flex-col gap-4 text-white">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-950 border border-emerald-400 flex items-center justify-center text-emerald-300">
+                  <Tv className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black tracking-wide text-white">
+                    CLASSROOM ARENA BROADCAST • ROOM {multiplayerRoomCode}
+                  </h3>
+                  <p className="text-[10px] sm:text-xs text-zinc-400 font-mono">
+                    20-PLAYER LIVE SYNC • ZERO BOTS • REAL-TIME OPERATIVE PERFORMANCE
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSpectatorBoard(false)}
+                className="px-3 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/20 text-xs font-bold uppercase transition-colors cursor-pointer"
+              >
+                CLOSE [ESC]
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
+                <span className="text-[10px] text-zinc-400 block uppercase font-mono">CONNECTED PLAYERS</span>
+                <span className="text-xl font-black text-cyan-300">{Math.max(1, mpOnlinePlayers.length)} / 20</span>
+              </div>
+              <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
+                <span className="text-[10px] text-zinc-400 block uppercase font-mono">TOTAL ELIMINATIONS</span>
+                <span className="text-xl font-black text-rose-400">
+                  {mpOnlinePlayers.reduce((acc, p) => acc + (p.kills || 0), killsRef.current)}
+                </span>
+              </div>
+              <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
+                <span className="text-[10px] text-zinc-400 block uppercase font-mono">ACTIVE POWER-UPS</span>
+                <span className="text-xl font-black text-amber-300">
+                  {activeBiologicalDropsRef.current.filter((d) => d.active).length} DROPS
+                </span>
+              </div>
+              <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
+                <span className="text-[10px] text-zinc-400 block uppercase font-mono">SPECTATOR STATUS</span>
+                <span className="text-xl font-black text-emerald-400">LIVE FEED</span>
+              </div>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto border border-white/10 rounded-lg">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-zinc-900/90 text-zinc-400 text-[10px] uppercase border-b border-white/10 sticky top-0">
+                  <tr>
+                    <th className="p-2">OPERATIVE</th>
+                    <th className="p-2">CLASS</th>
+                    <th className="p-2">STATUS</th>
+                    <th className="p-2">HP</th>
+                    <th className="p-2">KILLS</th>
+                    <th className="p-2">DEATHS</th>
+                    <th className="p-2">SCORE</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  <tr className="bg-emerald-950/40 text-emerald-200 font-bold">
+                    <td className="p-2 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      <span>YOU ({loadStudentProfile()?.name || 'Operative'})</span>
+                    </td>
+                    <td className="p-2 text-zinc-300">{loadStudentProfile()?.className || 'Science Unit'}</td>
+                    <td className="p-2 uppercase text-emerald-400">{mpStatus}</td>
+                    <td className="p-2">{playerHp}/100</td>
+                    <td className="p-2 text-rose-300">{kills}</td>
+                    <td className="p-2 text-zinc-400">{mpDeaths}</td>
+                    <td className="p-2 text-amber-300 font-black">{score}</td>
+                  </tr>
+                  {mpOnlinePlayers
+                    .filter((p) => p.playerId !== localMpPlayerIdRef.current)
+                    .map((rp) => (
+                      <tr key={rp.playerId} className="hover:bg-zinc-900/50">
+                        <td className="p-2 font-bold text-white flex items-center gap-1.5">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              rp.status === 'active'
+                                ? 'bg-emerald-400'
+                                : rp.status === 'stunned'
+                                ? 'bg-cyan-400'
+                                : 'bg-amber-400'
+                            }`}
+                          ></span>
+                          <span>{rp.studentName}</span>
+                        </td>
+                        <td className="p-2 text-zinc-400">{rp.className || 'Science'}</td>
+                        <td
+                          className={`p-2 uppercase font-black text-[10px] ${
+                            rp.status === 'active'
+                              ? 'text-emerald-400'
+                              : rp.status === 'stunned'
+                              ? 'text-cyan-300'
+                              : 'text-amber-400'
+                          }`}
+                        >
+                          {rp.status || 'ACTIVE'}
+                        </td>
+                        <td className="p-2 text-zinc-300">{rp.hp ?? 100}/100</td>
+                        <td className="p-2 text-rose-300">{rp.kills || 0}</td>
+                        <td className="p-2 text-zinc-400">{rp.deaths || 0}</td>
+                        <td className="p-2 text-amber-300 font-black">{rp.score || 0}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-2 border-t border-white/10">
+              <span>All students ranked simultaneously in Cloud Firestore</span>
+              <button
+                onClick={() => setShowSpectatorBoard(false)}
+                className="px-4 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase text-xs cursor-pointer transition-colors"
+              >
+                RETURN TO COMBAT
+              </button>
             </div>
           </div>
         </div>

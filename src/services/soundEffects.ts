@@ -1647,7 +1647,50 @@ class SoundEffectsService {
       // ignore
     }
   }
+
+  // Tactical Supply Drop Sonar / Ping Chirp (Plays 3s before supply drop arrives)
+  public playSupplyDropPing(): void {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    const t = this.ctx.currentTime + 0.002;
+    this.playTone('sine', 1760, 2640, t, 0.12, 0.45, 'exp');
+    this.playTone('sine', 2640, 3520, t + 0.08, 0.14, 0.35, 'exp');
+  }
+
+  // Supply Drop Cargo Net Heavy Ground Impact
+  public playSupplyNetImpact(): void {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    const t = this.ctx.currentTime + 0.002;
+    this.playTone('triangle', 180, 42, t, 0.35, 0.75, 'exp');
+    this.playNoiseBurst(0.28, 0.65, 450, 1.2, 'lowpass');
+  }
+
+  // T-Cytotoxic Laser Disintegrator Hyper-Rate Laser Pulse
+  public playLaserDisintegrator(): void {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    const t = this.ctx.currentTime + 0.001;
+    this.playTone('sawtooth', 1280, 220, t, 0.05, 0.32, 'exp');
+  }
+
+  // Super Ability Acquired Ascending Harmonic Jingle
+  public playSuperAbilityAward(): void {
+    if (!this.enabled) return;
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    const t = this.ctx.currentTime + 0.002;
+    const freqs = [440, 554.37, 659.25, 880, 1108.73, 1318.5];
+    freqs.forEach((f, idx) => {
+      this.playTone('triangle', f, f * 1.05, t + idx * 0.045, 0.22, 0.4, 'set');
+    });
+    this.playNoiseBurst(0.25, 0.35, 1800, 1.0, 'bandpass');
+  }
 }
+
 
 export const sounds = new SoundEffectsService();
 

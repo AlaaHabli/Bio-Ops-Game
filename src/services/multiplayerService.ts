@@ -31,6 +31,8 @@ export interface LiveArenaPlayer {
   shotSeq: number;
   grenadeSeq: number;
   isCrouched?: boolean;
+  vx?: number;
+  vz?: number;
   lastHitByName?: string;
   lastHitWeapon?: string;
   lastHitDamage?: number;
