@@ -3859,12 +3859,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           let hasLock = false;
           for (let i = 0; i < soldiers.length; i++) {
             const s = soldiers[i];
-            if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+            if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
             const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
             _v2.copy(s.mesh.position);
             _v2.y += bodyYOffset;
             _v2.project(camera);
+            if (_v2.z >= 1 || _v2.z <= -1) continue;
             const bodyNdcX = _v2.x;
             const bodyNdcY = _v2.y;
             const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
@@ -4299,16 +4300,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let mouseEdgeNdcX = 0;
     let isMouseOverCanvas = false;
 
-    // Professional FPS Aiming (Fortnite / Black Ops style):
-    // In Multiplayer: 360-degree camera look keeps crosshair locked at screen center (0, 0)!
-    // In Solo: 100% Unified Aim between Hipfire Crosshair & Tactical Scope Reticle!
+    // Professional FPS Aiming (100% Unified Aim in both Solo and Multiplayer — never locks the aiming reticle!)
     const updateAimPosition = (clientX: number, clientY: number, isRelativeDrag: boolean = false, prevX?: number, prevY?: number) => {
-      if (isMultiplayerDeathmatch) {
-        targetAimPosRef.current.x = 0;
-        targetAimPosRef.current.y = 0;
-        syncCrosshairDom(0, 0);
-        return;
-      }
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
@@ -4506,7 +4499,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       // Moving from center (0) to right (+1) smoothly rotates 0° -> -180° (back via right).
       // When the mouse stops anywhere (including at the left or right extremity), rotation stops immediately!
       targetCameraYawRef.current = -normX * Math.PI;
-      targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.42, -0.75, 0.75);
+      targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.24, -0.55, 0.55);
 
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       updateAimPosition(e.clientX, e.clientY, false);
@@ -5108,12 +5101,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
-          if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
           const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
           _v1.copy(s.mesh.position);
           _v1.y += bodyYOffset;
           _v1.project(camera);
-          if (_v1.z >= 1) continue;
+          if (_v1.z >= 1 || _v1.z <= -1) continue;
           const d = Math.hypot(_v1.x - curAimX, _v1.y - curAimY);
           if (d < closestDist && d > 0.025) {
             closestDist = d;
@@ -7772,7 +7765,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       {/* 3D WebGL Canvas with Dynamic Black Ops Optics Filter */}
       <div
         ref={mountRef}
-        className={`fixed inset-0 w-full h-full cursor-none z-0 transition-all ${
+        className={`fixed inset-0 w-full h-full cursor-crosshair z-0 transition-all ${
           visionMode === 'nvg'
             ? 'filter-nvg'
             : visionMode === 'thermal'
