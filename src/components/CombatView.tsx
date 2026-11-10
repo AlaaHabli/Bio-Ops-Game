@@ -53,6 +53,7 @@ import {
   subscribeToDeathmatchRoom,
   leaveDeathmatchRoom,
   getOrCreateMultiplayerPlayerId,
+  getInitialArenaSpawn,
   LiveArenaPlayer,
   ArenaKillfeedEvent,
   MultiplayerPlayerStatus,
@@ -369,41 +370,43 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
 
-// Solid wall collision detection for multiplayer buildings (Bunker at (0, -22) and Tower at (14, -11))
+// Solid wall & cover collision detection for multiplayer buildings (Bunker at (0, -22), Tower at (14, -11), West Ridge at (-19, -11), and Cover Clusters)
 export function applySolidWallCollisions(
   prevPos: { x: number; z: number },
   nextPos: { x: number; z: number },
   currentElevY: number,
   isRooftop: boolean,
-  isInside: boolean
+  isInside: boolean,
+  barricades?: Array<{ x: number; z: number; hp: number }>
 ): { x: number; z: number; isRooftop: boolean; isInside: boolean; elevationY: number } {
+  const ROOF_ELEV = 6.70;
   let x = nextPos.x;
   let z = nextPos.z;
 
-  const surf = getArenaSurfaceElevation(x, z, isRooftop ? 5.66 : currentElevY);
+  const surf = getArenaSurfaceElevation(x, z, isRooftop ? ROOF_ELEV : currentElevY);
   let elevationY = surf.elevationY;
   let insideBuilding = surf.isInsideBuilding;
   let rooftop = surf.isRooftop;
 
   // 1. Central Bunker (Centered at X=0, Z=-22, width=18.0, depth=10.0 -> X in [-9.0, 9.0], Z in [-27.0, -17.0])
-  const inBunkerArea = x >= -9.6 && x <= 9.6 && z >= -29.2 && z <= -14.8;
+  const inBunkerArea = x >= -9.6 && x <= 9.6 && z >= -29.4 && z <= -14.6;
 
   if (inBunkerArea) {
     if (isRooftop) {
-      // Check if player stepped into the open roof hatch (X in [-7.2, -5.2], Z in [-25.2, -23.4]) to descend internal ladder
-      const inRoofHatch = x >= -7.15 && x <= -5.25 && z >= -25.15 && z <= -23.45;
-      if (inRoofHatch) {
+      // Check if player deliberately stepped into the central-south descent slot of the wide roof hatch (X in [-6.8, -4.4], Z in [-23.8, -21.8])
+      const inRoofDescentSlot = x >= -6.8 && x <= -4.4 && z >= -23.8 && z <= -21.8;
+      if (inRoofDescentSlot) {
         rooftop = false;
         insideBuilding = true;
         elevationY = 0.55;
-        z = -23.1; // Place player cleanly inside the ground floor room in front of the ladder
+        z = -21.3; // Place player cleanly inside the ground floor room at the foot of the internal ladder
         return { x, z, isRooftop: false, isInside: true, elevationY };
       }
 
-      // Keep player standing solidly ON THE ROOF (elevationY = 5.66) inside the rooftop parapet walls
+      // Keep player standing solidly ON THE ROOF (elevationY = 6.70) inside the rooftop parapet walls
       rooftop = true;
       insideBuilding = false;
-      elevationY = 5.66;
+      elevationY = ROOF_ELEV;
       if (x < -8.55) x = -8.55;
       if (x > 8.55) x = 8.55;
       if (z < -26.55) z = -26.55;
@@ -411,18 +414,32 @@ export function applySolidWallCollisions(
       return { x, z, isRooftop: true, isInside: false, elevationY };
     }
 
-    // Check if player inside the room climbed the internal rooftop ladder (X in [-7.2, -5.2], Z in [-25.9, -24.1])
-    if (isInside && x >= -7.2 && x <= -5.2 && z >= -25.95 && z <= -24.15) {
-      rooftop = true;
-      insideBuilding = false;
-      elevationY = 5.66;
-      z = -23.1; // Step out onto the top of the roof slab clear of the hatch opening
-      return { x, z, isRooftop: true, isInside: false, elevationY };
+    // Check if player inside the room is on the wide internal sloped ladder-staircase (X in [-7.6, -3.6], Z in [-25.8, -21.2])
+    const onInternalLadder = isInside && x >= -7.6 && x <= -3.6 && z >= -25.8 && z <= -21.2;
+    if (onInternalLadder) {
+      // Keep player within the solid side rails of the wide internal ladder while climbing
+      if (x < -7.45) x = -7.45;
+      if (x > -3.75) x = -3.75;
+
+      const climbT = THREE.MathUtils.clamp((-21.6 - z) / 3.8, 0, 1);
+      const climbElev = 0.55 + climbT * (ROOF_ELEV - 0.55);
+
+      if (climbT >= 0.84 || z <= -24.8) {
+        // Reached the top of the wide roof opening! Step cleanly onto the solid roof deck so holding W never drops back down
+        rooftop = true;
+        insideBuilding = false;
+        elevationY = ROOF_ELEV;
+        x = Math.max(-3.1, x); // Nudge onto the solid East roof deck clear of the hatch opening
+        z = Math.max(-25.8, Math.min(-24.2, z));
+        return { x, z, isRooftop: true, isInside: false, elevationY };
+      }
+
+      return { x, z, isRooftop: false, isInside: true, elevationY: climbElev };
     }
 
-    // Doorway & Entrance Staircase corridors (South stairs: Z in [-17.4, -14.8], North stairs: Z in [-29.2, -26.6], |X| <= 1.85)
-    const inSouthStairDoor = Math.abs(x) <= 1.82 && z >= -17.55 && z <= -14.8;
-    const inNorthStairDoor = Math.abs(x) <= 1.82 && z >= -29.2 && z <= -26.45;
+    // Doorway & Entrance Staircase corridors (South stairs: Z in [-17.55, -14.6], North stairs: Z in [-29.4, -26.45], |X| <= 1.90)
+    const inSouthStairDoor = Math.abs(x) <= 1.90 && z >= -17.55 && z <= -14.6;
+    const inNorthStairDoor = Math.abs(x) <= 1.90 && z >= -29.4 && z <= -26.45;
 
     if (inSouthStairDoor || inNorthStairDoor) {
       const enteredRoom = z >= -26.6 && z <= -17.4;
@@ -440,22 +457,18 @@ export function applySolidWallCollisions(
 
       if (x < -8.45) x = -8.45;
       if (x > 8.45) x = 8.45;
-      if (z > -17.45 && Math.abs(x) > 1.78) z = -17.45;
-      if (z < -26.55 && Math.abs(x) > 1.78) z = -26.55;
+      if (z > -17.45 && Math.abs(x) > 1.85) z = -17.45;
+      if (z < -26.55 && Math.abs(x) > 1.85) z = -26.55;
 
-      // Solid interior partition wall at X = 0 (central doorway open at Z in [-24.0, -20.0])
-      if (Math.abs(x) < 0.42 && (z < -24.0 || z > -20.0)) {
-        x = prevPos.x < 0 ? -0.45 : 0.45;
-      }
       return { x, z, isRooftop: false, isInside: true, elevationY };
     } else {
       // Outside the building: Solid exterior walls prevent ghosting through walls from outside!
       insideBuilding = false;
       rooftop = false;
       if (x > -9.45 && x < 9.45 && z > -27.45 && z < -16.55) {
-        if (prevPos.z >= -16.55 && Math.abs(x) > 1.78) {
+        if (prevPos.z >= -16.55 && Math.abs(x) > 1.85) {
           z = -16.52;
-        } else if (prevPos.z <= -27.45 && Math.abs(x) > 1.78) {
+        } else if (prevPos.z <= -27.45 && Math.abs(x) > 1.85) {
           z = -27.48;
         } else if (prevPos.x <= -9.0) {
           x = -9.48;
@@ -478,14 +491,32 @@ export function applySolidWallCollisions(
       if (x < 11.85) x = 11.85;
       if (x > 16.15) x = 16.15;
       if (z < -13.15) z = -13.15;
-      if (z > -8.85 && Math.abs(x - 14.0) > 1.1) z = -8.85;
+      if (z > -8.85 && Math.abs(x - 14.0) > 1.15) z = -8.85;
       return { x, z, isRooftop: surf.elevationY >= 4.5, isInside: false, elevationY };
     } else {
       const distTower = Math.hypot(x - 14.0, z - (-11.0));
-      if (distTower < 2.55 && (z < -9.2 || Math.abs(x - 14.0) > 1.1)) {
+      if (distTower < 2.65 && (z < -9.1 || Math.abs(x - 14.0) > 1.15)) {
         const angle = Math.atan2(z - (-11.0), x - 14.0);
         x = 14.0 + Math.cos(angle) * 2.75;
         z = -11.0 + Math.sin(angle) * 2.75;
+      }
+    }
+  }
+
+  // 3. Solid collision against intact 3D Anatomical Cover Clusters on the ground floor
+  if (barricades && elevationY < 1.2) {
+    for (let i = 0; i < barricades.length; i++) {
+      const b = barricades[i];
+      if (b.hp <= 0) continue;
+      const dx = x - b.x;
+      const dz = z - b.z;
+      // Cover clusters are ~2.8m wide (X) by ~1.3m deep (Z)
+      if (Math.abs(dx) < 1.55 && Math.abs(dz) < 0.85) {
+        if (Math.abs(prevPos.z - b.z) >= 0.80) {
+          z = b.z + (prevPos.z >= b.z ? 0.86 : -0.86);
+        } else {
+          x = b.x + (prevPos.x >= b.x ? 1.56 : -1.56);
+        }
       }
     }
   }
@@ -574,9 +605,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const playerIsRooftopRef = useRef<boolean>(false);
   const playerIsInsideBuildingRef = useRef<boolean>(false);
 
-  // 360-Degree Free Camera Rotation & Aiming (No clamped field of view constraint)
+  // 360-Degree Controlled Camera Rotation & Aiming (Smoothly follows mouse/touch without dizzying auto-spin)
   const cameraYawRef = useRef<number>(0);
   const cameraPitchRef = useRef<number>(0);
+  const targetCameraYawRef = useRef<number>(0);
+  const targetCameraPitchRef = useRef<number>(0);
 
   // Helicopter Supply Drop & Super Ability System State
   // Drop interval: Every 15 seconds into death ground randomly
@@ -1004,7 +1037,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const lastHitmarkerUiTimeRef = useRef<number>(0);
 
   // Mutable Game State in Refs (ensures WebGL never unmounts on state updates!)
-  const playerPosRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
+  // In Multiplayer Mode, initialize immediately to the player's deterministic safe courtyard spawn so there is ZERO spawn teleportation!
+  const playerPosRef = useRef<{ x: number; z: number }>(
+    isMultiplayerDeathmatch ? getInitialArenaSpawn(localMpPlayerIdRef.current) : { x: 0, z: 0 }
+  );
   const moveInputRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
   const keysDownRef = useRef<Record<string, boolean>>({});
   const currentWeaponRef = useRef<Weapon>(initialWeapon);
@@ -1388,24 +1424,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const prof = loadStudentProfile();
     const myId = localMpPlayerIdRef.current;
 
-      joinDeathmatchRoom(multiplayerRoomCode, prof, currentWeaponRef.current.id, mpStatusRef.current).then(
-        ({ initialPlayer }) => {
-          playerPosRef.current.x = Math.max(-28.0, Math.min(28.0, initialPlayer.x));
-          playerPosRef.current.z = Math.max(-42.0, Math.min(10.0, initialPlayer.z));
-        }
-      );
+    // Pass current playerPosRef coordinates so room registration uses the exact Frame-0 spawn position without teleporting the player!
+    void joinDeathmatchRoom(
+      multiplayerRoomCode,
+      prof,
+      currentWeaponRef.current.id,
+      mpStatusRef.current,
+      playerPosRef.current
+    );
 
-      const unsub = subscribeToDeathmatchRoom(
-        multiplayerRoomCode,
-        myId,
-        (players) => {
-          mpOnlinePlayersRef.current = players;
-          const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
-          if (nextKey !== prevMpPlayersKeyRef.current) {
-            prevMpPlayersKeyRef.current = nextKey;
-            setMpOnlinePlayers(players);
-          }
-        },
+    const unsub = subscribeToDeathmatchRoom(
+      multiplayerRoomCode,
+      myId,
+      (players) => {
+        mpOnlinePlayersRef.current = players;
+        const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
+        if (nextKey !== prevMpPlayersKeyRef.current) {
+          prevMpPlayersKeyRef.current = nextKey;
+          setMpOnlinePlayers(players);
+        }
+      },
       (hit) => {
         if (mpStatusRef.current !== 'active') return;
         const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
@@ -1449,7 +1487,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         isCrouched: isCrouchingRef.current,
         lastPing: Date.now(),
       });
-    }, 120);
+    }, 220);
 
     return () => {
       clearInterval(syncTimer);
@@ -2232,18 +2270,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
       });
     } else {
       // 10 Destructible Anatomical Cover Structures across the wide 20-player Lung & Alveoli Landscape
-      // (Variants: 0 = Alveolar Coral Septum Wall, 1 = Hyaline Cartilage Ridge, 2 = Coagulated Fibrin-Platelet Mound)
+      // Anchored at y = -1.18 so their base pads (-0.54m) sit 100% flush on the -1.72 arena ground plane (and outside all buildings!)
       const anatomicalCoverConfigs = [
-        { x: -13.5, y: -0.92, z: -4.2 },
-        { x: 0, y: -0.92, z: -3.8 },
-        { x: 13.5, y: -0.92, z: -4.2 },
-        { x: -22.5, y: -0.92, z: -13.5 },
-        { x: -7.5, y: -0.92, z: -12.5 },
-        { x: 7.5, y: -0.92, z: -12.5 },
-        { x: 22.5, y: -0.92, z: -13.5 },
-        { x: -15.5, y: -0.92, z: -24.0 },
-        { x: 0, y: -0.92, z: -23.0 },
-        { x: 15.5, y: -0.92, z: -24.0 },
+        { x: -13.5, y: -1.18, z: -4.2 },
+        { x: 0, y: -1.18, z: -3.8 },
+        { x: 13.5, y: -1.18, z: -4.2 },
+        { x: -22.5, y: -1.18, z: -13.5 },
+        { x: -7.5, y: -1.18, z: -12.5 },
+        { x: 7.5, y: -1.18, z: -12.5 },
+        { x: 22.5, y: -1.18, z: -13.5 },
+        { x: -15.5, y: -1.18, z: -24.0 },
+        { x: 0, y: -1.18, z: -10.5 },
+        { x: 15.5, y: -1.18, z: -24.0 },
       ];
       anatomicalCoverConfigs.forEach((cfg, idx) => {
         const bioCover = createAnatomicalCoverCluster(idx);
@@ -4369,12 +4407,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const prevY = lastFiringTouchPosRef.current.y;
           lastFiringTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
           if (isMultiplayerDeathmatch) {
-            const touchSens = isScopedRef.current ? 0.0042 : 0.0078;
-            cameraYawRef.current -= (touch.clientX - prevX) * touchSens;
-            cameraPitchRef.current = THREE.MathUtils.clamp(
-              cameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.75),
-              -1.15,
-              1.15
+            const touchSens = isScopedRef.current ? 0.0042 : 0.0075;
+            targetCameraYawRef.current -= (touch.clientX - prevX) * touchSens;
+            targetCameraYawRef.current = Math.atan2(
+              Math.sin(targetCameraYawRef.current),
+              Math.cos(targetCameraYawRef.current)
+            );
+            targetCameraPitchRef.current = THREE.MathUtils.clamp(
+              targetCameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.75),
+              -0.85,
+              0.85
             );
           }
           updateAimPosition(touch.clientX, touch.clientY, true, prevX, prevY);
@@ -4428,14 +4470,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
         audioSuspendedRef.current = false;
         setAudioSuspended(false);
       }
+      // Never lock/hide the OS mouse cursor in Solo or Multiplayer so the player never has to press ESC to see or use their mouse!
+      if (document.pointerLockElement) {
+        document.exitPointerLock?.();
+      }
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       if (e.button === 2) {
         e.preventDefault();
         handleToggleScope();
         return;
-      }
-      if (document.pointerLockElement !== container) {
-        container.requestPointerLock?.();
       }
       isPointerDownRef.current = true;
       startHoldShootScopeTimer();
@@ -4446,36 +4489,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      isMouseOverCanvas = true;
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
       const w = cachedRect.width || window.innerWidth;
-      mouseEdgeNdcX = THREE.MathUtils.clamp(((e.clientX - cachedRect.left) / w) * 2 - 1, -1, 1);
+      const h = cachedRect.height || window.innerHeight;
+      isMouseOverCanvas = true;
 
-      const sens = isScopedRef.current ? 0.0022 : 0.0038;
-      const isLocked = document.pointerLockElement === container;
+      // Normalized mouse position across the viewport (-1 = left extremity, 0 = center, +1 = right extremity)
+      const normX = THREE.MathUtils.clamp(((e.clientX - cachedRect.left) / w) * 2 - 1, -1, 1);
+      const normY = THREE.MathUtils.clamp(-((e.clientY - cachedRect.top) / h) * 2 + 1, -1, 1);
+      mouseEdgeNdcX = normX;
 
-      if (isLocked) {
-        cameraYawRef.current -= e.movementX * sens;
-        cameraPitchRef.current = THREE.MathUtils.clamp(
-          cameraPitchRef.current - e.movementY * (sens * 0.75),
-          -1.18,
-          1.18
-        );
-      } else {
-        const fallbackDx = lastMouseClientPosRef.current ? e.clientX - lastMouseClientPosRef.current.x : 0;
-        const fallbackDy = lastMouseClientPosRef.current ? e.clientY - lastMouseClientPosRef.current.y : 0;
-        const dx = typeof e.movementX === 'number' && e.movementX !== 0 ? e.movementX : fallbackDx;
-        const dy = typeof e.movementY === 'number' && e.movementY !== 0 ? e.movementY : fallbackDy;
-
-        cameraYawRef.current -= dx * (sens * 1.35);
-        cameraPitchRef.current = THREE.MathUtils.clamp(
-          cameraPitchRef.current - dy * (sens * 0.85),
-          -1.18,
-          1.18
-        );
-      }
+      // Controlled, non-spinning 360° circular mapping:
+      // Moving from center (0) to left (-1) smoothly rotates 0° -> +180° (back via left).
+      // Moving from center (0) to right (+1) smoothly rotates 0° -> -180° (back via right).
+      // When the mouse stops anywhere (including at the left or right extremity), rotation stops immediately!
+      targetCameraYawRef.current = -normX * Math.PI;
+      targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.42, -0.75, 0.75);
 
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       updateAimPosition(e.clientX, e.clientY, false);
@@ -4483,7 +4514,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     const handleMouseLeave = () => {
       isMouseOverCanvas = false;
-      mouseEdgeNdcX = 0;
     };
 
     const handleMouseUp = (e: MouseEvent) => {
@@ -4586,7 +4616,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     window.addEventListener('keyup', handleKeyUp);
     container.addEventListener('contextmenu', handleContextMenu);
     container.addEventListener('mousedown', handleMouseDown);
-    container.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mousemove', handleMouseMove);
     container.addEventListener('mouseleave', handleMouseLeave);
     window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('wheel', handleWheel, { passive: false });
@@ -4753,20 +4783,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const moveSpeed = baseMoveSpeed * postureSpeedMult * speedMultSuper;
 
       if (isMultiplayerDeathmatch) {
-        // Continuous 360-degree loop rotation when cursor is held near the left or right edge of the viewport (works seamlessly even without Pointer Lock!)
-        if (document.pointerLockElement !== container && isMouseOverCanvas) {
-          if (mouseEdgeNdcX < -0.52) {
-            const leftEdgeIntensity = Math.min(1, (-mouseEdgeNdcX - 0.52) / 0.44);
-            cameraYawRef.current += (1.6 + leftEdgeIntensity * 2.4) * delta;
-          } else if (mouseEdgeNdcX > 0.52) {
-            const rightEdgeIntensity = Math.min(1, (mouseEdgeNdcX - 0.52) / 0.44);
-            cameraYawRef.current -= (1.6 + rightEdgeIntensity * 2.4) * delta;
-          }
-        }
-
-        // Normalize cameraYawRef into a clean 360-degree loop (-PI to +PI)
-        if (cameraYawRef.current > Math.PI) cameraYawRef.current -= Math.PI * 2;
-        if (cameraYawRef.current < -Math.PI) cameraYawRef.current += Math.PI * 2;
+        // Smooth, controlled 360-degree rotation towards targetCameraYawRef (never keeps spinning when mouse stops!)
+        cameraYawRef.current = THREE.MathUtils.damp(
+          cameraYawRef.current,
+          targetCameraYawRef.current,
+          12,
+          delta
+        );
+        cameraPitchRef.current = THREE.MathUtils.damp(
+          cameraPitchRef.current,
+          targetCameraPitchRef.current,
+          14,
+          delta
+        );
 
         const yaw = cameraYawRef.current;
         const cosY = Math.cos(yaw);
@@ -4786,7 +4815,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           nextPos,
           playerElevationYRef.current,
           playerIsRooftopRef.current,
-          playerIsInsideBuildingRef.current
+          playerIsInsideBuildingRef.current,
+          barricadesRef.current
         );
         playerPosRef.current.x = wallRes.x;
         playerPosRef.current.z = wallRes.z;
@@ -7714,7 +7744,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       container.removeEventListener('contextmenu', handleContextMenu);
       container.removeEventListener('mousedown', handleMouseDown);
-      container.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mousemove', handleMouseMove);
+      container.removeEventListener('mouseleave', handleMouseLeave);
       window.removeEventListener('mouseup', handleMouseUp);
       container.removeEventListener('wheel', handleWheel);
 

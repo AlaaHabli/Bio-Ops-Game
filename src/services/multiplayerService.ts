@@ -127,11 +127,30 @@ function getBus(roomCode: string): RoomBroadcastBus {
   return bus;
 }
 
+export function getInitialArenaSpawn(playerId: string): { x: number; z: number } {
+  let hash = 2166136261;
+  for (let i = 0; i < playerId.length; i++) {
+    hash ^= playerId.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const normX = ((hash >>> 0) % 1000) / 1000;
+  const normZ = (((hash >>> 10) & 0x3ff) % 1000) / 1000;
+  // Safe open fighting courtyard in South sector (clear of Central Bunker at Z=-22, Watchtower at X=14, and Cover Clusters)
+  const rawX = (normX - 0.5) * 18.0;
+  const x = Math.abs(rawX) < 2.2 ? (rawX < 0 ? -3.4 : 3.4) : rawX;
+  const z = -9.2 + normZ * 3.8; // Z in [-9.2, -5.4]
+  return {
+    x: Number(x.toFixed(2)),
+    z: Number(z.toFixed(2)),
+  };
+}
+
 export async function joinDeathmatchRoom(
   rawRoomCode: string,
   profile: StudentProfile | null,
   weaponId: string,
-  initialStatus: MultiplayerPlayerStatus = 'active'
+  initialStatus: MultiplayerPlayerStatus = 'active',
+  spawnCoords?: { x: number; z: number }
 ): Promise<{ roomCode: string; playerId: string; initialPlayer: LiveArenaPlayer }> {
   const roomCode = sanitizeRoomCode(rawRoomCode);
   const playerId = getOrCreateMultiplayerPlayerId();
@@ -139,17 +158,15 @@ export async function joinDeathmatchRoom(
   const className = (profile?.className || 'Science Unit').trim().slice(0, 32) || 'Science Unit';
   const now = Date.now();
 
-  // Randomize initial spawn coordinates across the wide 20-player Alveoli Arena so joining students never stack
-  const spawnX = Number(((Math.random() - 0.5) * 18.0).toFixed(2));
-  const spawnZ = Number(((Math.random() - 0.5) * 10.0).toFixed(2));
+  const safeSpawn = spawnCoords || getInitialArenaSpawn(playerId);
 
   const initialPlayer: LiveArenaPlayer = {
     playerId,
     studentName,
     className,
-    x: spawnX,
+    x: safeSpawn.x,
     y: 0,
-    z: spawnZ,
+    z: safeSpawn.z,
     aimX: 0,
     aimY: 0,
     weaponId,
@@ -169,36 +186,39 @@ export async function joinDeathmatchRoom(
   getBus(roomCode).post({ type: 'PLAYER_STATE', player: initialPlayer });
   getBus(roomCode).post({ type: 'REQUEST_ROOM_SYNC', requesterId: playerId });
 
-  try {
-    const roomRef = doc(db, 'multiplayer_rooms', roomCode);
-    await setDoc(
-      roomRef,
-      {
-        roomCode,
-        hostName: studentName,
-        stage: 'Open-World Deathmatch',
-        status: 'combat',
-        currentRound: 1,
-        totalRounds: 99,
-        lastUpdated: now,
-        updatedAtServer: serverTimestamp(),
-      },
-      { merge: true }
-    );
+  // Perform cloud Firestore registration asynchronously so local spawn is instantaneous with zero teleportation
+  void (async () => {
+    try {
+      const roomRef = doc(db, 'multiplayer_rooms', roomCode);
+      await setDoc(
+        roomRef,
+        {
+          roomCode,
+          hostName: studentName,
+          stage: 'Open-World Deathmatch',
+          status: 'combat',
+          currentRound: 1,
+          totalRounds: 99,
+          lastUpdated: now,
+          updatedAtServer: serverTimestamp(),
+        },
+        { merge: true }
+      );
 
-    const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerId);
-    await setDoc(playerRef, initialPlayer, { merge: true });
-  } catch (err) {
-    console.warn('Multiplayer Firestore join fallback (using local bus):', err);
-  }
+      const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerId);
+      await setDoc(playerRef, initialPlayer, { merge: true });
+    } catch {
+      // Fallback to local BroadcastChannel bus silently if offline
+    }
+  })();
 
   return { roomCode, playerId, initialPlayer };
 }
 
 let lastFirestoreSyncAt = 0;
-let lastFirestoreShotSeq = -1;
 let lastFirestoreStatus = '';
 let lastFirestoreKills = -1;
+let isFirestoreWriteInFlight = false;
 
 export async function syncLocalPlayerState(
   rawRoomCode: string,
@@ -214,25 +234,30 @@ export async function syncLocalPlayerState(
   // Immediate 0ms broadcast to local tabs
   getBus(roomCode).post({ type: 'PLAYER_STATE', player: updated });
 
-  // Throttle cloud Firestore writes to ~500ms unless shotSeq, status, or kills changed (prevents Firestore rate-limit stalls!)
-  const importantChange =
-    playerState.shotSeq !== lastFirestoreShotSeq ||
+  // Prevent concurrent overlapping writes on Firestore WebChannel stream
+  if (isFirestoreWriteInFlight) {
+    return;
+  }
+
+  const criticalStateChange =
     playerState.status !== lastFirestoreStatus ||
     playerState.kills !== lastFirestoreKills;
 
-  if (!importantChange && now - lastFirestoreSyncAt < 500) {
+  if (!criticalStateChange && now - lastFirestoreSyncAt < 650) {
     return;
   }
   lastFirestoreSyncAt = now;
-  lastFirestoreShotSeq = playerState.shotSeq;
   lastFirestoreStatus = playerState.status;
   lastFirestoreKills = playerState.kills;
+  isFirestoreWriteInFlight = true;
 
   try {
     const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerState.playerId);
     await setDoc(playerRef, updated, { merge: true });
   } catch {
     // Offline or transient network error — ignore so gameplay never stutters
+  } finally {
+    isFirestoreWriteInFlight = false;
   }
 }
 
