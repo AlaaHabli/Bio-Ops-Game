@@ -164,7 +164,7 @@ export class ClientPredictionEngine {
       serverState.aimY - ackCmd.aimY
     );
 
-    if (serverAckDivergence < 0.04 && serverAimDivergence < 0.015) {
+    if (serverAckDivergence < 0.08 && serverAimDivergence < 0.025) {
       // Prediction matched authoritative server state — zero correction needed
       return { snapRequired: false, x: currentLocal.x, z: currentLocal.z };
     }
@@ -172,12 +172,19 @@ export class ClientPredictionEngine {
     // Replay all unacknowledged input commands on top of the authoritative server state
     let simX = serverState.x;
     let simZ = serverState.z;
+    let prevPredX = ackCmd.predictedX;
+    let prevPredZ = ackCmd.predictedZ;
     let simAimX = serverState.aimX;
     let simAimY = serverState.aimY;
     let simYaw = serverState.yaw ?? currentLocal.yaw;
 
     for (let i = 0; i < this.pendingInputs.length; i++) {
       const cmd = this.pendingInputs[i];
+      const stepDx = cmd.predictedX - prevPredX;
+      const stepDz = cmd.predictedZ - prevPredZ;
+      prevPredX = cmd.predictedX;
+      prevPredZ = cmd.predictedZ;
+
       if (stepSimulator) {
         const next = stepSimulator(
           simX,
@@ -190,8 +197,8 @@ export class ClientPredictionEngine {
         simX = next.x;
         simZ = next.z;
       } else {
-        simX += cmd.worldMoveX * cmd.moveSpeed * cmd.dt;
-        simZ += cmd.worldMoveZ * cmd.moveSpeed * cmd.dt;
+        simX += stepDx;
+        simZ += stepDz;
       }
       simAimX = cmd.aimX;
       simAimY = cmd.aimY;
@@ -202,27 +209,27 @@ export class ClientPredictionEngine {
     const errZ = simZ - currentLocal.z;
     const posErrorMag = Math.hypot(errX, errZ);
 
-    if (posErrorMag > 3.2) {
+    if (posErrorMag > 3.5) {
       // Hard snap only on extreme desync / teleport boundary
       this.corrX = 0;
       this.corrZ = 0;
       return { snapRequired: true, x: simX, z: simZ };
     }
 
-    if (posErrorMag >= 0.045) {
+    if (posErrorMag >= 0.06) {
       this.corrX = errX;
       this.corrZ = errZ;
     }
 
     const errAimX = simAimX - currentLocal.aimX;
     const errAimY = simAimY - currentLocal.aimY;
-    if (Math.hypot(errAimX, errAimY) >= 0.02) {
+    if (Math.hypot(errAimX, errAimY) >= 0.03) {
       this.corrAimX = errAimX * 0.5;
       this.corrAimY = errAimY * 0.5;
     }
 
-    const errYaw = simYaw - currentLocal.yaw;
-    if (Math.abs(errYaw) >= 0.02) {
+    const errYaw = Math.atan2(Math.sin(simYaw - currentLocal.yaw), Math.cos(simYaw - currentLocal.yaw));
+    if (Math.abs(errYaw) >= 0.03) {
       this.corrYaw = errYaw * 0.5;
     }
 
@@ -260,14 +267,15 @@ export class ClientPredictionEngine {
 }
 
 /**
- * Predicts a remote player's current world-space position and aiming angles
- * using sub-frame velocity + aim-rate extrapolation from the latest snapshot.
+ * Predicts a remote player's current world-space position (X, Y, Z) and aiming angles
+ * using sub-frame velocity + aim-rate extrapolation in the shared 1:1 arena coordinate frame.
  */
 export function predictRemoteEntityState(
   rp: LiveArenaPlayer,
   nowPerf: number
 ): {
   worldX: number;
+  worldY: number;
   worldZ: number;
   aimX: number;
   aimY: number;
@@ -282,12 +290,13 @@ export function predictRemoteEntityState(
   const effAge = packetAgeSec * Math.max(0.35, horizonDamp);
 
   const worldX = rp.x + (rp.vx || 0) * effAge;
+  const worldY = typeof rp.y === 'number' && Number.isFinite(rp.y) ? rp.y : 0;
   const worldZ = rp.z + (rp.vz || 0) * effAge;
   const aimX = Math.max(-1, Math.min(1, (rp.aimX || 0) + (rp.vAimX || 0) * effAge * 0.5));
   const aimY = Math.max(-1, Math.min(1, (rp.aimY || 0) + (rp.vAimY || 0) * effAge * 0.5));
   const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.6;
 
-  return { worldX, worldZ, aimX, aimY, yaw };
+  return { worldX, worldY, worldZ, aimX, aimY, yaw };
 }
 
 export interface ArenaKillfeedEvent {

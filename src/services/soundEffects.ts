@@ -86,7 +86,7 @@ class SoundEffectsService {
   // Force-unlock and recover audio hardware on iOS Safari, Android Chrome, and Desktop (O(1) no-op once running!)
   public unlockAudio(): void {
     if (typeof window === 'undefined') return;
-    if (this.isUnlocked && this.htmlAudioPrimed && this.ctx && (this.ctx.state as string) === 'running') {
+    if (this.ctx && (this.ctx.state as string) === 'running') {
       return;
     }
     this.forcePlaybackAudioSession();
@@ -148,26 +148,26 @@ class SoundEffectsService {
       if (!AudioCtx) return;
       this.ctx = new AudioCtx();
 
-      // Master hardware limiter compressor so overlapping explosions, gunshots, VOIP & bullet races never clip or mute
+      // Master hardware limiter compressor (clean peak protection, eliminates clipping, ducking, and stuttering!)
       const compressor = this.ctx.createDynamicsCompressor();
-      compressor.threshold.value = -5;
-      compressor.knee.value = 10;
-      compressor.ratio.value = 3.5;
-      compressor.attack.value = 0.002;
-      compressor.release.value = 0.12;
+      compressor.threshold.value = -1.5;
+      compressor.knee.value = 6;
+      compressor.ratio.value = 16;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.04;
       compressor.connect(this.ctx.destination);
 
-      // Phone Speaker Mid-Presence Boost (1.3kHz peaking boost so small phone speakers project gunshots & SFX loudly)
+      // Clean Presence filter (gentle +1.0dB boost instead of harsh +5.5dB)
       const phonePresenceBoost = this.ctx.createBiquadFilter();
       phonePresenceBoost.type = 'peaking';
       phonePresenceBoost.frequency.value = 1350;
       phonePresenceBoost.Q.value = 0.9;
-      phonePresenceBoost.gain.value = 5.5;
+      phonePresenceBoost.gain.value = 1.0;
       phonePresenceBoost.connect(compressor);
 
-      // Master gain node (boosted for phone speaker clarity)
+      // Master gain node (balanced to 0.85 so multiple simultaneous sounds never clip or duck)
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 1.45;
+      this.masterGain.gain.value = 0.85;
       this.masterGain.connect(phonePresenceBoost);
 
       // Waveshaper curve for punchy weapon saturation
@@ -225,16 +225,14 @@ class SoundEffectsService {
 
   /**
    * Cross-platform Tactical Haptic Feedback:
-   * 1. Triggers hardware vibration motor via navigator.vibrate(pattern) on Android / supported browsers.
-   * 2. Synthesizes a 48Hz sub-bass tactile speaker thump on iOS / Safari where navigator.vibrate is blocked,
-   *    so players physically feel recoil, hits, kills, and explosions in their hands.
+   * Triggers hardware vibration motor via navigator.vibrate(pattern) on supported devices.
    */
   public triggerHaptic(
     pattern: number | number[] = 18,
-    intensity: 'light' | 'medium' | 'heavy' | number = 'medium'
+    _intensity: 'light' | 'medium' | 'heavy' | number = 'medium'
   ): void {
     const nowMs = performance.now();
-    if (nowMs - this.lastHapticTime < 220) return;
+    if (nowMs - this.lastHapticTime < 180) return;
     this.lastHapticTime = nowMs;
 
     try {
@@ -245,26 +243,9 @@ class SoundEffectsService {
     } catch {
       // ignore if blocked
     }
-
-    if (!this.enabled || !this.ctx || !this.masterGain) return;
-    if ((this.ctx.state as string) !== 'running') return;
-
-    const level: 'light' | 'medium' | 'heavy' =
-      typeof intensity === 'number'
-        ? intensity >= 0.65
-          ? 'heavy'
-          : intensity >= 0.38
-          ? 'medium'
-          : 'light'
-        : intensity;
-
-    const t = this.ctx.currentTime + 0.001;
-    const dur = level === 'heavy' ? 0.065 : level === 'medium' ? 0.038 : 0.022;
-    const peak = level === 'heavy' ? 0.55 : level === 'medium' ? 0.32 : 0.18;
-    this.playTone('sine', level === 'heavy' ? 58 : 48, 26, t, dur, peak, 'exp');
   }
 
-  // Zero-leak oscillator + gain tone helper (disconnects both osc and gain from masterGain on ended!)
+  // Zero-leak oscillator + gain tone helper with safe lookahead scheduling (prevents buffer underruns, clicks & stutter!)
   private playTone(
     type: OscillatorType,
     startFreq: number,
@@ -276,19 +257,21 @@ class SoundEffectsService {
   ): void {
     if (!this.ctx || !this.masterGain) return;
     try {
+      const curT = this.ctx.currentTime;
+      const t = Math.max(curT + 0.008, startTime);
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = type;
-      osc.frequency.setValueAtTime(Math.max(1, startFreq), startTime);
+      osc.frequency.setValueAtTime(Math.max(1, startFreq), t);
       if (rampType === 'exp') {
-        osc.frequency.exponentialRampToValueAtTime(Math.max(1, endFreq), startTime + duration);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(1, endFreq), t + duration);
       } else if (rampType === 'linear') {
-        osc.frequency.linearRampToValueAtTime(Math.max(1, endFreq), startTime + duration);
+        osc.frequency.linearRampToValueAtTime(Math.max(1, endFreq), t + duration);
       } else if (endFreq !== startFreq) {
-        osc.frequency.setValueAtTime(Math.max(1, endFreq), startTime + duration * 0.5);
+        osc.frequency.setValueAtTime(Math.max(1, endFreq), t + duration * 0.5);
       }
-      gain.gain.setValueAtTime(Math.max(0.0001, peakGain), startTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      gain.gain.setValueAtTime(Math.max(0.0001, peakGain), t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
       osc.connect(gain);
       gain.connect(this.masterGain);
       osc.onended = () => {
@@ -299,49 +282,54 @@ class SoundEffectsService {
           // ignore
         }
       };
-      osc.start(startTime);
-      osc.stop(startTime + duration + 0.005);
+      osc.start(t);
+      osc.stop(t + duration + 0.01);
     } catch {
       // ignore
     }
   }
 
-  // Play a filtered burst of noise (gunpowder crack, sand impact, wind roar)
+  // Play a filtered burst of noise (gunpowder crack, sand impact, wind roar) with safe scheduling
   private playNoiseBurst(duration: number, volume: number, centerFreq: number, q: number = 1.0, type: BiquadFilterType = 'bandpass'): void {
     if (!this.ctx || !this.masterGain) return;
     const buf = this.getWhiteNoiseBuffer();
     if (!buf) return;
 
-    const noise = this.ctx.createBufferSource();
-    noise.buffer = buf;
-    noise.loop = true;
+    try {
+      const curT = this.ctx.currentTime;
+      const t = curT + 0.008;
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buf;
+      noise.loop = true;
 
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = type;
-    filter.frequency.value = centerFreq;
-    filter.Q.value = q;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = type;
+      filter.frequency.value = centerFreq;
+      filter.Q.value = q;
 
-    const gain = this.ctx.createGain();
-    const t = this.ctx.currentTime + 0.003;
-    gain.gain.setValueAtTime(Math.max(0.0001, volume), t);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(Math.max(0.0001, volume), t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
 
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.masterGain);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
 
-    noise.onended = () => {
-      try {
-        noise.disconnect();
-        filter.disconnect();
-        gain.disconnect();
-      } catch {
-        // ignore
-      }
-    };
+      noise.onended = () => {
+        try {
+          noise.disconnect();
+          filter.disconnect();
+          gain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
 
-    noise.start(t);
-    noise.stop(t + duration + 0.02);
+      noise.start(t);
+      noise.stop(t + duration + 0.01);
+    } catch {
+      // ignore
+    }
   }
 
   // 1. TACTICAL WEAPON FIRING (SCAR, Pump Shotgun, Sniper, Drum MG, Heavy)
@@ -358,57 +346,57 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.003;
+    const t = this.ctx.currentTime + 0.008;
 
     if (category === 'ASSAULT') {
       // SCAR-H 5.56 Bio-Rifle: Loud explosive crack + punchy mid body + crisp bolt action
-      this.playTone('sawtooth', 320, 95, t, 0.09, 0.85, 'exp');
-      this.playTone('triangle', 140, 45, t, 0.11, 0.68, 'exp');
-      this.playNoiseBurst(0.06, 0.9, 2600, 1.2, 'bandpass');
-      this.playTone('triangle', 1300, 400, t + 0.02, 0.03, 0.38, 'exp');
+      this.playTone('sawtooth', 320, 95, t, 0.08, 0.55, 'exp');
+      this.playTone('triangle', 140, 45, t, 0.10, 0.45, 'exp');
+      this.playNoiseBurst(0.05, 0.50, 2600, 1.2, 'bandpass');
+      this.playTone('triangle', 1300, 400, t + 0.015, 0.025, 0.25, 'exp');
     } else if (category === 'SHOTGUN') {
       // Tactical Pump Shotgun: Massive 12-gauge close-range blast + satisfying pump rack
-      this.playTone('sawtooth', 220, 45, t, 0.22, 1.1, 'exp');
-      this.playTone('triangle', 120, 30, t, 0.28, 1.0, 'exp');
-      this.playNoiseBurst(0.18, 1.2, 1600, 0.8, 'lowpass');
+      this.playTone('sawtooth', 220, 45, t, 0.18, 0.70, 'exp');
+      this.playTone('triangle', 120, 30, t, 0.22, 0.65, 'exp');
+      this.playNoiseBurst(0.14, 0.70, 1600, 0.8, 'lowpass');
 
       setTimeout(() => {
         if (!this.ctx || !this.masterGain) return;
-        const t2 = this.ctx.currentTime + 0.002;
-        this.playNoiseBurst(0.04, 0.5, 2200, 2.0, 'bandpass');
-        this.playTone('sine', 950, 450, t2, 0.035, 0.35, 'set');
+        const t2 = this.ctx.currentTime + 0.008;
+        this.playNoiseBurst(0.04, 0.35, 2200, 2.0, 'bandpass');
+        this.playTone('sine', 950, 450, t2, 0.035, 0.25, 'set');
 
         setTimeout(() => {
           if (!this.ctx || !this.masterGain) return;
-          const t3 = this.ctx.currentTime + 0.002;
-          this.playTone('triangle', 650, 1400, t3, 0.035, 0.4, 'set');
+          const t3 = this.ctx.currentTime + 0.008;
+          this.playTone('triangle', 650, 1400, t3, 0.035, 0.28, 'set');
         }, 120);
       }, 160);
     } else if (category === 'SNIPER') {
       // Bolt-Action Heavy Sniper: High-velocity supersonic sonic crack + devastating concussive boom
-      this.playTone('sawtooth', 420, 65, t, 0.32, 1.15, 'exp');
-      this.playTone('triangle', 160, 35, t, 0.45, 1.1, 'exp');
-      this.playNoiseBurst(0.08, 1.3, 4200, 1.8, 'bandpass');
-      this.playNoiseBurst(0.35, 0.7, 950, 1.0, 'lowpass');
+      this.playTone('sawtooth', 420, 65, t, 0.26, 0.75, 'exp');
+      this.playTone('triangle', 160, 35, t, 0.35, 0.70, 'exp');
+      this.playNoiseBurst(0.07, 0.75, 4200, 1.8, 'bandpass');
+      this.playNoiseBurst(0.28, 0.45, 950, 1.0, 'lowpass');
 
       setTimeout(() => {
         if (!this.ctx || !this.masterGain) return;
-        const t2 = this.ctx.currentTime + 0.002;
-        this.playTone('triangle', 1800, 800, t2, 0.06, 0.45, 'set');
+        const t2 = this.ctx.currentTime + 0.008;
+        this.playTone('triangle', 1800, 800, t2, 0.05, 0.35, 'set');
       }, 260);
     } else if (category === 'MACHINE_GUN') {
       // Drum LMG: Rapid heavy mechanical clatter + punchy cyclic cadence
-      this.playTone('sawtooth', 260, 80, t, 0.075, 0.9, 'exp');
-      this.playNoiseBurst(0.05, 0.85, 3400, 1.5, 'bandpass');
-      this.playTone('triangle', 1600, 600, t + 0.015, 0.03, 0.35, 'set');
+      this.playTone('sawtooth', 260, 80, t, 0.065, 0.55, 'exp');
+      this.playNoiseBurst(0.04, 0.50, 3400, 1.5, 'bandpass');
+      this.playTone('triangle', 1600, 600, t + 0.012, 0.025, 0.25, 'set');
     } else {
       // HEAVY Rocket/Detonation
-      this.playTone('triangle', 110, 22, t, 0.55, 1.4, 'exp');
-      this.playNoiseBurst(0.45, 1.3, 1100, 0.7, 'lowpass');
+      this.playTone('triangle', 110, 22, t, 0.45, 0.85, 'exp');
+      this.playNoiseBurst(0.35, 0.80, 1100, 0.7, 'lowpass');
     }
 
     // Supersonic Downrange Bullet Race Zip
-    this.playTone('sine', category === 'SNIPER' ? 3400 : 2550, 420, t + 0.015, 0.08, 0.26, 'exp');
+    this.playTone('sine', category === 'SNIPER' ? 3400 : 2550, 420, t + 0.015, 0.06, 0.18, 'exp');
   }
 
   // 2. KILL CONFIRMATION: Authentic Call of Duty elimination double-chime + tactile thud
@@ -496,9 +484,9 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.002;
-    this.playTone('sawtooth', 1150, 220, t, 0.11, 0.65, 'exp');
-    this.playNoiseBurst(0.08, 0.55, 3400, 2.0, 'bandpass');
+    const t = this.ctx.currentTime + 0.008;
+    this.playTone('sawtooth', 1150, 220, t, 0.09, 0.45, 'exp');
+    this.playNoiseBurst(0.06, 0.40, 3400, 2.0, 'bandpass');
   }
 
   // 6. BACTERIA BATTLE TANK MAIN TURRET CANNON (120mm toxic mortar roar)
@@ -507,14 +495,14 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.003;
-    this.playTone('sawtooth', 160, 28, t, 0.45, 1.3, 'exp');
-    this.playNoiseBurst(0.38, 1.25, 950, 0.8, 'lowpass');
+    const t = this.ctx.currentTime + 0.008;
+    this.playTone('sawtooth', 160, 28, t, 0.36, 0.85, 'exp');
+    this.playNoiseBurst(0.30, 0.80, 950, 0.8, 'lowpass');
 
     setTimeout(() => {
       if (!this.ctx || !this.masterGain) return;
-      const t2 = this.ctx.currentTime + 0.002;
-      this.playTone('triangle', 500, 180, t2, 0.08, 0.5, 'set');
+      const t2 = this.ctx.currentTime + 0.008;
+      this.playTone('triangle', 500, 180, t2, 0.07, 0.35, 'set');
     }, 120);
   }
 
@@ -528,12 +516,12 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.002;
-    this.playTone('triangle', 220, 45, t, 0.09, 0.75, 'exp');
-    this.playNoiseBurst(0.08, 0.6, 1600, 1.2, 'bandpass');
+    const t = this.ctx.currentTime + 0.008;
+    this.playTone('triangle', 220, 45, t, 0.08, 0.55, 'exp');
+    this.playNoiseBurst(0.06, 0.45, 1600, 1.2, 'bandpass');
 
-    if (Math.random() < 0.4) {
-      this.playTone('sine', 2800, 900, t + 0.02, 0.14, 0.35, 'exp');
+    if (Math.random() < 0.35) {
+      this.playTone('sine', 2800, 900, t + 0.02, 0.12, 0.25, 'exp');
     }
   }
 
@@ -543,14 +531,14 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.002;
-    this.playTone('sawtooth', 140, 24, t, 0.55, 1.1, 'exp');
+    const t = this.ctx.currentTime + 0.008;
+    this.playTone('sawtooth', 140, 24, t, 0.45, 0.80, 'exp');
 
     [0.02, 0.09, 0.17, 0.26].forEach((offset, idx) => {
-      this.playTone('square', 920 - idx * 110, 180, t + offset, 0.055, 0.55, 'exp');
+      this.playTone('square', 920 - idx * 110, 180, t + offset, 0.05, 0.40, 'exp');
     });
 
-    this.playNoiseBurst(0.65, 1.0, 1450, 0.9, 'bandpass');
+    this.playNoiseBurst(0.50, 0.75, 1450, 0.9, 'bandpass');
   }
 
   // 8. CALL OF DUTY / BLACK OPS HITMARKER
@@ -558,17 +546,17 @@ class SoundEffectsService {
     this.triggerHaptic(isCritical ? [18, 22, 32] : 14, isCritical ? 'heavy' : 'light');
     if (!this.enabled) return;
     const nowMs = performance.now();
-    if (nowMs - this.lastHitmarkerTime < 45) return;
+    if (nowMs - this.lastHitmarkerTime < 55) return;
     this.lastHitmarkerTime = nowMs;
 
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.002;
+    const t = this.ctx.currentTime + 0.008;
     if (isCritical) {
-      this.playTone('triangle', 1850, 920, t, 0.14, 0.65, 'exp');
+      this.playTone('triangle', 1850, 920, t, 0.10, 0.45, 'exp');
     } else {
-      this.playTone('sine', 1100, 420, t, 0.032, 0.5, 'exp');
+      this.playTone('sine', 1100, 420, t, 0.030, 0.35, 'exp');
     }
   }
 
@@ -576,7 +564,7 @@ class SoundEffectsService {
   public playGrenadeThrow(): void {
     if (!this.enabled) return;
     this.initContext();
-    this.playNoiseBurst(0.14, 0.5, 1800, 1.0, 'bandpass');
+    this.playNoiseBurst(0.14, 0.45, 1800, 1.0, 'bandpass');
   }
 
   // Massive explosion shockwave
@@ -586,9 +574,9 @@ class SoundEffectsService {
     this.initContext();
     if (!this.ctx || !this.masterGain) return;
 
-    const t = this.ctx.currentTime + 0.003;
-    this.playTone('triangle', 95, 18, t, 0.7, 1.5, 'exp');
-    this.playNoiseBurst(0.55, 1.3, 850, 0.6, 'lowpass');
+    const t = this.ctx.currentTime + 0.008;
+    this.playTone('triangle', 95, 18, t, 0.55, 0.95, 'exp');
+    this.playNoiseBurst(0.45, 0.90, 850, 0.6, 'lowpass');
   }
 
   // Realistic Multi-Stage Tactical Reload Sound (Mag Release -> Mag Eject -> Fresh Mag Slap -> Bolt Rack!)
@@ -861,18 +849,18 @@ class SoundEffectsService {
     if (!this.ctx || !this.masterGain) return;
 
     const now = performance.now();
-    if (now - this.lastWhizTime < 120) return;
+    if (now - this.lastWhizTime < 180) return;
     this.lastWhizTime = now;
 
     try {
-      const t = this.ctx.currentTime + 0.002;
-      this.playTone('triangle', isHeavy ? 2200 : 3600, 680, t, 0.03, isHeavy ? 0.55 : 0.42, 'exp');
+      const t = this.ctx.currentTime + 0.008;
+      this.playTone('triangle', isHeavy ? 2200 : 3600, 680, t, 0.03, isHeavy ? 0.38 : 0.28, 'exp');
 
       const startFreq = (isHeavy ? 1850 : 2850) + (Math.random() - 0.5) * 420;
       const endFreq = (isHeavy ? 260 : 440) + (Math.random() - 0.5) * 90;
-      const dur = isHeavy ? 0.16 : 0.11;
-      this.playTone('sine', startFreq, endFreq, t + 0.008, dur, isHeavy ? 0.48 : 0.38, 'exp');
-      this.playNoiseBurst(dur, isHeavy ? 0.5 : 0.36, isHeavy ? 1600 : 2900, 1.8, 'bandpass');
+      const dur = isHeavy ? 0.14 : 0.09;
+      this.playTone('sine', startFreq, endFreq, t + 0.006, dur, isHeavy ? 0.32 : 0.24, 'exp');
+      this.playNoiseBurst(dur, isHeavy ? 0.35 : 0.24, isHeavy ? 1600 : 2900, 1.8, 'bandpass');
     } catch {
       // ignore
     }
