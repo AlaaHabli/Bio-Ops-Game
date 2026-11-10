@@ -52,8 +52,12 @@ import {
   sendPlayerHitEvent,
   subscribeToDeathmatchRoom,
   leaveDeathmatchRoom,
+  kickAfkPlayerFromRoom,
   getOrCreateMultiplayerPlayerId,
   getInitialArenaSpawn,
+  AFK_TIMEOUT_MS,
+  ClientPredictionEngine,
+  predictRemoteEntityState,
   LiveArenaPlayer,
   ArenaKillfeedEvent,
   MultiplayerPlayerStatus,
@@ -580,6 +584,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const localMpPlayerIdRef = useRef<string>(getOrCreateMultiplayerPlayerId());
   const localShotSeqRef = useRef<number>(0);
   const localGrenadeSeqRef = useRef<number>(0);
+  const playerWorldVelRef = useRef<{ vx: number; vz: number }>({ vx: 0, vz: 0 });
+  const pushLocalMpStateNowRef = useRef<(() => void) | null>(null);
+  const predictionEngineRef = useRef<ClientPredictionEngine>(new ClientPredictionEngine());
+  const lastPlayerActivityRef = useRef<number>(Date.now());
+  const afkKickedRef = useRef<boolean>(false);
+  const [afkKickedModal, setAfkKickedModal] = useState<boolean>(false);
+  const [afkWarningSecondsLeft, setAfkWarningSecondsLeft] = useState<number | null>(null);
   const remoteShotSeqProcessedRef = useRef<Record<string, number>>({});
   const prevMpPlayersKeyRef = useRef<string>('');
   const triggerMpEliminatedStateRef = useRef<((killerName?: string, weaponName?: string) => void) | null>(null);
@@ -1325,6 +1336,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
   triggerMpStunFreezeStateRef.current = triggerMpStunFreezeState;
 
   const handleMpAnswerOption = (optIdx: number) => {
+    lastPlayerActivityRef.current = Date.now();
     if (mpSelectedOpt !== null) return;
     const questions = level.questions && level.questions.length > 0 ? level.questions : CURRICULUM_LEVELS[0].questions;
     const q = questions[mpQuestionIdx % questions.length];
@@ -1351,10 +1363,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
         setMpFeedback(null);
         setMpQuestionIdx((prev) => (prev + 1) % questions.length);
 
-        if (nextCorrect >= 3) {
-          // 3 QUESTIONS ANSWERED CORRECTLY -> REVIVE OR UNFREEZE FOR 1 MINUTE OF COMBAT!
+        if (nextCorrect >= 1) {
+          // 1 QUESTION ANSWERED CORRECTLY -> REVIVE OR UNFREEZE FOR 1 MINUTE OF COMBAT!
           sounds.playVictory();
           sounds.triggerHaptic([35, 25, 55], 'heavy');
+          lastPlayerActivityRef.current = Date.now();
           playerHpRef.current = 100;
           setPlayerHp(100);
           currentAmmoRef.current = currentWeaponRef.current.magSize;
@@ -1389,6 +1402,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
             z: playerPosRef.current.z,
             aimX: aimPosRef.current.x,
             aimY: aimPosRef.current.y,
+            yaw: Number(cameraYawRef.current.toFixed(3)),
+            pitch: Number(cameraPitchRef.current.toFixed(3)),
+            inputSeq: predictionEngineRef.current.getCurrentSeq(),
+            lastActivityAt: lastPlayerActivityRef.current,
             weaponId: currentWeaponRef.current.id,
             hp: 100,
             maxHp: 100,
@@ -1418,11 +1435,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
     }
   };
 
-  // Real-Time Online Multiplayer Room Join, Heartbeat & Hit Subscription
+  // Real-Time Online Multiplayer Room Join, Client-Side Prediction & Server Reconciliation, Heartbeat & 1-Min AFK Kick
   useEffect(() => {
     if (!isMultiplayerDeathmatch) return;
     const prof = loadStudentProfile();
+    const cachedStudentName = prof?.name || 'Operative';
+    const cachedClassName = prof?.className || 'Science Unit';
     const myId = localMpPlayerIdRef.current;
+
+    const sessionStartEpoch = Date.now();
+    predictionEngineRef.current.reset();
+    lastPlayerActivityRef.current = sessionStartEpoch;
+    afkKickedRef.current = false;
+    setAfkKickedModal(false);
+    setAfkWarningSecondsLeft(null);
 
     // Pass current playerPosRef coordinates so room registration uses the exact Frame-0 spawn position without teleporting the player!
     void joinDeathmatchRoom(
@@ -1445,6 +1471,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       },
       (hit) => {
+        // Players inside the freezing bio-stasis shield ('stunned') or reviving cannot be damaged or killed!
         if (mpStatusRef.current !== 'active') return;
         const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
         playerHpRef.current = nextHp;
@@ -1458,22 +1485,62 @@ export const CombatView: React.FC<CombatViewProps> = ({
       },
       (kfEvent) => {
         setMpKillfeed((prev) => [kfEvent, ...prev.slice(0, 4)]);
+      },
+      (authoritativeLocal) => {
+        if (afkKickedRef.current) return;
+        const reconcileRes = predictionEngineRef.current.reconcileServerState(
+          authoritativeLocal,
+          {
+            x: playerPosRef.current.x,
+            y: playerElevationYRef.current,
+            z: playerPosRef.current.z,
+            aimX: aimPosRef.current.x,
+            aimY: aimPosRef.current.y,
+            yaw: cameraYawRef.current,
+            pitch: cameraPitchRef.current,
+          },
+          (prevX, prevZ, worldMoveX, worldMoveZ, moveSpeed, dt) => {
+            const nextX = Math.max(-32.0, Math.min(32.0, prevX + worldMoveX * moveSpeed * dt));
+            const nextZ = Math.max(-46.0, Math.min(12.0, prevZ + worldMoveZ * moveSpeed * dt));
+            return { x: nextX, z: nextZ };
+          }
+        );
+        if (reconcileRes.snapRequired) {
+          playerPosRef.current.x = reconcileRes.x;
+          playerPosRef.current.z = reconcileRes.z;
+        }
+      },
+      (_kickedPlayerId, kickedName) => {
+        setMpKillfeed((prev) => [
+          {
+            id: `afk_${Date.now()}_${Math.random()}`,
+            killerName: 'SERVER',
+            victimName: (kickedName || 'OPERATIVE').toUpperCase(),
+            weaponName: 'AFK KICK (1M IDLE)',
+            timestamp: Date.now(),
+          },
+          ...prev.slice(0, 4),
+        ]);
       }
     );
 
-    const syncTimer = setInterval(() => {
-      const curProf = loadStudentProfile();
+    const pushStateNow = () => {
+      if (afkKickedRef.current) return;
       syncLocalPlayerState(multiplayerRoomCode, {
         playerId: myId,
-        studentName: curProf?.name || 'Operative',
-        className: curProf?.className || 'Science Unit',
-        x: Number(playerPosRef.current.x.toFixed(2)),
+        studentName: cachedStudentName,
+        className: cachedClassName,
+        x: Number(playerPosRef.current.x.toFixed(3)),
         y: Number(playerElevationYRef.current.toFixed(2)),
-        z: Number(playerPosRef.current.z.toFixed(2)),
-        vx: Number((moveInputRef.current.x * (isSprintingRef.current ? 7.8 : 4.4)).toFixed(2)),
-        vz: Number((moveInputRef.current.z * (isSprintingRef.current ? 7.8 : 4.4)).toFixed(2)),
-        aimX: Number(aimPosRef.current.x.toFixed(2)),
-        aimY: Number(aimPosRef.current.y.toFixed(2)),
+        z: Number(playerPosRef.current.z.toFixed(3)),
+        vx: Number(playerWorldVelRef.current.vx.toFixed(2)),
+        vz: Number(playerWorldVelRef.current.vz.toFixed(2)),
+        yaw: Number(cameraYawRef.current.toFixed(3)),
+        pitch: Number(cameraPitchRef.current.toFixed(3)),
+        aimX: Number(aimPosRef.current.x.toFixed(3)),
+        aimY: Number(aimPosRef.current.y.toFixed(3)),
+        inputSeq: predictionEngineRef.current.getCurrentSeq(),
+        lastActivityAt: lastPlayerActivityRef.current,
         weaponId: currentWeaponRef.current.id,
         hp: playerHpRef.current,
         maxHp: 100,
@@ -1487,14 +1554,52 @@ export const CombatView: React.FC<CombatViewProps> = ({
         isCrouched: isCrouchingRef.current,
         lastPing: Date.now(),
       });
-    }, 220);
+    };
+
+    pushLocalMpStateNowRef.current = pushStateNow;
+    const syncTimer = setInterval(pushStateNow, 110);
+
+    // 1-Minute (60s) AFK Watchdog: Kicks player out of server if no movement, combat actions, or question solving occurs for 1 minute
+    let afkExitTimeout: ReturnType<typeof setTimeout> | null = null;
+    const afkWatchdogTimer = setInterval(() => {
+      if (afkKickedRef.current) return;
+      const nowEpoch = Date.now();
+      const safeLastActivity =
+        lastPlayerActivityRef.current >= sessionStartEpoch &&
+        lastPlayerActivityRef.current <= nowEpoch + 5_000
+          ? lastPlayerActivityRef.current
+          : sessionStartEpoch;
+      const idleMs = nowEpoch - safeLastActivity;
+      if (idleMs >= AFK_TIMEOUT_MS) {
+        afkKickedRef.current = true;
+        isGamePausedRef.current = true;
+        isPointerDownRef.current = false;
+        keysDownRef.current = {};
+        setAfkWarningSecondsLeft(null);
+        setAfkKickedModal(true);
+        clearInterval(syncTimer);
+        sounds.playCombatAlarm();
+        void kickAfkPlayerFromRoom(multiplayerRoomCode, myId, cachedStudentName);
+        afkExitTimeout = setTimeout(() => {
+          onExitToMenu?.();
+        }, 3200);
+      } else if (idleMs >= 45_000) {
+        const secsLeft = Math.max(1, Math.ceil((AFK_TIMEOUT_MS - idleMs) / 1000));
+        setAfkWarningSecondsLeft((prev) => (prev !== secsLeft ? secsLeft : prev));
+      } else {
+        setAfkWarningSecondsLeft((prev) => (prev !== null ? null : prev));
+      }
+    }, 500);
 
     return () => {
+      pushLocalMpStateNowRef.current = null;
       clearInterval(syncTimer);
+      clearInterval(afkWatchdogTimer);
+      if (afkExitTimeout) clearTimeout(afkExitTimeout);
       unsub();
       leaveDeathmatchRoom(multiplayerRoomCode, myId);
     };
-  }, [isMultiplayerDeathmatch, multiplayerRoomCode]);
+  }, [isMultiplayerDeathmatch, multiplayerRoomCode, onExitToMenu]);
 
   // 60-second combat countdown (Pauses automatically whenever a First-Time Biology Concept modal or MP Revive/Stun Quiz is open!)
   const timeLeftRef = useRef<number>(60);
@@ -1695,6 +1800,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     grenadeCooldownRef.current = 10;
     setGrenadeCooldown(10);
     localGrenadeSeqRef.current += 1;
+    if (isMultiplayerDeathmatch) {
+      pushLocalMpStateNowRef.current?.();
+    }
     sounds.playGrenadeThrow();
     sounds.triggerHaptic([25, 30], 'medium');
 
@@ -1705,11 +1813,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
       sceneRef.current.add(grenadeMesh);
       pool.push(grenadeMesh);
     }
-    const startX = playerPosRef.current.x + 0.2;
-    const startY = -0.2;
-    const startZ = playerPosRef.current.z - 0.8;
+    const startX = playerPosRef.current.x + (isMultiplayerDeathmatch ? 0 : 0.2);
+    const startY = (isMultiplayerDeathmatch ? playerElevationYRef.current : 0) - 0.2;
+    const startZ = playerPosRef.current.z - (isMultiplayerDeathmatch ? 0 : 0.8);
     grenadeMesh.visible = true;
     grenadeMesh.position.set(startX, startY, startZ);
+
+    if (isMultiplayerDeathmatch && cameraRef.current) {
+      const cam = cameraRef.current;
+      cam.updateMatrixWorld();
+      _v1.set(aimPosRef.current.x, aimPosRef.current.y, 0.5).unproject(cam).sub(cam.position).normalize();
+      const throwSpeed = 16.5;
+      activeGrenadesRef.current.push({
+        mesh: grenadeMesh,
+        vx: _v1.x * throwSpeed,
+        vy: Math.max(2.4, _v1.y * throwSpeed + 3.4),
+        vz: _v1.z * throwSpeed,
+        life: 1.35,
+      });
+      return;
+    }
 
     // Find closest enemy/tank/boss near aim direction so the frag lands right in the enemy pack instead of overshooting!
     const aimWorldX = playerPosRef.current.x + aimPosRef.current.x * 4.2;
@@ -1840,17 +1963,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const container = mountRef.current;
     if (!container) return;
 
-    // Detect software GL
-    const isSoftwareGl = (() => {
-      const gl = document.createElement('canvas').getContext('webgl2');
-      if (!gl) return true;
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-      const gpu = String(gl.getParameter(param));
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-    })();
-
     // 1. Scene & Camera
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(organTheme.fogColor, 0.012);
@@ -1866,15 +1978,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
     camera.position.set(0, 0, 0);
     cameraRef.current = camera;
 
-    // 2. WebGL Renderer
+    // 2. WebGL Renderer (Optimized pixelRatio & antialias to eliminate GPU fill-rate frame drops!)
     const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
+      antialias: window.devicePixelRatio <= 1.25,
       powerPreference: 'high-performance',
       alpha: false,
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    const maxPixelRatio = window.innerWidth < 900 ? 1.25 : 1.5;
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, maxPixelRatio));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.15));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.35;
@@ -3735,6 +3846,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       if (isMultiplayerDeathmatch) {
         localShotSeqRef.current += 1;
+        lastPlayerActivityRef.current = Date.now();
       }
 
       if (!isLaserActive) {
@@ -3837,71 +3949,63 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let rawAimX = aimPosRef.current.x;
       let rawAimY = aimPosRef.current.y;
 
-      if (isMultiplayerDeathmatch) {
+      if (isScopedRef.current) {
         hitVector.set(0, 0);
-        rawAimX = 0;
-        rawAimY = 0;
-        raycaster.setFromCamera(hitVector, camera);
       } else {
-        if (isScopedRef.current) {
-          hitVector.set(0, 0);
-        } else {
-          hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
-        }
-
-        rawAimX = hitVector.x;
-        rawAimY = hitVector.y;
-
-        if (autoAimEnabledRef.current && soldiers.length > 0) {
-          let bestDist = 0.36;
-          let lockedBodyNdcX = 0;
-          let lockedBodyNdcY = 0;
-          let hasLock = false;
-          for (let i = 0; i < soldiers.length; i++) {
-            const s = soldiers[i];
-            if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
-
-            const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
-            _v2.copy(s.mesh.position);
-            _v2.y += bodyYOffset;
-            _v2.project(camera);
-            if (_v2.z >= 1 || _v2.z <= -1) continue;
-            const bodyNdcX = _v2.x;
-            const bodyNdcY = _v2.y;
-            const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
-
-            if (dBody < bestDist) {
-              bestDist = dBody;
-              lockedBodyNdcX = bodyNdcX;
-              lockedBodyNdcY = bodyNdcY;
-              hasLock = true;
-            }
-          }
-          if (hasLock) {
-            hitVector.set(
-              THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
-              THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
-            );
-          }
-        }
-
-        raycaster.setFromCamera(hitVector, camera);
+        hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
       }
 
-      // Spawn MuzzleFlash Particle Effect & 3D Pointed Spitzer Bullet Projectile directly at the active weapon barrel position!
+      rawAimX = hitVector.x;
+      rawAimY = hitVector.y;
+
+      if (autoAimEnabledRef.current && soldiers.length > 0) {
+        let bestDist = 0.36;
+        let lockedBodyNdcX = 0;
+        let lockedBodyNdcY = 0;
+        let hasLock = false;
+        for (let i = 0; i < soldiers.length; i++) {
+          const s = soldiers[i];
+          if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+
+          const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
+          _v2.copy(s.mesh.position);
+          _v2.y += bodyYOffset;
+          _v2.project(camera);
+          if (_v2.z >= 1 || _v2.z <= -1) continue;
+          const bodyNdcX = _v2.x;
+          const bodyNdcY = _v2.y;
+          const dBody = Math.hypot(bodyNdcX - hitVector.x, bodyNdcY - hitVector.y);
+
+          if (dBody < bestDist) {
+            bestDist = dBody;
+            lockedBodyNdcX = bodyNdcX;
+            lockedBodyNdcY = bodyNdcY;
+            hasLock = true;
+          }
+        }
+        if (hasLock) {
+          hitVector.set(
+            THREE.MathUtils.lerp(hitVector.x, lockedBodyNdcX, 0.42),
+            THREE.MathUtils.lerp(hitVector.y, lockedBodyNdcY, 0.42)
+          );
+        }
+      }
+
+      raycaster.setFromCamera(hitVector, camera);
+
+      // Spawn MuzzleFlash Particle Effect & 3D Pointed Spitzer Bullet Projectile converging from the barrel directly onto the crosshair point!
       {
         if (weaponMeshRef.current) {
+          weaponMeshRef.current.updateMatrixWorld();
           _v1.set(0, 0.03, -1.24);
           weaponMeshRef.current.localToWorld(_v1);
         } else {
-          _v1.set(
-            playerPosRef.current.x,
-            -0.18,
-            playerPosRef.current.z - 0.85
-          );
+          _v1.copy(camera.position);
         }
-        triggerMuzzleFlash(_v1, raycaster.ray.direction, activeWpn.category);
-        _v2.copy(raycaster.ray.direction).multiplyScalar(42).add(_v1);
+        // Exact 3D point directly under the crosshair ray
+        _v2.copy(raycaster.ray.direction).multiplyScalar(32).add(camera.position);
+        _v3.copy(_v2).sub(_v1).normalize();
+        triggerMuzzleFlash(_v1, _v3, activeWpn.category);
         const tracerColor =
           activeWpn.category === 'SNIPER'
             ? 0xf43f5e
@@ -3916,9 +4020,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         const pSpeed = 62;
         activePlayerTracersRef.current.push({
           mesh: pBullet,
-          vx: raycaster.ray.direction.x * pSpeed,
-          vy: raycaster.ray.direction.y * pSpeed,
-          vz: raycaster.ray.direction.z * pSpeed,
+          vx: _v3.x * pSpeed,
+          vy: _v3.y * pSpeed,
+          vz: _v3.z * pSpeed,
           life: 0.55,
         });
       }
@@ -3936,6 +4040,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       for (let i = soldiers.length - 1; i >= 0; i--) {
         const soldier = soldiers[i];
+        // Players frozen inside the bio-stasis shield cannot be damaged or killed!
+        if (isMultiplayerDeathmatch && soldier.isStunned) continue;
         if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
         const headYOffset = soldier.isRobot
@@ -4022,6 +4128,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (!hitRegistered) {
         for (let i = soldiers.length - 1; i >= 0; i--) {
           const soldier = soldiers[i];
+          if (isMultiplayerDeathmatch && soldier.isStunned) continue;
           if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
           const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
@@ -4078,7 +4185,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         // Spawn Fortnite-Style Floating Damage Number + HEADSHOT! banner (throttled during rapid fire to prevent React VDOM stutter)
-        if (criticalHit || now - lastHitmarkerUiTimeRef.current >= 140) {
+        if (criticalHit || now - lastHitmarkerUiTimeRef.current >= 240) {
           lastHitmarkerUiTimeRef.current = now;
           const markerId = now + Math.random();
           const isArmoredTarget = Boolean(
@@ -4326,6 +4433,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         targetAimPosRef.current.y = y;
       }
 
+      lastPlayerActivityRef.current = Date.now();
       syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
     };
 
@@ -4525,6 +4633,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
         return;
       }
+      lastPlayerActivityRef.current = Date.now();
       keysDownRef.current[e.key.toLowerCase()] = true;
 
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
@@ -4776,9 +4885,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const moveSpeed = baseMoveSpeed * postureSpeedMult * speedMultSuper;
 
       if (isMultiplayerDeathmatch) {
+        if (isMovingNow || isPointerDownRef.current) {
+          lastPlayerActivityRef.current = Date.now();
+        }
+
+        // Consume any smooth server reconciliation corrections for aiming & position
+        const corr = predictionEngineRef.current.consumeFrameCorrection(delta);
+        if (Math.abs(corr.dAimX) > 0 || Math.abs(corr.dAimY) > 0) {
+          targetAimPosRef.current.x = THREE.MathUtils.clamp(targetAimPosRef.current.x + corr.dAimX, -0.94, 0.94);
+          targetAimPosRef.current.y = THREE.MathUtils.clamp(targetAimPosRef.current.y + corr.dAimY, -0.90, 0.90);
+        }
+
         // Smooth, controlled 360-degree rotation towards targetCameraYawRef (never keeps spinning when mouse stops!)
         cameraYawRef.current = THREE.MathUtils.damp(
-          cameraYawRef.current,
+          cameraYawRef.current + corr.dYaw,
           targetCameraYawRef.current,
           12,
           delta
@@ -4799,8 +4919,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         const prevPos = { x: playerPosRef.current.x, z: playerPosRef.current.z };
         const nextPos = {
-          x: playerPosRef.current.x + worldMoveX * moveSpeed * delta,
-          z: playerPosRef.current.z + worldMoveZ * moveSpeed * delta,
+          x: playerPosRef.current.x + worldMoveX * moveSpeed * delta + corr.dx,
+          z: playerPosRef.current.z + worldMoveZ * moveSpeed * delta + corr.dz,
         };
 
         const wallRes = applySolidWallCollisions(
@@ -4813,6 +4933,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         );
         playerPosRef.current.x = wallRes.x;
         playerPosRef.current.z = wallRes.z;
+        const invDt = 1 / Math.max(0.008, delta);
+        playerWorldVelRef.current.vx = (wallRes.x - prevPos.x) * invDt;
+        playerWorldVelRef.current.vz = (wallRes.z - prevPos.z) * invDt;
         playerIsRooftopRef.current = wallRes.isRooftop;
         playerIsInsideBuildingRef.current = wallRes.isInside;
         playerElevationYRef.current = THREE.MathUtils.damp(
@@ -4821,6 +4944,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
           18,
           delta
         );
+
+        // Record client-predicted movement and aiming step in ring buffer for server reconciliation
+        predictionEngineRef.current.recordInputStep({
+          timestamp: nowTime,
+          dt: delta,
+          worldMoveX,
+          worldMoveZ,
+          moveSpeed,
+          aimX: aimPosRef.current.x,
+          aimY: aimPosRef.current.y,
+          yaw: cameraYawRef.current,
+          pitch: cameraPitchRef.current,
+          predictedX: playerPosRef.current.x,
+          predictedY: playerElevationYRef.current,
+          predictedZ: playerPosRef.current.z,
+        });
 
         camera.rotation.order = 'YXZ';
         camera.rotation.y = cameraYawRef.current;
@@ -5101,6 +5240,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
+          if (isMultiplayerDeathmatch && s.isStunned) continue;
           if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
           const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
           _v1.copy(s.mesh.position);
@@ -5209,6 +5349,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           let killCount = 0;
           for (let j = soldiers.length - 1; j >= 0; j--) {
             const s = soldiers[j];
+            if (isMultiplayerDeathmatch && s.isStunned) continue;
             // Use horizontal distance so hovering Bosses (Helicopter/Jet) and tall Tanks take full blast damage
             const horizDist = Math.hypot(s.mesh.position.x - gPos.x, s.mesh.position.z - gPos.z);
             if (horizDist < 10.5) {
@@ -6063,12 +6204,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
             if (soldier.remotePlayerId) {
               const rp = mpOnlinePlayersRef.current.find((p) => p.playerId === soldier.remotePlayerId);
               if (rp) {
-                // Smoothly interpolate real opponent's 3D open-world position in the Alveoli landscape with dead reckoning
-                const deadReckonVx = (rp.vx || 0) * delta * 0.35;
-                const deadReckonVz = (rp.vz || 0) * delta * 0.35;
-                const targetX = THREE.MathUtils.clamp(-rp.x - deadReckonVx, -30.0, 30.0);
+                // Predict remote player movement AND aiming angles using Client-Side Prediction & Extrapolation
+                const pred = predictRemoteEntityState(rp, nowTime);
+                const targetX = THREE.MathUtils.clamp(-pred.worldX, -30.0, 30.0);
                 const targetZ = THREE.MathUtils.clamp(
-                  -18.0 - rp.z - deadReckonVz,
+                  -18.0 - pred.worldZ,
                   -46.0,
                   10.0
                 );
@@ -6076,32 +6216,49 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   targetX - soldier.mesh.position.x,
                   targetZ - soldier.mesh.position.z
                 );
+                const remoteSpeedMag = Math.hypot(rp.vx || 0, rp.vz || 0);
 
-                soldier.mesh.position.x = THREE.MathUtils.damp(
-                  soldier.mesh.position.x,
-                  targetX,
-                  12,
-                  delta
-                );
-                soldier.mesh.position.z = THREE.MathUtils.damp(
-                  soldier.mesh.position.z,
-                  targetZ,
-                  12,
-                  delta
-                );
+                if (moveDist > 6.5) {
+                  soldier.mesh.position.x = targetX;
+                  soldier.mesh.position.z = targetZ;
+                } else {
+                  soldier.mesh.position.x = THREE.MathUtils.damp(
+                    soldier.mesh.position.x,
+                    targetX,
+                    24,
+                    delta
+                  );
+                  soldier.mesh.position.z = THREE.MathUtils.damp(
+                    soldier.mesh.position.z,
+                    targetZ,
+                    24,
+                    delta
+                  );
+                }
 
-                // Orient opponent toward local player + opponent's aim offset
+                // Instantaneous HP bar sync in render loop
+                soldier.hp = rp.hp;
+                soldier.hitsLeft = Math.max(0.2, (rp.hp / 100) * 3);
+                if (soldier.hpBarFill) {
+                  const pct = Math.max(0.02, Math.min(1, rp.hp / 100));
+                  soldier.hpBarFill.scale.x = pct;
+                  soldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
+                }
+
+                // Orient opponent toward local player + predicted opponent aim offset
                 const dxToMe = playerPosRef.current.x - soldier.mesh.position.x;
                 const dzToMe = playerPosRef.current.z - soldier.mesh.position.z;
-                const faceYaw = Math.atan2(dxToMe, Math.max(0.5, dzToMe)) - (rp.aimX || 0) * 0.28;
+                const faceYaw = Math.atan2(dxToMe, Math.max(0.5, dzToMe)) - pred.aimX * 0.28;
                 soldier.mesh.rotation.y = THREE.MathUtils.damp(
                   soldier.mesh.rotation.y,
                   faceYaw,
-                  12,
+                  22,
                   delta
                 );
 
-                if (soldier.isStunned || rp.status === 'stunned') {
+                const isCurrentlyStunned = rp.status === 'stunned';
+                soldier.isStunned = isCurrentlyStunned;
+                if (isCurrentlyStunned) {
                   if (soldier.stasisCage) {
                     soldier.stasisCage.visible = true;
                     soldier.stasisCage.rotation.y += delta * 2.4;
@@ -6120,7 +6277,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 const targetBaseY = targetElevY + (rp.isCrouched ? -0.68 : -0.32);
 
                 // Animate limbs based on whether the real opponent is actively moving or aiming
-                if (moveDist > 0.06) {
+                if (moveDist > 0.03 || remoteSpeedMag > 0.35) {
                   const runCycle = Math.sin(elapsed * 16 + soldier.walkOffset);
                   if (soldier.leftLeg && soldier.rightLeg) {
                     soldier.leftLeg.rotation.x = runCycle * 0.78;
@@ -6133,19 +6290,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   soldier.mesh.position.y = THREE.MathUtils.damp(
                     soldier.mesh.position.y,
                     targetBaseY + Math.abs(runCycle) * 0.06,
-                    12,
+                    20,
                     delta
                   );
                 } else {
                   if (soldier.leftLeg && soldier.rightLeg) {
-                    soldier.leftLeg.rotation.x = THREE.MathUtils.damp(soldier.leftLeg.rotation.x, 0, 10, delta);
-                    soldier.rightLeg.rotation.x = THREE.MathUtils.damp(soldier.rightLeg.rotation.x, 0, 10, delta);
+                    soldier.leftLeg.rotation.x = THREE.MathUtils.damp(soldier.leftLeg.rotation.x, 0, 16, delta);
+                    soldier.rightLeg.rotation.x = THREE.MathUtils.damp(soldier.rightLeg.rotation.x, 0, 16, delta);
                   }
                   if (soldier.leftArm && soldier.rightArm) {
-                    soldier.leftArm.rotation.x = THREE.MathUtils.damp(soldier.leftArm.rotation.x, -0.58, 10, delta);
-                    soldier.rightArm.rotation.x = THREE.MathUtils.damp(soldier.rightArm.rotation.x, -0.68, 10, delta);
+                    soldier.leftArm.rotation.x = THREE.MathUtils.damp(soldier.leftArm.rotation.x, -0.58, 16, delta);
+                    soldier.rightArm.rotation.x = THREE.MathUtils.damp(soldier.rightArm.rotation.x, -0.68, 16, delta);
                   }
-                  soldier.mesh.position.y = THREE.MathUtils.damp(soldier.mesh.position.y, targetBaseY, 10, delta);
+                  soldier.mesh.position.y = THREE.MathUtils.damp(soldier.mesh.position.y, targetBaseY, 18, delta);
                 }
 
                 // Trigger real-time 3D projectile when remote human player fires!
@@ -7380,15 +7537,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
-          if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
           _v3.copy(s.mesh.position);
           _v3.y += s.isRobot ? 1.85 : s.isTank ? 0.45 : 0.25;
           _v4.copy(_v3).project(camera);
+          if (_v4.z >= 1 || _v4.z <= -1) continue;
           const d = Math.hypot(_v4.x - hitVector.x, _v4.y - hitVector.y);
           const lockRadius = autoAimEnabledRef.current ? 0.24 : 0.145;
           if (d < lockRadius) {
             lockedOnEnemy = true;
-            const enemyDist = Math.max(3, Math.abs(s.mesh.position.z - camera.position.z));
+            const enemyDist = Math.max(3, camera.position.distanceTo(s.mesh.position));
             _v2.copy(raycaster.ray.direction).multiplyScalar(enemyDist).add(camera.position);
             break;
           }
@@ -7424,8 +7582,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // 7. TARGET LOCK RANGEFINDER & MINIMAP RADAR (Key-cached for zero React VDOM re-render lag!)
-      if (nowTime - lastHudSyncTime >= 250) {
+      // 7. TARGET LOCK RANGEFINDER & MINIMAP RADAR (Throttled to 450ms for zero React VDOM re-render lag!)
+      if (nowTime - lastHudSyncTime >= 450) {
         lastHudSyncTime = nowTime;
         const locks: TargetHudLock[] = [];
         
@@ -7765,7 +7923,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       {/* 3D WebGL Canvas with Dynamic Black Ops Optics Filter */}
       <div
         ref={mountRef}
-        className={`fixed inset-0 w-full h-full cursor-crosshair z-0 transition-all ${
+        className={`fixed inset-0 w-full h-full cursor-none z-0 transition-all ${
           visionMode === 'nvg'
             ? 'filter-nvg'
             : visionMode === 'thermal'
@@ -9147,10 +9305,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   </div>
                   <div className="text-[10px] sm:text-xs text-zinc-400">
                     {mpStatus === 'stunned'
-                      ? 'You survived 60 seconds! Answer 3 Biology Questions correctly to unfreeze and continue fighting!'
+                      ? 'You survived 60 seconds! You are shielded inside the Bio-Stasis Freeze — answer 1 Biology Question correctly to unfreeze!'
                       : mpKilledByInfo
-                      ? `Eliminated by ${mpKilledByInfo.killerName} [${mpKilledByInfo.weaponName}] — Answer 3 Biology Questions to revive!`
-                      : 'Answer 3 Biology Questions correctly to deploy into the live 1-minute open-world deathmatch!'}
+                      ? `Eliminated by ${mpKilledByInfo.killerName} [${mpKilledByInfo.weaponName}] — Answer 1 Biology Question to revive!`
+                      : 'Answer 1 Biology Question correctly to deploy into the live 1-minute open-world deathmatch!'}
                   </div>
                 </div>
               </div>
@@ -9163,13 +9321,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
               </div>
             </div>
 
-            {/* 3-Question Progress Pips */}
+            {/* 1-Question Progress Pip */}
             <div className="flex items-center justify-between gap-2 bg-zinc-900/90 border border-white/10 px-3 py-2 rounded">
               <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-zinc-300">
-                {mpStatus === 'stunned' ? 'BIO-STASIS UNFREEZE PROGRESS:' : 'CELLULAR REVIVE PROGRESS:'}
+                {mpStatus === 'stunned' ? 'BIO-STASIS UNFREEZE CLEARANCE (INVULNERABLE):' : 'CELLULAR REVIVE CLEARANCE:'}
               </span>
               <div className="flex items-center gap-1.5">
-                {[0, 1, 2].map((step) => {
+                {[0].map((step) => {
                   const done = mpCorrectCount > step;
                   return (
                     <div
@@ -9181,12 +9339,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
                       }`}
                     >
                       {done ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
-                      <span>Q{step + 1}</span>
+                      <span>Q1</span>
                     </div>
                   );
                 })}
                 <span className="ml-1 text-xs font-black text-emerald-400 tabular-nums">
-                  {mpCorrectCount}/3
+                  {Math.min(1, mpCorrectCount)}/1
                 </span>
               </div>
             </div>
@@ -9200,7 +9358,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 <div className="space-y-3 font-sans">
                   <div className="bg-zinc-900/80 border-l-4 border-amber-400 p-3.5 rounded-r">
                     <div className="text-[10px] font-mono font-bold uppercase tracking-widest text-amber-400 mb-1">
-                      BIOLOGY CLEARANCE QUESTION #{mpCorrectCount + 1} OF 3
+                      BIOLOGY CLEARANCE QUESTION #1 OF 1
                     </div>
                     <p className="text-sm sm:text-base font-bold text-white leading-snug">
                       {currentQ.question}
@@ -9258,7 +9416,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                       }`}
                     >
                       <span className="font-black uppercase mr-1.5">
-                        {mpFeedback.isCorrect ? '✓ CORRECT (+1/3):' : '✗ INCORRECT — STUDY & CONTINUE:'}
+                        {mpFeedback.isCorrect ? '✓ CORRECT (1/1 — DEPLOYING!):' : '✗ INCORRECT — STUDY & CONTINUE:'}
                       </span>
                       {mpFeedback.explanation}
                     </div>
@@ -9269,7 +9427,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
             {/* Footer with Exit to Lobby option */}
             <div className="flex items-center justify-between pt-2 border-t border-white/10 text-[10px] text-zinc-400">
-              <span>ROOM: {multiplayerRoomCode} • 60S ACTIVE COMBAT PER 3 CORRECT ANSWERS</span>
+              <span>ROOM: {multiplayerRoomCode} • 60S ACTIVE COMBAT PER 1 CORRECT ANSWER</span>
               {onExitToMenu && (
                 <button
                   onClick={() => {
@@ -9295,6 +9453,38 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* AFK Warning Banner (final 15s before 1-minute AFK Server Kick) */}
+      {isMultiplayerDeathmatch && afkWarningSecondsLeft !== null && !afkKickedModal && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 pointer-events-none font-mono">
+          <div className="px-4 py-1.5 rounded bg-rose-950/95 border-2 border-rose-500 text-rose-200 text-xs font-black tracking-wider uppercase shadow-[0_0_20px_rgba(244,63,94,0.6)] animate-pulse">
+            ⚠️ AFK WARNING: MOVE, ACT, OR SOLVE QUESTION WITHIN {afkWarningSecondsLeft}S OR BE KICKED FROM SERVER!
+          </div>
+        </div>
+      )}
+
+      {/* 1-Minute AFK Server Kick Modal */}
+      {isMultiplayerDeathmatch && afkKickedModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 pointer-events-auto font-mono select-none">
+          <div className="w-full max-w-md bg-zinc-950 border-2 border-rose-500 p-6 rounded-lg shadow-[0_0_50px_rgba(244,63,94,0.5)] text-center space-y-4">
+            <div className="text-rose-400 font-black text-base sm:text-lg tracking-wider uppercase">
+              ⚠️ KICKED FROM SERVER (AFK)
+            </div>
+            <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed font-sans">
+              You have been removed from room <span className="font-mono font-bold text-white">{multiplayerRoomCode}</span> due to 1 minute of inactivity (no movement, combat actions, or questions solved).
+            </p>
+            <button
+              onClick={() => {
+                sounds.unlockAudio();
+                onExitToMenu?.();
+              }}
+              className="w-full py-2.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-xs sm:text-sm tracking-wider uppercase cursor-pointer transition-colors"
+            >
+              RETURN TO MAIN MENU
+            </button>
           </div>
         </div>
       )}

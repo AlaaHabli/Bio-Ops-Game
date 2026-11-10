@@ -326,13 +326,13 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                         <span>🌐 LIVE ONLINE MULTIPLAYER • OPEN-WORLD 3D DEATHMATCH (NO REINFORCEMENTS)</span>
                       </div>
                       <div className="text-sm sm:text-base font-display font-extrabold text-white mt-0.5">
-                        Shoot &amp; Frag Real Students in 3D • 1-Min Combat Window • Solve 3 Questions to Revive or Unfreeze!
+                        Shoot &amp; Frag Real Students in 3D • 1-Min Combat Window • Solve 1 Question to Revive or Unfreeze!
                       </div>
                       <div className="text-xs text-slate-300 mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span>• Full 3D Weapons &amp; Grenades [G]</span>
-                        <span>• Die in 60s → 3 Questions to Revive</span>
+                        <span>• Die in 60s → 1 Question to Revive</span>
                         <span className="text-cyan-300 font-semibold flex items-center gap-1">
-                          <Snowflake className="w-3 h-3" /> Survive 60s → Frozen &amp; Stunned until 3 Questions Solved!
+                          <Snowflake className="w-3 h-3" /> Survive 60s → Frozen in Bio-Stasis Shield (Invulnerable) until 1 Question Solved!
                         </span>
                       </div>
                     </div>
