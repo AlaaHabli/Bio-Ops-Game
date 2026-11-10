@@ -55,7 +55,10 @@ import {
   kickAfkPlayerFromRoom,
   getOrCreateMultiplayerPlayerId,
   getInitialArenaSpawn,
+  getBaseRoomPrefix,
+  formatIndexedRoomCode,
   AFK_TIMEOUT_MS,
+  MAX_PLAYERS_PER_ROOM,
   ClientPredictionEngine,
   predictRemoteEntityState,
   LiveArenaPlayer,
@@ -374,6 +377,77 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
 
+/**
+ * 2D Spatial Partitioning Hash Grid for high-performance collision culling in the X-Z arena plane.
+ * Replaces O(N*M) nested collision checks with localized O(1) grid cell lookups, eliminating
+ * frame spikes, micro-stutters, and collision tunneling across solo & multiplayer combat.
+ */
+export class SpatialPartitionGrid<T> {
+  private cellSize: number;
+  private cells: Map<number, T[]> = new Map();
+
+  constructor(cellSize: number = 4.0) {
+    this.cellSize = cellSize;
+  }
+
+  public clear(): void {
+    this.cells.clear();
+  }
+
+  private hashCoords(cx: number, cz: number): number {
+    return (cx * 73856093) ^ (cz * 19349663);
+  }
+
+  public insert(x: number, z: number, item: T, radius: number = 0): void {
+    const minCx = Math.floor((x - radius) / this.cellSize);
+    const maxCx = Math.floor((x + radius) / this.cellSize);
+    const minCz = Math.floor((z - radius) / this.cellSize);
+    const maxCz = Math.floor((z + radius) / this.cellSize);
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const key = this.hashCoords(cx, cz);
+        let cell = this.cells.get(key);
+        if (!cell) {
+          cell = [];
+          this.cells.set(key, cell);
+        }
+        cell.push(item);
+      }
+    }
+  }
+
+  public query(x: number, z: number, radius: number): T[] {
+    const minCx = Math.floor((x - radius) / this.cellSize);
+    const maxCx = Math.floor((x + radius) / this.cellSize);
+    const minCz = Math.floor((z - radius) / this.cellSize);
+    const maxCz = Math.floor((z + radius) / this.cellSize);
+
+    const results: T[] = [];
+    const seen = new Set<T>();
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const key = this.hashCoords(cx, cz);
+        const cell = this.cells.get(key);
+        if (cell) {
+          for (let i = 0; i < cell.length; i++) {
+            const item = cell[i];
+            if (!seen.has(item)) {
+              seen.add(item);
+              results.push(item);
+            }
+          }
+        }
+      }
+    }
+    return results;
+  }
+}
+
+export const FIXED_DELTA_TIME = 1 / 60; // 0.0166667s (60Hz fixed physics step)
+export const MAX_PHYSICS_SUBSTEPS = 4;
+
 // Solid wall & cover collision detection for multiplayer buildings (Bunker at (0, -22), Tower at (14, -11), West Ridge at (-19, -11), and Cover Clusters)
 export function applySolidWallCollisions(
   prevPos: { x: number; z: number },
@@ -381,7 +455,8 @@ export function applySolidWallCollisions(
   currentElevY: number,
   isRooftop: boolean,
   isInside: boolean,
-  barricades?: Array<{ x: number; z: number; hp: number }>
+  barricades?: Array<{ x: number; z: number; hp: number }>,
+  spatialGrid?: SpatialPartitionGrid<{ x: number; z: number; hp: number }>
 ): { x: number; z: number; isRooftop: boolean; isInside: boolean; elevationY: number } {
   const ROOF_ELEV = 6.70;
   let x = nextPos.x;
@@ -507,10 +582,11 @@ export function applySolidWallCollisions(
     }
   }
 
-  // 3. Solid collision against intact 3D Anatomical Cover Clusters on the ground floor
+  // 3. Solid collision against intact 3D Anatomical Cover Clusters on the ground floor (O(1) Spatial Partitioning)
   if (barricades && elevationY < 1.2) {
-    for (let i = 0; i < barricades.length; i++) {
-      const b = barricades[i];
+    const candidates = spatialGrid ? spatialGrid.query(x, z, 3.2) : barricades;
+    for (let i = 0; i < candidates.length; i++) {
+      const b = candidates[i];
       if (b.hp <= 0) continue;
       const dx = x - b.x;
       const dz = z - b.z;
@@ -580,6 +656,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [mpOnlinePlayers, setMpOnlinePlayers] = useState<LiveArenaPlayer[]>([]);
   const mpOnlinePlayersRef = useRef<LiveArenaPlayer[]>([]);
   const [mpKillfeed, setMpKillfeed] = useState<ArenaKillfeedEvent[]>([]);
+
+  const [activeRoomCode, setActiveRoomCode] = useState<string>(() =>
+    formatIndexedRoomCode(getBaseRoomPrefix(multiplayerRoomCode), 1)
+  );
+  const activeRoomCodeRef = useRef<string>(
+    formatIndexedRoomCode(getBaseRoomPrefix(multiplayerRoomCode), 1)
+  );
 
   const localMpPlayerIdRef = useRef<string>(getOrCreateMultiplayerPlayerId());
   const localShotSeqRef = useRef<number>(0);
@@ -1267,7 +1350,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     sounds.triggerHaptic([60, 40, 80], 'heavy');
 
     const prof = loadStudentProfile();
-    syncLocalPlayerState(multiplayerRoomCode, {
+    syncLocalPlayerState(activeRoomCodeRef.current, {
       playerId: localMpPlayerIdRef.current,
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
@@ -1311,7 +1394,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     sounds.triggerHaptic([45, 30, 45], 'medium');
 
     const prof = loadStudentProfile();
-    syncLocalPlayerState(multiplayerRoomCode, {
+    syncLocalPlayerState(activeRoomCodeRef.current, {
       playerId: localMpPlayerIdRef.current,
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
@@ -1393,7 +1476,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setBarricadeHps([100, 100, 100]);
 
           const prof = loadStudentProfile();
-          syncLocalPlayerState(multiplayerRoomCode, {
+          syncLocalPlayerState(activeRoomCodeRef.current, {
             playerId: localMpPlayerIdRef.current,
             studentName: prof?.name || 'Operative',
             className: prof?.className || 'Science Unit',
@@ -1435,7 +1518,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     }
   };
 
-  // Real-Time Online Multiplayer Room Join, Client-Side Prediction & Server Reconciliation, Heartbeat & 1-Min AFK Kick
+  // Real-Time Online Multiplayer Room Join (Auto-Scaling 5-Player Rooms), Client-Side Prediction & Server Reconciliation, Heartbeat & 1-Min AFK Kick
   useEffect(() => {
     if (!isMultiplayerDeathmatch) return;
     const prof = loadStudentProfile();
@@ -1450,78 +1533,104 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setAfkKickedModal(false);
     setAfkWarningSecondsLeft(null);
 
-    // Pass current playerPosRef coordinates so room registration uses the exact Frame-0 spawn position without teleporting the player!
-    void joinDeathmatchRoom(
-      multiplayerRoomCode,
-      prof,
-      currentWeaponRef.current.id,
-      mpStatusRef.current,
-      playerPosRef.current
-    );
+    let isCancelled = false;
+    let currentUnsub: (() => void) | null = null;
 
-    const unsub = subscribeToDeathmatchRoom(
-      multiplayerRoomCode,
-      myId,
-      (players) => {
-        mpOnlinePlayersRef.current = players;
-        const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
-        if (nextKey !== prevMpPlayersKeyRef.current) {
-          prevMpPlayersKeyRef.current = nextKey;
-          setMpOnlinePlayers(players);
-        }
-      },
-      (hit) => {
-        // Players inside the freezing bio-stasis shield ('stunned') or reviving cannot be damaged or killed!
-        if (mpStatusRef.current !== 'active') return;
-        const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
-        playerHpRef.current = nextHp;
-        setPlayerHp(nextHp);
-        cameraShakeRef.current = Math.max(cameraShakeRef.current, 0.55);
-        sounds.playQuizWrong();
-        sounds.triggerHaptic([45, 30, 45], 'heavy');
-        if (nextHp <= 0 || hit.eliminated) {
-          triggerMpEliminatedStateRef.current?.(hit.attackerName, hit.weaponName);
-        }
-      },
-      (kfEvent) => {
-        setMpKillfeed((prev) => [kfEvent, ...prev.slice(0, 4)]);
-      },
-      (authoritativeLocal) => {
-        if (afkKickedRef.current) return;
-        const reconcileRes = predictionEngineRef.current.reconcileServerState(
-          authoritativeLocal,
-          {
-            x: playerPosRef.current.x,
-            y: playerElevationYRef.current,
-            z: playerPosRef.current.z,
-            aimX: aimPosRef.current.x,
-            aimY: aimPosRef.current.y,
-            yaw: cameraYawRef.current,
-            pitch: cameraPitchRef.current,
-          }
-        );
-        if (reconcileRes.snapRequired) {
-          playerPosRef.current.x = reconcileRes.x;
-          playerPosRef.current.z = reconcileRes.z;
-        }
-      },
-      (_kickedPlayerId, kickedName) => {
-        setMpKillfeed((prev) => [
-          {
-            id: `afk_${Date.now()}_${Math.random()}`,
-            killerName: 'SERVER',
-            victimName: (kickedName || 'OPERATIVE').toUpperCase(),
-            weaponName: 'AFK KICK (1M IDLE)',
-            timestamp: Date.now(),
-          },
-          ...prev.slice(0, 4),
-        ]);
+    const connectToAvailableRoom = async (minRoomIndex: number = 1) => {
+      const { roomCode: assignedCode, initialPlayer } = await joinDeathmatchRoom(
+        multiplayerRoomCode,
+        prof,
+        currentWeaponRef.current.id,
+        mpStatusRef.current,
+        playerPosRef.current,
+        minRoomIndex
+      );
+
+      if (isCancelled) {
+        void leaveDeathmatchRoom(assignedCode, myId);
+        return;
       }
-    );
+
+      activeRoomCodeRef.current = assignedCode;
+      setActiveRoomCode(assignedCode);
+
+      if (currentUnsub) {
+        currentUnsub();
+        currentUnsub = null;
+      }
+
+      currentUnsub = subscribeToDeathmatchRoom(
+        assignedCode,
+        myId,
+        (players) => {
+          mpOnlinePlayersRef.current = players;
+          const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
+          if (nextKey !== prevMpPlayersKeyRef.current) {
+            prevMpPlayersKeyRef.current = nextKey;
+            setMpOnlinePlayers(players);
+          }
+        },
+        (hit) => {
+          // Players inside the freezing bio-stasis shield ('stunned') or reviving cannot be damaged or killed!
+          if (mpStatusRef.current !== 'active') return;
+          const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
+          playerHpRef.current = nextHp;
+          setPlayerHp(nextHp);
+          cameraShakeRef.current = Math.max(cameraShakeRef.current, 0.55);
+          sounds.playQuizWrong();
+          sounds.triggerHaptic([45, 30, 45], 'heavy');
+          if (nextHp <= 0 || hit.eliminated) {
+            triggerMpEliminatedStateRef.current?.(hit.attackerName, hit.weaponName);
+          }
+        },
+        (kfEvent) => {
+          setMpKillfeed((prev) => [kfEvent, ...prev.slice(0, 4)]);
+        },
+        (authoritativeLocal) => {
+          if (afkKickedRef.current) return;
+          const reconcileRes = predictionEngineRef.current.reconcileServerState(
+            authoritativeLocal,
+            {
+              x: playerPosRef.current.x,
+              y: playerElevationYRef.current,
+              z: playerPosRef.current.z,
+              aimX: aimPosRef.current.x,
+              aimY: aimPosRef.current.y,
+              yaw: cameraYawRef.current,
+              pitch: cameraPitchRef.current,
+            }
+          );
+          if (reconcileRes.snapRequired) {
+            playerPosRef.current.x = reconcileRes.x;
+            playerPosRef.current.z = reconcileRes.z;
+          }
+        },
+        (_kickedPlayerId, kickedName) => {
+          setMpKillfeed((prev) => [
+            {
+              id: `afk_${Date.now()}_${Math.random()}`,
+              killerName: 'SERVER',
+              victimName: (kickedName || 'OPERATIVE').toUpperCase(),
+              weaponName: 'AFK KICK (1M IDLE)',
+              timestamp: Date.now(),
+            },
+            ...prev.slice(0, 4),
+          ]);
+        },
+        (nextMinRoomIndex) => {
+          if (isCancelled) return;
+          void leaveDeathmatchRoom(assignedCode, myId);
+          void connectToAvailableRoom(nextMinRoomIndex);
+        },
+        initialPlayer
+      );
+    };
+
+    void connectToAvailableRoom(1);
 
     const pushStateNow = () => {
-      if (afkKickedRef.current) return;
-      syncLocalPlayerState(multiplayerRoomCode, {
+      if (afkKickedRef.current || isCancelled) return;
+      syncLocalPlayerState(activeRoomCodeRef.current, {
         playerId: myId,
         studentName: cachedStudentName,
         className: cachedClassName,
@@ -1552,7 +1661,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     pushLocalMpStateNowRef.current = pushStateNow;
-    const syncTimer = setInterval(pushStateNow, 110);
+    const syncTimer = setInterval(pushStateNow, 85);
 
     // 1-Minute (60s) AFK Watchdog: Kicks player out of server if no movement, combat actions, or question solving occurs for 1 minute
     let afkExitTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -1574,7 +1683,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         setAfkKickedModal(true);
         clearInterval(syncTimer);
         sounds.playCombatAlarm();
-        void kickAfkPlayerFromRoom(multiplayerRoomCode, myId, cachedStudentName);
+        void kickAfkPlayerFromRoom(activeRoomCodeRef.current, myId, cachedStudentName);
         afkExitTimeout = setTimeout(() => {
           onExitToMenu?.();
         }, 3200);
@@ -1587,12 +1696,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
     }, 500);
 
     return () => {
+      isCancelled = true;
       pushLocalMpStateNowRef.current = null;
       clearInterval(syncTimer);
       clearInterval(afkWatchdogTimer);
       if (afkExitTimeout) clearTimeout(afkExitTimeout);
-      unsub();
-      leaveDeathmatchRoom(multiplayerRoomCode, myId);
+      if (currentUnsub) currentUnsub();
+      void leaveDeathmatchRoom(activeRoomCodeRef.current, myId);
     };
   }, [isMultiplayerDeathmatch, multiplayerRoomCode, onExitToMenu]);
 
@@ -3874,6 +3984,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (isMultiplayerDeathmatch) {
         localShotSeqRef.current += 1;
         lastPlayerActivityRef.current = Date.now();
+        pushLocalMpStateNowRef.current?.();
       }
 
       if (!isLaserActive) {
@@ -4195,7 +4306,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         if (isMultiplayerDeathmatch && hitSoldier.remotePlayerId) {
           const prevTargetHp = Math.max(0, Math.round(hitSoldier.hp + totalDamage));
           sendPlayerHitEvent(
-            multiplayerRoomCode,
+            activeRoomCodeRef.current,
             hitSoldier.remotePlayerId,
             prevTargetHp,
             Math.round(totalDamage),
@@ -4326,7 +4437,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               },
               ...prev.slice(0, 4),
             ]);
-            syncLocalPlayerState(multiplayerRoomCode, {
+            syncLocalPlayerState(activeRoomCodeRef.current, {
               playerId: localMpPlayerIdRef.current,
               studentName: prof?.name || 'Operative',
               className: prof?.className || 'Science Unit',
@@ -4762,6 +4873,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let animationFrameId = 0;
     let lastFrameTime = performance.now();
     let elapsedAccumulator = 0;
+    let physicsAccumulator = 0;
+    const barricadeSpatialGrid = new SpatialPartitionGrid<ActiveBarricade>(3.5);
+    const soldierSpatialGrid = new SpatialPartitionGrid<ActiveSoldier>(4.5);
     let lastDamageTakenTime = 0;
     let regenAccumulator = 0;
     let lastCoverState = false;
@@ -4826,10 +4940,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
         return;
       }
       const rawElapsedMs = nowTime - lastFrameTime;
-      const delta = Math.min(Math.max(0.001, rawElapsedMs / 1000), 0.05);
+      const frameDelta = Math.min(Math.max(0.001, rawElapsedMs / 1000), 0.05);
       lastFrameTime = nowTime;
-      elapsedAccumulator += delta;
+      elapsedAccumulator += frameDelta;
       const elapsed = elapsedAccumulator;
+      // Fixed time-step physics accumulator: clamps maximum substeps to MAX_PHYSICS_SUBSTEPS (4) to prevent spiral of death
+      physicsAccumulator = Math.min(physicsAccumulator + frameDelta, FIXED_DELTA_TIME * MAX_PHYSICS_SUBSTEPS);
+      const delta = FIXED_DELTA_TIME;
+
+      // Rebuild 2D Spatial Partitioning Grids for O(1) localized collision lookups
+      barricadeSpatialGrid.clear();
+      for (let bi = 0; bi < barricadesRef.current.length; bi++) {
+        const bar = barricadesRef.current[bi];
+        if (bar.hp > 0) {
+          barricadeSpatialGrid.insert(bar.x, bar.z, bar, 1.4);
+        }
+      }
+      soldierSpatialGrid.clear();
+      for (let si = 0; si < activeSoldiersRef.current.length; si++) {
+        const sol = activeSoldiersRef.current[si];
+        soldierSpatialGrid.insert(sol.mesh.position.x, sol.mesh.position.z, sol, sol.isBoss ? 2.5 : sol.isTank ? 1.8 : 0.9);
+      }
 
       // 1. UPDATE PLAYER 3D POSITION (Left/Right & Front/Back Movement)
       let inputX = moveInputRef.current.x;
@@ -4964,7 +5095,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           playerElevationYRef.current,
           playerIsRooftopRef.current,
           playerIsInsideBuildingRef.current,
-          barricadesRef.current
+          barricadesRef.current,
+          barricadeSpatialGrid
         );
         playerPosRef.current.x = wallRes.x;
         playerPosRef.current.z = wallRes.z;
@@ -5361,11 +5493,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
         g.mesh.rotation.y += delta * 12;
         g.life -= delta;
 
-        // Check proximity contact fuse against any enemy soldier, Bio-Tank, or Boss
-        const soldiers = activeSoldiersRef.current;
+        // Check proximity contact fuse against any enemy soldier, Bio-Tank, or Boss (O(1) Spatial Partition query)
+        const proximitySoldiers = soldierSpatialGrid.query(g.mesh.position.x, g.mesh.position.z, 2.6);
         let hitEnemyInFlight = false;
-        for (let j = 0; j < soldiers.length; j++) {
-          const s = soldiers[j];
+        for (let j = 0; j < proximitySoldiers.length; j++) {
+          const s = proximitySoldiers[j];
           const horizDist = Math.hypot(s.mesh.position.x - g.mesh.position.x, s.mesh.position.z - g.mesh.position.z);
           if (horizDist < 2.4 && Math.abs(s.mesh.position.y - g.mesh.position.y) < 3.0) {
             hitEnemyInFlight = true;
@@ -5378,12 +5510,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           triggerExplosion(g.mesh.position);
           sounds.triggerHaptic([45, 30, 65], 'heavy');
 
-          // AOE Frag Shrapnel Damage to all enemies, tanks & bosses within 10.5-unit blast radius!
+          // AOE Frag Shrapnel Damage to all enemies, tanks & bosses within 10.5-unit blast radius (O(1) Spatial query)
           const gPos = g.mesh.position;
           let hitCount = 0;
           let killCount = 0;
-          for (let j = soldiers.length - 1; j >= 0; j--) {
-            const s = soldiers[j];
+          const aoeSoldiers = soldierSpatialGrid.query(gPos.x, gPos.z, 11.0);
+          for (let j = aoeSoldiers.length - 1; j >= 0; j--) {
+            const s = aoeSoldiers[j];
             if (isMultiplayerDeathmatch && s.isStunned) continue;
             // Use horizontal distance so hovering Bosses (Helicopter/Jet) and tall Tanks take full blast damage
             const horizDist = Math.hypot(s.mesh.position.x - gPos.x, s.mesh.position.z - gPos.z);
@@ -5397,7 +5530,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               s.hitsLeft = Math.max(0, s.hitsLeft - fragHitsDmg);
               if (isMultiplayerDeathmatch && s.remotePlayerId) {
                 sendPlayerHitEvent(
-                  multiplayerRoomCode,
+                  activeRoomCodeRef.current,
                   s.remotePlayerId,
                   prevHpForSync,
                   fragHpDmg,
@@ -6249,8 +6382,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
             if (soldier.remotePlayerId) {
               const rp = mpOnlinePlayersRef.current.find((p) => p.playerId === soldier.remotePlayerId);
               if (rp) {
-                // Predict remote player movement AND aiming angles in shared 1:1 3D world space using epoch clock!
-                const pred = predictRemoteEntityState(rp, Date.now());
+                // Predict remote player movement AND aiming angles in shared 1:1 3D world space using high-precision performance clock!
+                const pred = predictRemoteEntityState(rp, nowTime);
                 const targetX = THREE.MathUtils.clamp(pred.worldX, -32.0, 32.0);
                 const targetZ = THREE.MathUtils.clamp(pred.worldZ, -46.0, 12.0);
                 const moveDist = Math.hypot(
@@ -6266,13 +6399,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   soldier.mesh.position.x = THREE.MathUtils.damp(
                     soldier.mesh.position.x,
                     targetX,
-                    22,
+                    26,
                     delta
                   );
                   soldier.mesh.position.z = THREE.MathUtils.damp(
                     soldier.mesh.position.z,
                     targetZ,
-                    22,
+                    26,
                     delta
                   );
                 }
@@ -6690,7 +6823,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         let rocketDetonated = false;
-        for (const bar of barricadesRef.current) {
+        const candidateBars = barricadeSpatialGrid.query(r.mesh.position.x, r.mesh.position.z, 2.0);
+        for (const bar of candidateBars) {
           if (bar.hp <= 0) continue;
           if (
             Math.abs(r.mesh.position.x - bar.x) <= 1.25 &&
@@ -7123,8 +7257,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         let hit = false;
 
-        // Collision test against intact sandbag barricades (Bunkers absorb enemy fire and lose HP!)
-        for (const bar of barricadesRef.current) {
+        // Collision test against intact sandbag barricades (O(1) Spatial query)
+        const localBars = barricadeSpatialGrid.query(b.mesh.position.x, b.mesh.position.z, 2.0);
+        for (const bar of localBars) {
           if (bar.hp <= 0) continue;
           const minX = bar.x + bar.bounds.minX;
           const maxX = bar.x + bar.bounds.maxX;
@@ -8359,15 +8494,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 <div className="bg-slate-950/90 border border-cyan-400/75 rounded-md px-2.5 py-1 flex flex-wrap items-center justify-center gap-2 text-[8.5px] sm:text-[10px] font-mono font-black uppercase tracking-wider shadow-[0_4px_14px_rgba(6,182,212,0.3)]">
                   <span className="flex items-center gap-1 text-emerald-400">
                     <Radio className="w-3 h-3 animate-pulse" />
-                    <span>ROOM: {multiplayerRoomCode}</span>
+                    <span>ROOM: {activeRoomCode}</span>
                   </span>
                   <span className="text-slate-600">|</span>
                   <span className="flex items-center gap-1 text-cyan-300">
                     <Users className="w-3 h-3" />
-                    <span>{Math.max(1, mpOnlinePlayers.length)} / 20 REAL PLAYERS</span>
+                    <span>
+                      {Math.min(
+                        MAX_PLAYERS_PER_ROOM,
+                        Math.max(
+                          1,
+                          mpOnlinePlayers.some((p) => p.playerId === localMpPlayerIdRef.current)
+                            ? mpOnlinePlayers.length
+                            : mpOnlinePlayers.length + 1
+                        )
+                      )}
+                      /{MAX_PLAYERS_PER_ROOM}
+                    </span>
                   </span>
-                  <span className="text-slate-600">|</span>
-                  <span className="text-emerald-400 font-black">100% REAL PLAYERS (ZERO BOTS)</span>
                   <span className="text-slate-600">|</span>
                   <span
                     className={`flex items-center gap-1 ${
@@ -8391,17 +8535,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     <span>BROADCAST / SPECTATE</span>
                   </button>
                 </div>
-
-                {/* Waiting / Active Real Players Status */}
-                {mpOnlinePlayers.length <= 1 ? (
-                  <div className="px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-400/60 text-[8px] sm:text-[9px] font-mono font-bold text-emerald-300 text-center shadow-md animate-pulse">
-                    📡 ZERO BOTS • WAITING FOR RIVAL HUMAN PLAYERS TO JOIN (ROOM: {multiplayerRoomCode})
-                  </div>
-                ) : (
-                  <div className="px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-400/60 text-[8px] sm:text-[9px] font-mono font-bold text-emerald-300 text-center shadow-md">
-                    ⚡ {mpOnlinePlayers.length} REAL HUMAN OPERATIVES CONNECTED (ZERO BOTS)
-                  </div>
-                )}
 
                 {/* Live Tactical Controls Reminder Banner */}
                 <div className="px-2.5 py-0.5 rounded bg-cyan-950/85 border border-cyan-400/50 text-[8px] sm:text-[9px] font-mono font-bold text-cyan-200 text-center shadow-md">
@@ -9482,7 +9615,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
             {/* Footer with Exit to Lobby option */}
             <div className="flex items-center justify-between pt-2 border-t border-white/10 text-[10px] text-zinc-400">
-              <span>ROOM: {multiplayerRoomCode} • 60S ACTIVE COMBAT PER 1 CORRECT ANSWER</span>
+              <span>ROOM: {activeRoomCode} • 60S ACTIVE COMBAT PER 1 CORRECT ANSWER</span>
               {onExitToMenu && (
                 <button
                   onClick={() => {
@@ -9494,7 +9627,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                         className: prof?.className || 'Class 7',
                         score: scoreRef.current,
                         kills: killsRef.current,
-                        levelTitle: `Arena [${multiplayerRoomCode}] PvP`,
+                        levelTitle: `Arena [${activeRoomCode}] PvP`,
                         stage: 'Multiplayer',
                         rankTitle: 'Commando',
                         isVictory: killsRef.current > 0,
@@ -9529,7 +9662,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               ⚠️ KICKED FROM SERVER (AFK)
             </div>
             <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed font-sans">
-              You have been removed from room <span className="font-mono font-bold text-white">{multiplayerRoomCode}</span> due to 1 minute of inactivity (no movement, combat actions, or questions solved).
+              You have been removed from room <span className="font-mono font-bold text-white">{activeRoomCode}</span> due to 1 minute of inactivity (no movement, combat actions, or questions solved).
             </p>
             <button
               onClick={() => {
@@ -9566,10 +9699,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base sm:text-lg font-black tracking-wide text-white">
-                    CLASSROOM ARENA BROADCAST • ROOM {multiplayerRoomCode}
+                    CLASSROOM ARENA BROADCAST • ROOM {activeRoomCode}
                   </h3>
                   <p className="text-[10px] sm:text-xs text-zinc-400 font-mono">
-                    20-PLAYER LIVE SYNC • ZERO BOTS • REAL-TIME OPERATIVE PERFORMANCE
+                    5-PLAYER ROOM SYNC • REAL-TIME OPERATIVE PERFORMANCE
                   </p>
                 </div>
               </div>
@@ -9584,7 +9717,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
                 <span className="text-[10px] text-zinc-400 block uppercase font-mono">CONNECTED PLAYERS</span>
-                <span className="text-xl font-black text-cyan-300">{Math.max(1, mpOnlinePlayers.length)} / 20</span>
+                <span className="text-xl font-black text-cyan-300">
+                  {Math.min(
+                    MAX_PLAYERS_PER_ROOM,
+                    Math.max(
+                      1,
+                      mpOnlinePlayers.some((p) => p.playerId === localMpPlayerIdRef.current)
+                        ? mpOnlinePlayers.length
+                        : mpOnlinePlayers.length + 1
+                    )
+                  )}
+                  /{MAX_PLAYERS_PER_ROOM}
+                </span>
               </div>
               <div className="bg-zinc-900/90 border border-white/10 p-2.5 rounded-lg text-center">
                 <span className="text-[10px] text-zinc-400 block uppercase font-mono">TOTAL ELIMINATIONS</span>

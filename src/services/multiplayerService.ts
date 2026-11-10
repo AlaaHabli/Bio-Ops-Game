@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDocs,
   setDoc,
   deleteDoc,
   onSnapshot,
@@ -12,6 +13,7 @@ import { StudentProfile } from '../types/game';
 export type MultiplayerPlayerStatus = 'active' | 'stunned' | 'reviving';
 
 export const AFK_TIMEOUT_MS = 60_000; // 1 minute (60 seconds) without movement, actions, or solving questions
+export const MAX_PLAYERS_PER_ROOM = 5; // Each room holds up to 5 players; when full, new rooms (Room 2, Room 3, ...) are created automatically
 
 export interface LiveArenaPlayer {
   playerId: string;
@@ -48,6 +50,7 @@ export interface LiveArenaPlayer {
   lastHitTargetHp?: number;
   lastHitHeadshot?: boolean;
   lastHitSeq?: number;
+  joinedAt?: number;
   lastPing: number;
   receivedAt?: number;
 }
@@ -281,20 +284,26 @@ export function predictRemoteEntityState(
   aimY: number;
   yaw: number;
 } {
+  const refClock =
+    nowPerf > 1_000_000_000_000 && (rp.receivedAt || 0) < 1_000_000_000_000
+      ? typeof performance !== 'undefined'
+        ? performance.now()
+        : nowPerf
+      : nowPerf;
   const packetAgeSec = Math.min(
-    0.15,
-    Math.max(0, (nowPerf - (rp.receivedAt || nowPerf)) / 1000)
+    0.2,
+    Math.max(0, (refClock - (rp.receivedAt || refClock)) / 1000)
   );
-  // Apply velocity damping over prediction horizon so extrapolation never overshoots stops
-  const horizonDamp = 1 - packetAgeSec * 1.8;
-  const effAge = packetAgeSec * Math.max(0.35, horizonDamp);
+  // Smooth velocity damping over prediction horizon so extrapolation bridges packets cleanly without overshooting stops
+  const horizonDamp = 1 - packetAgeSec * 1.35;
+  const effAge = packetAgeSec * Math.max(0.4, horizonDamp);
 
   const worldX = rp.x + (rp.vx || 0) * effAge;
   const worldY = typeof rp.y === 'number' && Number.isFinite(rp.y) ? rp.y : 0;
   const worldZ = rp.z + (rp.vz || 0) * effAge;
-  const aimX = Math.max(-1, Math.min(1, (rp.aimX || 0) + (rp.vAimX || 0) * effAge * 0.5));
-  const aimY = Math.max(-1, Math.min(1, (rp.aimY || 0) + (rp.vAimY || 0) * effAge * 0.5));
-  const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.6;
+  const aimX = Math.max(-1, Math.min(1, (rp.aimX || 0) + (rp.vAimX || 0) * effAge * 0.55));
+  const aimY = Math.max(-1, Math.min(1, (rp.aimY || 0) + (rp.vAimY || 0) * effAge * 0.55));
+  const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.65;
 
   return { worldX, worldY, worldZ, aimX, aimY, yaw };
 }
@@ -327,6 +336,23 @@ export function getOrCreateMultiplayerPlayerId(): string {
 export function sanitizeRoomCode(raw: string): string {
   const cleaned = raw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
   return cleaned.length >= 2 ? cleaned : 'BIO-FFA';
+}
+
+export function getBaseRoomPrefix(raw: string): string {
+  const cleaned = sanitizeRoomCode(raw);
+  const stripped = cleaned.replace(/-\d+$/, '');
+  return (stripped.length >= 2 ? stripped : 'BIO-FFA').slice(0, 12);
+}
+
+export function formatIndexedRoomCode(basePrefix: string, roomIndex: number): string {
+  const safeBase = getBaseRoomPrefix(basePrefix);
+  const idx = Math.max(1, Math.floor(roomIndex));
+  return `${safeBase}-${idx}`;
+}
+
+export function getRoomIndexFromCode(roomCode: string): number {
+  const match = sanitizeRoomCode(roomCode).match(/-(\d+)$/);
+  return match ? Math.max(1, parseInt(match[1], 10)) : 1;
 }
 
 // Local BroadcastChannel for zero-latency cross-tab multiplayer on the same machine alongside Firestore cloud sync
@@ -409,9 +435,10 @@ export async function joinDeathmatchRoom(
   profile: StudentProfile | null,
   weaponId: string,
   initialStatus: MultiplayerPlayerStatus = 'active',
-  spawnCoords?: { x: number; z: number }
+  spawnCoords?: { x: number; z: number },
+  minRoomIndex: number = 1
 ): Promise<{ roomCode: string; playerId: string; initialPlayer: LiveArenaPlayer }> {
-  const roomCode = sanitizeRoomCode(rawRoomCode);
+  const basePrefix = getBaseRoomPrefix(rawRoomCode);
   const playerId = getOrCreateMultiplayerPlayerId();
   const studentName = (profile?.name || 'Operative').trim().slice(0, 32) || 'Operative';
   const className = (profile?.className || 'Science Unit').trim().slice(0, 32) || 'Science Unit';
@@ -445,42 +472,86 @@ export async function joinDeathmatchRoom(
     shotSeq: 0,
     grenadeSeq: 0,
     lastHitSeq: 0,
+    joinedAt: now,
     lastPing: now,
   };
 
-  getBus(roomCode).post({ type: 'PLAYER_STATE', player: initialPlayer });
-  getBus(roomCode).post({ type: 'REQUEST_ROOM_SYNC', requesterId: playerId });
+  // Auto-scaling 5-player room matchmaking:
+  // Check Room 1 (e.g. BIO-FFA-1); if it has 5 active players, check Room 2 (BIO-FFA-2), then Room 3 (BIO-FFA-3), and so on.
+  let assignedRoomCode = formatIndexedRoomCode(basePrefix, Math.max(1, minRoomIndex));
+  try {
+    for (let idx = Math.max(1, minRoomIndex); idx <= 50; idx++) {
+      const candidateCode = formatIndexedRoomCode(basePrefix, idx);
+      const playersCol = collection(db, 'multiplayer_rooms', candidateCode, 'players');
+      const snap = await Promise.race([
+        getDocs(playersCol),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+      ]);
+      if (!snap) {
+        assignedRoomCode = candidateCode;
+        break;
+      }
 
-  // Perform cloud Firestore registration asynchronously so local spawn is instantaneous with zero teleportation
-  void (async () => {
-    try {
-      const roomRef = doc(db, 'multiplayer_rooms', roomCode);
-      await setDoc(
-        roomRef,
-        {
-          roomCode,
-          hostName: studentName,
-          stage: 'Open-World Deathmatch',
-          status: 'combat',
-          currentRound: 1,
-          totalRounds: 99,
-          lastUpdated: now,
-          updatedAtServer: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const checkNow = Date.now();
+      let activeOthersCount = 0;
+      let alreadyInRoom = false;
 
-      const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerId);
-      await setDoc(playerRef, initialPlayer, { merge: true });
-    } catch {
-      // Fallback to local BroadcastChannel bus silently if offline
+      snap.docs.forEach((docSnap) => {
+        const p = docSnap.data() as LiveArenaPlayer;
+        if (!p || !p.playerId) return;
+        if (p.playerId === playerId) {
+          alreadyInRoom = true;
+          return;
+        }
+        const pingAge = checkNow - (p.lastPing || 0);
+        const activityAge = checkNow - (p.lastActivityAt || p.lastPing || 0);
+        if (pingAge < AFK_TIMEOUT_MS && activityAge < AFK_TIMEOUT_MS) {
+          activeOthersCount += 1;
+        } else {
+          // Prune stale/disconnected player doc so it never blocks room capacity
+          void deleteDoc(docSnap.ref).catch(() => {});
+        }
+      });
+
+      if (alreadyInRoom || activeOthersCount < MAX_PLAYERS_PER_ROOM) {
+        assignedRoomCode = candidateCode;
+        break;
+      }
     }
-  })();
+  } catch {
+    // Fallback to assignedRoomCode if offline
+  }
 
-  return { roomCode, playerId, initialPlayer };
+  getBus(assignedRoomCode).post({ type: 'PLAYER_STATE', player: initialPlayer });
+  getBus(assignedRoomCode).post({ type: 'REQUEST_ROOM_SYNC', requesterId: playerId });
+
+  try {
+    const roomRef = doc(db, 'multiplayer_rooms', assignedRoomCode);
+    void setDoc(
+      roomRef,
+      {
+        roomCode: assignedRoomCode,
+        hostName: studentName,
+        stage: 'Open-World Deathmatch',
+        status: 'combat',
+        currentRound: 1,
+        totalRounds: 99,
+        lastUpdated: Date.now(),
+        updatedAtServer: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
+
+    const playerRef = doc(db, 'multiplayer_rooms', assignedRoomCode, 'players', playerId);
+    await setDoc(playerRef, initialPlayer, { merge: true });
+  } catch {
+    // Fallback to local BroadcastChannel bus silently if offline
+  }
+
+  return { roomCode: assignedRoomCode, playerId, initialPlayer };
 }
 
-const FIRESTORE_MIN_SYNC_INTERVAL_MS = 240;
+const FIRESTORE_MIN_SYNC_INTERVAL_MS = 95;
 let lastFirestoreSyncAt = 0;
 let lastSyncedState: LiveArenaPlayer | null = null;
 let isFirestoreWriteInFlight = false;
@@ -502,19 +573,19 @@ function hasMeaningfulStateDelta(prev: LiveArenaPlayer | null, next: LiveArenaPl
     return true;
   }
   if (
-    Math.abs(next.x - prev.x) >= 0.03 ||
-    Math.abs(next.z - prev.z) >= 0.03 ||
-    Math.abs(next.y - prev.y) >= 0.03 ||
-    Math.abs((next.vx || 0) - (prev.vx || 0)) >= 0.15 ||
-    Math.abs((next.vz || 0) - (prev.vz || 0)) >= 0.15 ||
-    Math.abs(next.aimX - prev.aimX) >= 0.03 ||
-    Math.abs(next.aimY - prev.aimY) >= 0.03 ||
-    Math.abs((next.yaw || 0) - (prev.yaw || 0)) >= 0.03
+    Math.abs(next.x - prev.x) >= 0.025 ||
+    Math.abs(next.z - prev.z) >= 0.025 ||
+    Math.abs(next.y - prev.y) >= 0.025 ||
+    Math.abs((next.vx || 0) - (prev.vx || 0)) >= 0.12 ||
+    Math.abs((next.vz || 0) - (prev.vz || 0)) >= 0.12 ||
+    Math.abs(next.aimX - prev.aimX) >= 0.025 ||
+    Math.abs(next.aimY - prev.aimY) >= 0.025 ||
+    Math.abs((next.yaw || 0) - (prev.yaw || 0)) >= 0.025
   ) {
     return true;
   }
-  // Periodic heartbeat every 3.5s when completely idle
-  return now - lastFirestoreSyncAt >= 3500;
+  // Periodic heartbeat every 3.0s when completely idle
+  return now - lastFirestoreSyncAt >= 3000;
 }
 
 async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlayer): Promise<void> {
@@ -527,7 +598,9 @@ async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlaye
   const isCritical =
     !lastSyncedState ||
     state.status !== lastSyncedState.status ||
-    state.kills !== lastSyncedState.kills;
+    state.kills !== lastSyncedState.kills ||
+    state.shotSeq !== lastSyncedState.shotSeq ||
+    state.grenadeSeq !== lastSyncedState.grenadeSeq;
 
   const elapsed = now - lastFirestoreSyncAt;
   if (!isCritical && elapsed < FIRESTORE_MIN_SYNC_INTERVAL_MS) {
@@ -540,7 +613,7 @@ async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlaye
           pendingSyncPayload = null;
           void flushFirestorePlayerWrite(next.roomCode, next.state);
         }
-      }, Math.max(25, FIRESTORE_MIN_SYNC_INTERVAL_MS - elapsed));
+      }, Math.max(20, FIRESTORE_MIN_SYNC_INTERVAL_MS - elapsed));
     }
     return;
   }
@@ -579,15 +652,17 @@ export async function syncLocalPlayerState(
 ): Promise<void> {
   const roomCode = sanitizeRoomCode(rawRoomCode);
   const now = Date.now();
+  const existingJoinedAt = lastSyncedState?.playerId === playerState.playerId ? lastSyncedState.joinedAt : undefined;
   const updated: LiveArenaPlayer = {
     ...playerState,
+    joinedAt: playerState.joinedAt || existingJoinedAt || now,
     lastPing: now,
   };
 
   // Immediate 0ms broadcast to local tabs
   getBus(roomCode).post({ type: 'PLAYER_STATE', player: updated });
 
-  // Non-blocking cloud sync throttled to 240ms to keep main UI thread 100% stutter-free
+  // Non-blocking single-flight cloud sync (~10.5Hz) for low-latency cross-phone gameplay without UI stutter
   void flushFirestorePlayerWrite(roomCode, updated);
 }
 
@@ -701,11 +776,20 @@ export function subscribeToDeathmatchRoom(
   }) => void,
   onKillfeedEvent?: (event: ArenaKillfeedEvent) => void,
   onServerReconcileLocal?: (authoritativeLocal: LiveArenaPlayer) => void,
-  onRemoteAfkKicked?: (playerId: string, studentName: string) => void
+  onRemoteAfkKicked?: (playerId: string, studentName: string) => void,
+  onRoomOverflow?: (nextMinRoomIndex: number) => void,
+  initialLocalPlayer?: LiveArenaPlayer
 ): () => void {
   const roomCode = sanitizeRoomCode(rawRoomCode);
   const playersMap = new Map<string, LiveArenaPlayer>();
+  if (initialLocalPlayer && initialLocalPlayer.playerId === localPlayerId) {
+    playersMap.set(localPlayerId, {
+      ...initialLocalPlayer,
+      receivedAt: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+    });
+  }
   let lastProcessedHitSeq = 0;
+  let overflowTriggered = false;
 
   const stampIncomingPlayer = (incoming: LiveArenaPlayer): LiveArenaPlayer => {
     const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -778,6 +862,9 @@ export function subscribeToDeathmatchRoom(
       vAimX,
       vAimY,
       vYaw,
+      joinedAt: isValidEpochTimestamp(incoming.joinedAt)
+        ? incoming.joinedAt
+        : prev?.joinedAt || nowEpoch,
       lastActivityAt,
       lastPing: isValidEpochTimestamp(incoming.lastPing) ? incoming.lastPing : nowEpoch,
       receivedAt: nowPerf,
@@ -815,9 +902,31 @@ export function subscribeToDeathmatchRoom(
       });
     }
 
+    // If simultaneous joins caused > MAX_PLAYERS_PER_ROOM (5) players in the same room,
+    // overflow the newest joiner(s) into the next room automatically!
+    if (activeList.length > MAX_PLAYERS_PER_ROOM && !overflowTriggered && onRoomOverflow) {
+      const byJoinOrder = [...activeList].sort(
+        (a, b) =>
+          (a.joinedAt || a.lastPing || 0) - (b.joinedAt || b.lastPing || 0) ||
+          a.playerId.localeCompare(b.playerId)
+      );
+      const myRank = byJoinOrder.findIndex((p) => p.playerId === localPlayerId);
+      if (myRank >= MAX_PLAYERS_PER_ROOM) {
+        overflowTriggered = true;
+        const currentRoomIdx = getRoomIndexFromCode(roomCode);
+        onRoomOverflow(currentRoomIdx + 1);
+        return;
+      }
+    }
+
     activeList.sort((a, b) => b.kills - a.kills || b.score - a.score);
     onUpdate(activeList);
   };
+
+  // Emit initial player list immediately if seeded
+  if (playersMap.size > 0) {
+    emitPlayers();
+  }
 
   // 1. Subscribe to instant BroadcastChannel messages
   const bus = getBus(roomCode);
@@ -828,8 +937,8 @@ export function subscribeToDeathmatchRoom(
       playersMap.set(p.playerId, p);
       emitPlayers();
     } else if (msg.type === 'REQUEST_ROOM_SYNC' && msg.requesterId !== localPlayerId) {
-      const me = playersMap.get(localPlayerId);
-      if (me) {
+      const me = playersMap.get(localPlayerId) || lastSyncedState;
+      if (me && me.playerId === localPlayerId) {
         bus.post({ type: 'PLAYER_STATE', player: { ...me, lastPing: Date.now() } });
       }
     } else if (msg.type === 'PLAYER_LEFT' && msg.playerId) {
@@ -885,43 +994,58 @@ export function subscribeToDeathmatchRoom(
     (snapshot) => {
       let hasMeaningfulRemoteChange = false;
       snapshot.docChanges().forEach((change) => {
-        // Skip local pending writes so local setDoc() never triggers main-thread snapshot churn
-        if (change.doc.id === localPlayerId && change.doc.metadata.hasPendingWrites) {
-          return;
-        }
         const data = change.doc.data() as LiveArenaPlayer;
         if (change.type === 'removed') {
-          playersMap.delete(change.doc.id);
-          hasMeaningfulRemoteChange = true;
-        } else if (data && data.playerId) {
-          const stamped = stampIncomingPlayer(data);
-          playersMap.set(data.playerId, stamped);
-          hasMeaningfulRemoteChange = true;
-
-          if (data.playerId === localPlayerId) {
-            onServerReconcileLocal?.(stamped);
+          if (change.doc.id !== localPlayerId) {
+            playersMap.delete(change.doc.id);
+            hasMeaningfulRemoteChange = true;
           }
+          return;
+        }
+        if (!data || !data.playerId) return;
 
-          // Check if local player received a hit via Firestore from a remote device
+        // For the local player: ensure playersMap always tracks localPlayerId for accurate room count,
+        // while skipping redundant pending-write churn when localPlayerId is already registered.
+        if (change.doc.id === localPlayerId && change.doc.metadata.hasPendingWrites) {
+          const prevLocal = playersMap.get(localPlayerId);
           if (
-            data.playerId === localPlayerId &&
-            data.lastHitSeq &&
-            data.lastHitSeq > lastProcessedHitSeq &&
-            data.lastHitByName
+            !prevLocal ||
+            prevLocal.status !== data.status ||
+            prevLocal.kills !== data.kills
           ) {
-            lastProcessedHitSeq = data.lastHitSeq;
-            const resolvedHp =
-              typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
-            onLocalHitReceived?.({
-              attackerName: data.lastHitByName,
-              weaponName: data.lastHitWeapon || 'Rifle',
-              damage: data.lastHitDamage || 25,
-              newHp: resolvedHp,
-              eliminated: resolvedHp <= 0 || data.status === 'reviving',
-              isHeadshot: data.lastHitHeadshot,
-              hitSeq: data.lastHitSeq,
-            });
+            playersMap.set(localPlayerId, stampIncomingPlayer(data));
+            hasMeaningfulRemoteChange = true;
           }
+          return;
+        }
+
+        const stamped = stampIncomingPlayer(data);
+        playersMap.set(data.playerId, stamped);
+        hasMeaningfulRemoteChange = true;
+
+        if (data.playerId === localPlayerId) {
+          onServerReconcileLocal?.(stamped);
+        }
+
+        // Check if local player received a hit via Firestore from a remote device
+        if (
+          data.playerId === localPlayerId &&
+          data.lastHitSeq &&
+          data.lastHitSeq > lastProcessedHitSeq &&
+          data.lastHitByName
+        ) {
+          lastProcessedHitSeq = data.lastHitSeq;
+          const resolvedHp =
+            typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
+          onLocalHitReceived?.({
+            attackerName: data.lastHitByName,
+            weaponName: data.lastHitWeapon || 'Rifle',
+            damage: data.lastHitDamage || 25,
+            newHp: resolvedHp,
+            eliminated: resolvedHp <= 0 || data.status === 'reviving',
+            isHeadshot: data.lastHitHeadshot,
+            hitSeq: data.lastHitSeq,
+          });
         }
       });
       if (hasMeaningfulRemoteChange) {
