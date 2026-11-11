@@ -62,6 +62,9 @@ import {
   formatIndexedRoomCode,
   AFK_TIMEOUT_MS,
   MAX_PLAYERS_PER_ROOM,
+  MATCH_KILL_LIMIT,
+  MATCH_DURATION_SECONDS,
+  getAvatarDisplayInfo,
   ClientPredictionEngine,
   predictRemoteEntityState,
   LiveArenaPlayer,
@@ -99,6 +102,9 @@ import {
   CheckCircle2,
   XCircle,
   Radio,
+  Trophy,
+  Award,
+  Medal,
 } from 'lucide-react';
 
 interface CombatViewProps {
@@ -676,6 +682,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
   );
   const localShotSeqRef = useRef<number>(0);
   const localGrenadeSeqRef = useRef<number>(0);
+  const shotsFiredRef = useRef<number>(0);
+  const shotsHitRef = useRef<number>(0);
+  const getLocalAccuracyPct = () =>
+    shotsFiredRef.current > 0
+      ? Math.min(100, Math.round((shotsHitRef.current / shotsFiredRef.current) * 100))
+      : 0;
+
+  // Multiplayer 5-Minute Match Countdown Timer & 10-Kill Victory Podium State
+  const [mpMatchTimeLeft, setMpMatchTimeLeft] = useState<number>(MATCH_DURATION_SECONDS);
+  const mpMatchTimeLeftRef = useRef<number>(MATCH_DURATION_SECONDS);
+  const [mpMatchEnded, setMpMatchEnded] = useState<boolean>(false);
+  const mpMatchEndedRef = useRef<boolean>(false);
+  const [mpMatchEndReason, setMpMatchEndReason] = useState<'kill_limit' | 'time_limit'>('kill_limit');
+  const triggerMultiplayerMatchEndRef = useRef<((reason: 'kill_limit' | 'time_limit') => void) | null>(null);
+
   const playerWorldVelRef = useRef<{ vx: number; vz: number }>({ vx: 0, vz: 0 });
   const pushLocalMpStateNowRef = useRef<(() => void) | null>(null);
   const predictionEngineRef = useRef<ClientPredictionEngine>(new ClientPredictionEngine());
@@ -1530,6 +1551,83 @@ export const CombatView: React.FC<CombatViewProps> = ({
     }
   };
 
+  const triggerMultiplayerMatchEnd = (reason: 'kill_limit' | 'time_limit') => {
+    if (!isMultiplayerDeathmatch || mpMatchEndedRef.current) return;
+    mpMatchEndedRef.current = true;
+    renderedPausedFrameRef.current = false;
+    isPointerDownRef.current = false;
+    keysDownRef.current = {};
+    moveInputRef.current = { x: 0, z: 0 };
+    setMpMatchEndReason(reason);
+    setMpMatchEnded(true);
+    sounds.playVictory();
+    sounds.triggerHaptic([40, 30, 60], 'heavy');
+    pushLocalMpStateNowRef.current?.();
+
+    const prof = loadStudentProfile();
+    recordScoreToLeaderboard({
+      studentName: prof?.name || 'Operative',
+      className: prof?.className || 'Class 7',
+      score: scoreRef.current,
+      kills: killsRef.current,
+      levelTitle: `Arena [${activeRoomCodeRef.current}] PvP`,
+      stage: 'Multiplayer',
+      rankTitle: 'Commando',
+      isVictory: killsRef.current > 0,
+    }).catch(() => {});
+  };
+  triggerMultiplayerMatchEndRef.current = triggerMultiplayerMatchEnd;
+
+  const handlePlayNextMatch = () => {
+    sounds.unlockAudio();
+    sounds.triggerHaptic([25, 20, 35], 'medium');
+    sounds.playCombatAlarm();
+
+    mpMatchEndedRef.current = false;
+    setMpMatchEnded(false);
+    mpMatchTimeLeftRef.current = MATCH_DURATION_SECONDS;
+    setMpMatchTimeLeft(MATCH_DURATION_SECONDS);
+    renderedPausedFrameRef.current = false;
+
+    killsRef.current = 0;
+    setKills(0);
+    scoreRef.current = 0;
+    setScore(0);
+    mpDeathsRef.current = 0;
+    setMpDeaths(0);
+    shotsFiredRef.current = 0;
+    shotsHitRef.current = 0;
+    comboStreakRef.current = 0;
+    setComboStreak(0);
+
+    playerHpRef.current = 100;
+    setPlayerHp(100);
+    currentAmmoRef.current = currentWeaponRef.current.magSize;
+    reserveAmmoRef.current = currentWeaponRef.current.totalReserve;
+    setCurrentAmmo(currentAmmoRef.current);
+    setReserveAmmo(reserveAmmoRef.current);
+    syncLiveAmmoDom();
+
+    timeLeftRef.current = 60;
+    setTimeLeft(60);
+    mpStatusRef.current = 'active';
+    setMpStatus('active');
+    setMpKilledByInfo(null);
+    lastPlayerActivityRef.current = Date.now();
+
+    const freshSpawn = getInitialArenaSpawn(`${localMpPlayerIdRef.current}_${Date.now()}`);
+    playerPosRef.current = { x: freshSpawn.x, z: freshSpawn.z };
+
+    try {
+      sessionStorage.removeItem('BIODEFENSE_MP_AVATAR_V1');
+    } catch {
+      // Ignore storage restrictions
+    }
+    localMpAvatarRef.current = getOrCreateMultiplayerAvatar(localMpPlayerIdRef.current);
+
+    pushLocalMpStateNowRef.current?.();
+  };
+
   // Real-Time Online Multiplayer Room Join (Auto-Scaling 5-Player Rooms), Client-Side Prediction & Server Reconciliation, Heartbeat & 1-Min AFK Kick
   useEffect(() => {
     if (!isMultiplayerDeathmatch) return;
@@ -1576,13 +1674,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
         myId,
         (players) => {
           mpOnlinePlayersRef.current = players;
-          const nextKey = players.map((p) => `${p.playerId}:${p.status}:${p.kills}`).join('|');
+          const nextKey = players
+            .map((p) => `${p.playerId}:${p.status}:${p.kills}:${p.score}:${p.accuracy || 0}:${p.weaponId}`)
+            .join('|');
           if (nextKey !== prevMpPlayersKeyRef.current) {
             prevMpPlayersKeyRef.current = nextKey;
             setMpOnlinePlayers(players);
           }
+          // Check 10-kill match completion threshold across all operatives in the room
+          if (!mpMatchEndedRef.current && players.some((p) => (p.kills || 0) >= MATCH_KILL_LIMIT)) {
+            triggerMultiplayerMatchEndRef.current?.('kill_limit');
+          }
         },
         (hit) => {
+          if (mpMatchEndedRef.current) return;
           // Players inside the freezing bio-stasis shield ('stunned') or reviving cannot be damaged or killed!
           if (mpStatusRef.current !== 'active') return;
           const nextHp = Math.max(0, Math.min(playerHpRef.current, hit.newHp));
@@ -1599,7 +1704,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setMpKillfeed((prev) => [kfEvent, ...prev.slice(0, 4)]);
         },
         (authoritativeLocal) => {
-          if (afkKickedRef.current) return;
+          if (afkKickedRef.current || mpMatchEndedRef.current) return;
           const reconcileRes = predictionEngineRef.current.reconcileServerState(
             authoritativeLocal,
             {
@@ -1665,6 +1770,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         kills: killsRef.current,
         deaths: mpDeathsRef.current,
         score: scoreRef.current,
+        accuracy: getLocalAccuracyPct(),
         isReady: true,
         shotSeq: localShotSeqRef.current,
         grenadeSeq: localGrenadeSeqRef.current,
@@ -1679,7 +1785,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     // 1-Minute (60s) AFK Watchdog: Kicks player out of server if no movement, combat actions, or question solving occurs for 1 minute
     let afkExitTimeout: ReturnType<typeof setTimeout> | null = null;
     const afkWatchdogTimer = setInterval(() => {
-      if (afkKickedRef.current) return;
+      if (afkKickedRef.current || mpMatchEndedRef.current) return;
       const nowEpoch = Date.now();
       const safeLastActivity =
         lastPlayerActivityRef.current >= sessionStartEpoch &&
@@ -1719,13 +1825,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
   }, [isMultiplayerDeathmatch, multiplayerRoomCode, onExitToMenu]);
 
-  // 60-second combat countdown (Pauses automatically whenever a First-Time Biology Concept modal or MP Revive/Stun Quiz is open!)
+  // 60-second combat countdown & 5-minute Multiplayer Match Countdown
   const timeLeftRef = useRef<number>(60);
   useEffect(() => {
     sounds.playCombatAlarm();
     timeLeftRef.current = 60;
     const timer = setInterval(() => {
       if (isPausedForConceptRef.current || isGamePausedRef.current) return;
+      if (isMultiplayerDeathmatch && mpMatchEndedRef.current) return;
+
+      // Multiplayer 5-Minute (300s) Match Countdown Timer
+      if (isMultiplayerDeathmatch) {
+        if (mpMatchTimeLeftRef.current <= 1) {
+          mpMatchTimeLeftRef.current = 0;
+          setMpMatchTimeLeft(0);
+          triggerMultiplayerMatchEndRef.current?.('time_limit');
+          return;
+        } else {
+          mpMatchTimeLeftRef.current -= 1;
+          setMpMatchTimeLeft(mpMatchTimeLeftRef.current);
+        }
+        // Check 10-kill threshold
+        if (killsRef.current >= MATCH_KILL_LIMIT) {
+          triggerMultiplayerMatchEndRef.current?.('kill_limit');
+          return;
+        }
+      }
+
       if (isMultiplayerDeathmatch && mpStatusRef.current !== 'active') return;
 
       // Show at most 1 queued biology concept in this phase after 3.2s warmup (Solo mode only)
@@ -1761,7 +1887,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         if (prev <= 1) {
           if (isMultiplayerDeathmatch) {
             timeLeftRef.current = 0;
-            // 1-Minute Active Combat Window Reached -> Freeze & Stun Player Until 3 Questions Answered!
+            // 1-Minute Active Combat Window Reached -> Freeze & Stun Player Until 1 Question Answered!
             setTimeout(() => {
               triggerMpStunFreezeStateRef.current?.();
             }, 0);
@@ -2028,7 +2154,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setCurrentWeapon(nextWpn);
     setCurrentAmmo(nextWpn.magSize);
     setReserveAmmo(nextWpn.totalReserve);
-    if (onSelectWeapon) onSelectWeapon(nextWpn);
+    syncLiveAmmoDom();
 
     if (!weaponSupportsScope(nextWpn) && isScopedRef.current) {
       isScopedRef.current = false;
@@ -2044,23 +2170,33 @@ export const CombatView: React.FC<CombatViewProps> = ({
       });
       const chosen = weaponsMap[nextWpn.id];
       if (chosen) {
+        chosen.group.visible = true;
         activeWeaponSubmeshRef.current = chosen.group;
         pumpSlideRef.current = chosen.pumpSlide || null;
       }
     }
+    if (fpsGroupRef.current) fpsGroupRef.current.visible = true;
+    if (weaponMeshRef.current) weaponMeshRef.current.visible = true;
   };
 
   const handleSelectWeapon = (nextWpn: Weapon) => {
-    if (nextWpn.id === currentWeaponRef.current.id && !weaponSwapAnimRef.current.isSwapping) {
+    if (nextWpn.id === currentWeaponRef.current.id) {
+      // Ensure weapon remains visible even if same key is pressed repeatedly
+      if (fpsGroupRef.current) fpsGroupRef.current.visible = true;
+      if (weaponMeshRef.current) weaponMeshRef.current.visible = true;
       return;
     }
-    // Kick off smooth 3D lowering phase for weapon swap transition
+    // Apply weapon change atomically & immediately so rapid switching never hides or desyncs the character/weapon
+    applyWeaponChange(nextWpn);
     weaponSwapAnimRef.current = {
       isSwapping: true,
-      phase: 'lowering',
-      progress: 0,
-      targetWpn: nextWpn,
+      phase: 'raising',
+      progress: 0.45,
+      targetWpn: null,
     };
+    if (isMultiplayerDeathmatch) {
+      pushLocalMpStateNowRef.current?.();
+    }
     sounds.playRadioChirp();
     sounds.triggerHaptic([18, 25], 'medium');
   };
@@ -3457,13 +3593,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
             existing.hpBarFill.scale.x = pct;
             existing.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
           }
+          existing.mesh.visible = true;
           const nextAvatar = resolvePlayerAvatarType(rp.playerId, rp.avatarType);
           const nextWeapon = rp.weaponId || 'scar_bio';
           if (existing.avatarType !== nextAvatar || existing.equippedWeaponId !== nextWeapon) {
             existing.avatarType = nextAvatar;
             existing.equippedWeaponId = nextWeapon;
-            updateStudentOperatorAppearance(existing.mesh, nextAvatar, nextWeapon);
           }
+          updateStudentOperatorAppearance(existing.mesh, nextAvatar, nextWeapon);
           const nextStun = rp.status === 'stunned';
           if (existing.isStunned !== nextStun || existing.name !== rp.studentName) {
             existing.isStunned = nextStun;
@@ -3992,7 +4129,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let operatorShootingResetTimer: number | null = null;
 
     function executeShot() {
-      if (isMultiplayerDeathmatch && mpStatusRef.current !== 'active') return;
+      if (isMultiplayerDeathmatch && (mpStatusRef.current !== 'active' || mpMatchEndedRef.current)) return;
       const now = performance.now();
       const activeWpn = currentWeaponRef.current;
 
@@ -4009,6 +4146,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
         return;
       }
+
+      shotsFiredRef.current += 1;
 
       if (isMultiplayerDeathmatch) {
         localShotSeqRef.current += 1;
@@ -4422,6 +4561,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       }
 
       if (hitRegistered && hitSoldier) {
+        shotsHitRef.current += 1;
         sounds.playHitmarker(criticalHit);
 
         if (isMultiplayerDeathmatch && hitSoldier.remotePlayerId) {
@@ -4562,9 +4702,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
               playerId: localMpPlayerIdRef.current,
               studentName: prof?.name || 'Operative',
               className: prof?.className || 'Science Unit',
+              avatarType: localMpAvatarRef.current,
               x: playerPosRef.current.x,
               y: Number(playerElevationYRef.current.toFixed(2)),
               z: playerPosRef.current.z,
+              yaw: Number(cameraYawRef.current.toFixed(3)),
+              pitch: Number(cameraPitchRef.current.toFixed(3)),
               aimX: aimPosRef.current.x,
               aimY: aimPosRef.current.y,
               weaponId: currentWeaponRef.current.id,
@@ -4574,11 +4717,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
               kills: killsRef.current,
               deaths: mpDeathsRef.current,
               score: scoreRef.current,
+              accuracy: getLocalAccuracyPct(),
               isReady: true,
               shotSeq: localShotSeqRef.current,
               grenadeSeq: localGrenadeSeqRef.current,
               lastPing: Date.now(),
             });
+            if (killsRef.current >= MATCH_KILL_LIMIT) {
+              triggerMultiplayerMatchEndRef.current?.('kill_limit');
+            }
           }
 
           if (eliminatedSoldier.isHelicopter || eliminatedSoldier.isRobot || eliminatedSoldier.isJet) {
@@ -4871,23 +5018,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       mouseEdgeNdcX = normX;
 
       if (isMultiplayerDeathmatch) {
-        // Professional FPS Center-Crosshair FOV Camera Rotation:
-        // The crosshair stays centered at (50%, 50%) while the player's field of view smoothly follows mouse aim!
-        const prev = lastMouseClientPosRef.current;
-        if (prev) {
-          const dx = e.clientX - prev.x;
-          const dy = e.clientY - prev.y;
-          const mouseSens = isScopedRef.current ? 0.0028 : 0.0052;
-          targetCameraYawRef.current -= dx * mouseSens;
-          targetCameraPitchRef.current = THREE.MathUtils.clamp(
-            targetCameraPitchRef.current - dy * (mouseSens * 0.72),
-            -0.68,
-            0.68
-          );
-        } else {
-          targetCameraYawRef.current = -normX * Math.PI;
-          targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.42, -0.68, 0.68);
-        }
+        // Controlled 1:1 cursor-to-FOV camera mapping:
+        // The crosshair remains locked at the center (50%, 50%) while the camera FOV smoothly follows cursor position
+        // without any edge auto-spinning or wrap-around jumps when aiming right, left, or below!
+        targetCameraYawRef.current = -normX * Math.PI;
+        targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.44, -0.62, 0.62);
       } else {
         targetCameraYawRef.current = -normX * Math.PI;
         targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.24, -0.55, 0.55);
@@ -5080,8 +5215,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     function animate() {
       const nowTime = performance.now();
-      // Freeze 3D simulation & timer delta when paused for a Concept Popup or User Pause Menu!
-      if (isPausedForConceptRef.current || isGamePausedRef.current) {
+      // Freeze 3D simulation & timer delta when paused for a Concept Popup, User Pause Menu, or Multiplayer Match Victory Podium!
+      if (isPausedForConceptRef.current || isGamePausedRef.current || mpMatchEndedRef.current) {
         lastFrameTime = nowTime;
         if (!renderedPausedFrameRef.current) {
           renderedPausedFrameRef.current = true;
@@ -5206,37 +5341,24 @@ export const CombatView: React.FC<CombatViewProps> = ({
           lastPlayerActivityRef.current = Date.now();
         }
 
-        // Consume any smooth server reconciliation corrections for position & yaw (keep crosshair locked at center 0,0 in Multiplayer!)
+        // Consume any smooth server reconciliation corrections for position (keep crosshair locked at center 0,0 in Multiplayer!)
         const corr = predictionEngineRef.current.consumeFrameCorrection(delta);
         targetAimPosRef.current.x = 0;
         targetAimPosRef.current.y = 0;
         aimPosRef.current.x = 0;
         aimPosRef.current.y = 0;
 
-        // If cursor is pushed to the extreme left or right edge of the screen, smoothly turn camera FOV in that direction while keeping crosshair centered
-        if (isMouseOverCanvas && Math.abs(mouseEdgeNdcX) > 0.78) {
-          const edgeStrength = (Math.abs(mouseEdgeNdcX) - 0.78) / 0.22;
-          const turnRate = (isScopedRef.current ? 1.15 : 2.1) * edgeStrength;
-          targetCameraYawRef.current -= Math.sign(mouseEdgeNdcX) * turnRate * delta;
-        }
-
-        // Smooth shortest-angle 360-degree camera FOV rotation following the player's aim
-        const baseYaw = cameraYawRef.current + corr.dYaw;
-        const yawDiff = Math.atan2(
-          Math.sin(targetCameraYawRef.current - baseYaw),
-          Math.cos(targetCameraYawRef.current - baseYaw)
-        );
+        // Smooth, controlled camera FOV rotation following targetCameraYawRef & targetCameraPitchRef (zero auto-spin!)
         cameraYawRef.current = THREE.MathUtils.damp(
-          baseYaw,
-          baseYaw + yawDiff,
-          18,
+          cameraYawRef.current,
+          targetCameraYawRef.current,
+          16,
           delta
         );
-        targetCameraYawRef.current = cameraYawRef.current + yawDiff * 0.85;
         cameraPitchRef.current = THREE.MathUtils.damp(
           cameraPitchRef.current,
           targetCameraPitchRef.current,
-          18,
+          16,
           delta
         );
 
@@ -6592,6 +6714,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 }
 
                 // Sync opponent's biological fighter character avatar & realistic 3D equipped weapon in real time
+                soldier.mesh.visible = true;
                 const nextAvatar = resolvePlayerAvatarType(rp.playerId, rp.avatarType);
                 const nextWeapon = rp.weaponId || 'scar_bio';
                 if (soldier.avatarType !== nextAvatar || soldier.equippedWeaponId !== nextWeapon) {
@@ -6633,6 +6756,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 const targetElevY = Math.max(pred.worldY, surfaceElev);
                 const targetBaseY = targetElevY + (rp.isCrouched ? -0.68 : -0.32);
 
+                // Tilt opponent's arms & 3D weapon vertically to match the exact pitch they are aiming at!
+                const remoteAimPitch = THREE.MathUtils.clamp(rp.pitch || 0, -0.62, 0.62);
+
                 // Animate limbs based on whether the real opponent is actively moving or aiming
                 if (moveDist > 0.03 || remoteSpeedMag > 0.35) {
                   const runCycle = Math.sin(elapsed * 16 + soldier.walkOffset);
@@ -6641,8 +6767,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     soldier.rightLeg.rotation.x = -runCycle * 0.78;
                   }
                   if (soldier.leftArm && soldier.rightArm) {
-                    soldier.leftArm.rotation.x = -0.45 - runCycle * 0.35;
-                    soldier.rightArm.rotation.x = -0.65 + runCycle * 0.22;
+                    soldier.leftArm.rotation.x = THREE.MathUtils.damp(
+                      soldier.leftArm.rotation.x,
+                      -0.58 - remoteAimPitch - runCycle * 0.14,
+                      18,
+                      delta
+                    );
+                    soldier.rightArm.rotation.x = THREE.MathUtils.damp(
+                      soldier.rightArm.rotation.x,
+                      -0.68 - remoteAimPitch + runCycle * 0.10,
+                      18,
+                      delta
+                    );
                   }
                   if (Math.abs(targetBaseY - soldier.mesh.position.y) > 4.5) {
                     soldier.mesh.position.y = targetBaseY;
@@ -6660,8 +6796,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     soldier.rightLeg.rotation.x = THREE.MathUtils.damp(soldier.rightLeg.rotation.x, 0, 16, delta);
                   }
                   if (soldier.leftArm && soldier.rightArm) {
-                    soldier.leftArm.rotation.x = THREE.MathUtils.damp(soldier.leftArm.rotation.x, -0.58, 16, delta);
-                    soldier.rightArm.rotation.x = THREE.MathUtils.damp(soldier.rightArm.rotation.x, -0.68, 16, delta);
+                    soldier.leftArm.rotation.x = THREE.MathUtils.damp(
+                      soldier.leftArm.rotation.x,
+                      -0.58 - remoteAimPitch,
+                      18,
+                      delta
+                    );
+                    soldier.rightArm.rotation.x = THREE.MathUtils.damp(
+                      soldier.rightArm.rotation.x,
+                      -0.68 - remoteAimPitch,
+                      18,
+                      delta
+                    );
                   }
                   if (Math.abs(targetBaseY - soldier.mesh.position.y) > 4.5) {
                     soldier.mesh.position.y = targetBaseY;
@@ -8131,30 +8277,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         if (weaponSwapAnimRef.current.isSwapping) {
           const anim = weaponSwapAnimRef.current;
-          const speed = delta * 15.0;
-          if (anim.phase === 'lowering') {
-            anim.progress += speed;
-            const t = Math.min(1, anim.progress);
-            const easeDown = t * t;
-            swapOffsetY = -0.58 * easeDown;
-            swapRotX = -0.42 * easeDown;
+          const speed = delta * 18.0;
+          anim.progress += speed;
+          const t = Math.min(1, anim.progress);
+          const easeUp = 1 - (1 - t) * (1 - t);
+          swapOffsetY = -0.16 * (1 - easeUp);
+          swapRotX = -0.14 * (1 - easeUp);
 
-            if (t >= 1.0 && anim.targetWpn) {
-              applyWeaponChange(anim.targetWpn);
-              anim.phase = 'raising';
-              anim.progress = 0;
-            }
-          } else if (anim.phase === 'raising') {
-            anim.progress += speed;
-            const t = Math.min(1, anim.progress);
-            const easeUp = 1 - (1 - t) * (1 - t);
-            swapOffsetY = -0.58 * (1 - easeUp);
-            swapRotX = -0.42 * (1 - easeUp);
-
-            if (t >= 1.0) {
-              anim.isSwapping = false;
-              anim.targetWpn = null;
-            }
+          if (t >= 1.0) {
+            anim.isSwapping = false;
+            anim.targetWpn = null;
           }
         }
 
@@ -8731,7 +8863,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   <span className="text-slate-600">|</span>
                   <span
                     className={`flex items-center gap-1 ${
-                      timeLeft <= 12 ? 'text-rose-400 animate-pulse' : 'text-amber-300'
+                      mpMatchTimeLeft <= 30 ? 'text-rose-400 animate-pulse' : 'text-amber-300'
+                    }`}
+                    title="5-Minute Match Countdown & 10-Kill Goal"
+                  >
+                    <Trophy className="w-3 h-3 text-amber-400" />
+                    <span>
+                      {kills}/{MATCH_KILL_LIMIT} KILLS • {Math.floor(mpMatchTimeLeft / 60)}:
+                      {String(mpMatchTimeLeft % 60).padStart(2, '0')}
+                    </span>
+                  </span>
+                  <span className="text-slate-600">|</span>
+                  <span
+                    className={`flex items-center gap-1 ${
+                      timeLeft <= 12 ? 'text-rose-400 animate-pulse' : 'text-cyan-200'
                     }`}
                   >
                     <Snowflake className="w-3 h-3 text-cyan-300" />
@@ -9677,7 +9822,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           Appears when player dies during the 1-minute window OR gets frozen & stunned
           when the 1-minute combat timer reaches 0!
          ===================================================================== */}
-      {isMultiplayerDeathmatch && mpStatus !== 'active' && !isGamePaused && (
+      {isMultiplayerDeathmatch && mpStatus !== 'active' && !isGamePaused && !mpMatchEnded && (
         <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 pointer-events-auto font-mono select-none">
           <div
             className={`w-full max-w-xl bg-zinc-950 border-l-4 ${
@@ -10040,6 +10185,292 @@ export const CombatView: React.FC<CombatViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* =====================================================================
+          MULTIPLAYER DEATHMATCH: MATCH END VICTORY SCREEN & 3D OLYMPIC PODIUM
+          Triggered at 10-Kill Threshold or 5-Minute Match Countdown Expiry!
+         ===================================================================== */}
+      {isMultiplayerDeathmatch && mpMatchEnded && (() => {
+        const localProf = loadStudentProfile();
+        const localPlayerId = localMpPlayerIdRef.current;
+        const localAcc = getLocalAccuracyPct();
+        const localEntry = {
+          playerId: localPlayerId,
+          studentName: localProf?.name || 'OPERATIVE',
+          className: localProf?.className || 'Science Unit',
+          avatarType: localMpAvatarRef.current,
+          kills: kills,
+          deaths: mpDeaths,
+          score: score,
+          accuracy: localAcc,
+          isLocal: true,
+          isPlaceholder: false,
+        };
+
+        const remoteEntries = mpOnlinePlayers
+          .filter((p) => p.playerId !== localPlayerId)
+          .map((p) => ({
+            playerId: p.playerId,
+            studentName: p.studentName || 'OPERATIVE',
+            className: p.className || 'Science Unit',
+            avatarType: resolvePlayerAvatarType(p.playerId, p.avatarType),
+            kills: p.kills || 0,
+            deaths: p.deaths || 0,
+            score: p.score || 0,
+            accuracy: typeof p.accuracy === 'number' ? p.accuracy : (p.kills || 0) > 0 ? 64 : 0,
+            isLocal: false,
+            isPlaceholder: false,
+          }));
+
+        const allRanked = [localEntry, ...remoteEntries].sort((a, b) => {
+          if (b.kills !== a.kills) return b.kills - a.kills;
+          if (b.score !== a.score) return b.score - a.score;
+          return b.accuracy - a.accuracy;
+        });
+
+        const fallbackAvatars: MultiplayerAvatarType[] = ['rbc', 'platelet', 'dendrite', 'antibody', 'mucus'];
+        while (allRanked.length < 3) {
+          const idx = allRanked.length;
+          allRanked.push({
+            playerId: `vacant_${idx}`,
+            studentName: idx === 1 ? 'SQUAD SLOT #2' : 'SQUAD SLOT #3',
+            className: 'Awaiting Operative',
+            avatarType: fallbackAvatars[idx % fallbackAvatars.length],
+            kills: 0,
+            deaths: 0,
+            score: 0,
+            accuracy: 0,
+            isLocal: false,
+            isPlaceholder: true,
+          });
+        }
+
+        const firstPlace = allRanked[0];
+        const secondPlace = allRanked[1];
+        const thirdPlace = allRanked[2];
+
+        const podiumOrder = [
+          { rank: 2, label: '2ND PLACE', sublabel: 'SILVER MEDALIST', data: secondPlace },
+          { rank: 1, label: '1ST PLACE', sublabel: 'OLYMPIC BIO-CHAMPION', data: firstPlace },
+          { rank: 3, label: '3RD PLACE', sublabel: 'BRONZE MEDALIST', data: thirdPlace },
+        ];
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/92 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 pointer-events-auto select-none overflow-y-auto">
+            <div
+              className="w-full max-w-4xl bg-gradient-to-b from-slate-900/95 via-zinc-950/98 to-black border-2 border-amber-400/80 shadow-[0_0_70px_rgba(245,158,11,0.35)] p-3 sm:p-6 flex flex-col gap-3 sm:gap-5 text-white my-auto"
+              style={{
+                clipPath:
+                  'polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px))',
+              }}
+            >
+              {/* Top Championship Header */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/15 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-gradient-to-br from-amber-400 via-yellow-500 to-amber-700 border-2 border-yellow-200 flex items-center justify-center shadow-[0_0_20px_rgba(250,204,21,0.6)] shrink-0">
+                    <Trophy className="w-5 h-5 sm:w-6 sm:h-6 text-slate-950" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] sm:text-xs font-mono font-black tracking-[0.2em] text-amber-300 uppercase">
+                        MATCH COMPLETE • ROOM {activeRoomCode}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/60 text-[9px] font-mono font-black text-amber-200 uppercase">
+                        {mpMatchEndReason === 'kill_limit'
+                          ? `10-KILL VICTORY THRESHOLD REACHED`
+                          : `5-MINUTE MATCH TIMER COMPLETED`}
+                      </span>
+                    </div>
+                    <h2 className="text-lg sm:text-2xl font-black tracking-wider uppercase text-white">
+                      OLYMPIC BIO-DEFENSE VICTORY PODIUM
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 bg-zinc-900/90 border border-white/15 px-3 py-1.5 rounded-lg font-mono text-xs">
+                  <div>
+                    <span className="text-[9px] text-zinc-400 block uppercase">CHAMPION</span>
+                    <span className="font-black text-amber-300">{firstPlace.studentName}</span>
+                  </div>
+                  <div className="h-6 w-px bg-white/10" />
+                  <div>
+                    <span className="text-[9px] text-zinc-400 block uppercase">YOUR ACCURACY</span>
+                    <span className="font-black text-cyan-300">{localAcc}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3D-STYLED OLYMPIC VICTORY PODIUM (2ND SILVER | 1ST GOLD | 3RD BRONZE) */}
+              <div className="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-2 sm:pt-4 px-1 sm:px-3">
+                {podiumOrder.map((slot) => {
+                  const p = slot.data;
+                  const cellInfo = getAvatarDisplayInfo(p.avatarType);
+                  const isFirst = slot.rank === 1;
+                  const isSecond = slot.rank === 2;
+
+                  const pedestalHeight = isFirst
+                    ? 'h-32 sm:h-40'
+                    : isSecond
+                    ? 'h-24 sm:h-30'
+                    : 'h-20 sm:h-24';
+
+                  const pedestalGradient = isFirst
+                    ? 'from-amber-400/95 via-yellow-600/95 to-amber-950 border-yellow-200 shadow-[0_-10px_35px_rgba(250,204,21,0.45)]'
+                    : isSecond
+                    ? 'from-slate-300/90 via-slate-500/90 to-slate-900 border-slate-200 shadow-[0_-8px_25px_rgba(203,213,225,0.3)]'
+                    : 'from-orange-400/90 via-amber-800/90 to-stone-950 border-orange-300 shadow-[0_-8px_25px_rgba(249,115,22,0.3)]';
+
+                  const cardBorder = isFirst
+                    ? 'border-amber-400 bg-gradient-to-b from-amber-950/75 via-zinc-900/95 to-zinc-950 shadow-[0_0_30px_rgba(250,204,21,0.3)]'
+                    : isSecond
+                    ? 'border-slate-300/80 bg-gradient-to-b from-slate-800/80 via-zinc-900/95 to-zinc-950'
+                    : 'border-orange-400/80 bg-gradient-to-b from-orange-950/65 via-zinc-900/95 to-zinc-950';
+
+                  return (
+                    <div
+                      key={slot.rank}
+                      className={`flex flex-col items-center ${isFirst ? '-translate-y-1 sm:-translate-y-2' : ''}`}
+                    >
+                      {/* Operative Info Card Above Pedestal */}
+                      <div
+                        className={`w-full rounded-t-xl border-2 p-2 sm:p-3.5 flex flex-col items-center text-center gap-1.5 relative ${cardBorder} ${
+                          p.isPlaceholder ? 'opacity-65' : ''
+                        }`}
+                      >
+                        {p.isLocal && (
+                          <span className="absolute -top-2.5 px-2 py-0.5 rounded bg-emerald-400 text-slate-950 font-mono font-black text-[8px] sm:text-[9px] tracking-widest uppercase border border-white shadow-md">
+                            ★ YOU ★
+                          </span>
+                        )}
+
+                        {/* Biological Cell Fighter Avatar Emblem */}
+                        <div
+                          className="w-9 h-9 sm:w-12 sm:h-12 rounded-full flex items-center justify-center border-2 shadow-inner mt-1"
+                          style={{
+                            backgroundColor: `${cellInfo.accentHex}28`,
+                            borderColor: cellInfo.accentHex,
+                            boxShadow: `0 0 16px ${cellInfo.accentHex}55`,
+                          }}
+                        >
+                          {isFirst ? (
+                            <Trophy className="w-5 h-5 sm:w-6 sm:h-6 text-amber-300" />
+                          ) : isSecond ? (
+                            <Award className="w-4 h-4 sm:w-5 sm:h-5 text-slate-200" />
+                          ) : (
+                            <Medal className="w-4 h-4 sm:w-5 sm:h-5 text-orange-300" />
+                          )}
+                        </div>
+
+                        {/* Operative Callsign & Class */}
+                        <div className="w-full">
+                          <div className="text-xs sm:text-base font-black tracking-wide text-white truncate">
+                            {p.studentName}
+                          </div>
+                          <div className="text-[8px] sm:text-[10px] font-mono text-zinc-400 truncate">
+                            {p.className}
+                          </div>
+                        </div>
+
+                        {/* Cell Fighter Type Badge */}
+                        <span
+                          className={`px-1.5 sm:px-2 py-0.5 rounded border text-[7.5px] sm:text-[9px] font-mono font-black uppercase tracking-wider truncate max-w-full ${cellInfo.badgeClass}`}
+                        >
+                          🧬 {cellInfo.title}
+                        </span>
+
+                        {/* Telemetry Grid: Kills, Accuracy %, Final Score */}
+                        <div className="grid grid-cols-3 gap-1 w-full bg-black/60 border border-white/10 rounded-lg p-1.5 mt-1 font-mono">
+                          <div className="flex flex-col items-center">
+                            <span className="text-[7px] sm:text-[8px] text-zinc-400 uppercase">KILLS</span>
+                            <span className="text-[10px] sm:text-sm font-black text-rose-400 tabular-nums">
+                              {p.kills}
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center border-x border-white/10">
+                            <span className="text-[7px] sm:text-[8px] text-zinc-400 uppercase">ACC %</span>
+                            <span className="text-[10px] sm:text-sm font-black text-cyan-300 tabular-nums">
+                              {p.accuracy}%
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-[7px] sm:text-[8px] text-zinc-400 uppercase">SCORE</span>
+                            <span className="text-[10px] sm:text-sm font-black text-amber-300 tabular-nums">
+                              {p.score}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 3D Beveled Top Lip of Olympic Pedestal */}
+                      <div
+                        className={`w-full h-2.5 sm:h-3.5 bg-gradient-to-r ${
+                          isFirst
+                            ? 'from-yellow-200 via-amber-300 to-yellow-200'
+                            : isSecond
+                            ? 'from-slate-100 via-slate-300 to-slate-100'
+                            : 'from-orange-200 via-amber-500 to-orange-200'
+                        } border-x-2 border-t border-white/80`}
+                        style={{
+                          transform: 'perspective(300px) rotateX(28deg)',
+                        }}
+                      />
+
+                      {/* 3D Stepped Olympic Pedestal Column */}
+                      <div
+                        className={`w-full ${pedestalHeight} bg-gradient-to-b ${pedestalGradient} border-2 rounded-b-lg flex flex-col items-center justify-center relative overflow-hidden`}
+                      >
+                        <div
+                          className="absolute inset-0 opacity-20 pointer-events-none"
+                          style={{
+                            backgroundImage:
+                              'linear-gradient(135deg, rgba(255,255,255,0.35) 0%, transparent 50%, rgba(0,0,0,0.45) 100%)',
+                          }}
+                        />
+                        <span className="text-2xl sm:text-4xl font-black tracking-tighter text-white drop-shadow-[0_3px_6px_rgba(0,0,0,0.9)]">
+                          {slot.rank === 1 ? '1ST' : slot.rank === 2 ? '2ND' : '3RD'}
+                        </span>
+                        <span className="text-[8px] sm:text-[10px] font-mono font-black tracking-widest uppercase text-white/90 drop-shadow">
+                          {slot.sublabel}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action Buttons: Play Next Match & Return to Lobby */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2 border-t border-white/15">
+                <div className="text-[10px] sm:text-xs font-mono text-zinc-400 text-center sm:text-left">
+                  FIRST TO <span className="text-amber-300 font-bold">{MATCH_KILL_LIMIT} KILLS</span> OR{' '}
+                  <span className="text-cyan-300 font-bold">5:00 TIMER</span> • ALL SCORES SAVED TO LEADERBOARD
+                </div>
+
+                <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                  <button
+                    onClick={handlePlayNextMatch}
+                    className="flex-1 sm:flex-initial px-5 py-2.5 rounded-lg bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black text-xs sm:text-sm tracking-wider uppercase flex items-center justify-center gap-2 cursor-pointer transition-all shadow-[0_0_25px_rgba(250,204,21,0.55)] border-2 border-white"
+                  >
+                    <Repeat className="w-4 h-4 stroke-[2.5]" />
+                    <span>PLAY NEXT MATCH</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      sounds.unlockAudio();
+                      sounds.triggerHaptic(15, 'medium');
+                      onExitToMenu?.();
+                    }}
+                    className="flex-1 sm:flex-initial px-4 py-2.5 rounded-lg bg-zinc-900 hover:bg-rose-950 border-2 border-white/25 hover:border-rose-400 text-white font-black text-xs sm:text-sm tracking-wider uppercase flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                  >
+                    <Home className="w-4 h-4 text-rose-400" />
+                    <span>RETURN TO LOBBY</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

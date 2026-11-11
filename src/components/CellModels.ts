@@ -5931,7 +5931,7 @@ export function updateStudentOperatorAppearance(
   const validAvatars = ['leukocyte', 'rbc', 'platelet', 'dendrite', 'antibody', 'mucus'];
   const resolvedAvatar = validAvatars.includes(avatarType) ? avatarType : 'leukocyte';
 
-  if (ud.avatarVariants && ud.currentAvatar !== resolvedAvatar) {
+  if (ud.avatarVariants) {
     ud.currentAvatar = resolvedAvatar;
     for (const key of validAvatars) {
       if (ud.avatarVariants[key]) {
@@ -5949,7 +5949,7 @@ export function updateStudentOperatorAppearance(
   const validWeapons = ['scar_bio', 'pump_shotgun', 'bolt_sniper', 'drum_lmg'];
   const resolvedWeapon = validWeapons.includes(weaponId) ? weaponId : 'scar_bio';
 
-  if (ud.weaponVariants && ud.currentWeapon !== resolvedWeapon) {
+  if (ud.weaponVariants) {
     ud.currentWeapon = resolvedWeapon;
     for (const wKey of validWeapons) {
       if (ud.weaponVariants[wKey]) {
@@ -6351,10 +6351,10 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
 
   // Pre-build all 4 realistic 3D weapons on the operator's right arm so players clearly see the exact weapon their enemy carries!
   const weaponHolder = new THREE.Group();
-  // Position in front of the operator's chest/hands and rotate Math.PI on Y so the weapon barrel (-Z in local weapon space) points forward (+Z)
-  weaponHolder.position.set(-0.18, -0.14, 0.38);
-  weaponHolder.rotation.set(-0.55, Math.PI, 0);
-  weaponHolder.scale.set(0.78, 0.78, 0.78);
+  // rightArm.rotation.x is ~ -0.68 rad during combat, so +0.68 rad on weaponHolder.rotation.x levels the barrel horizontally (0° at pitch=0)
+  weaponHolder.position.set(-0.18, -0.06, 0.44);
+  weaponHolder.rotation.set(0.68, 0, 0);
+  weaponHolder.scale.set(0.82, 0.82, 0.82);
   rightArm.add(weaponHolder);
 
   const weaponVariants: Record<string, THREE.Group> = {};
@@ -6362,6 +6362,8 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   for (let wIdx = 0; wIdx < weaponIds.length; wIdx++) {
     const wId = weaponIds[wIdx];
     const wModel = createFortniteWeaponModel(wId, '');
+    // Rotate weapon 180° around Y so its barrel (-Z in FPS view space) points straight ahead (+Z) along the operator's aim direction
+    wModel.group.rotation.y = Math.PI;
     wModel.group.visible = wId === 'scar_bio';
     weaponVariants[wId] = wModel.group;
     weaponHolder.add(wModel.group);

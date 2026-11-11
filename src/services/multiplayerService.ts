@@ -31,6 +31,68 @@ export const MULTIPLAYER_AVATAR_TYPES: MultiplayerAvatarType[] = [
 
 export const AFK_TIMEOUT_MS = 60_000; // 1 minute (60 seconds) without movement, actions, or solving questions
 export const MAX_PLAYERS_PER_ROOM = 5; // Each room holds up to 5 players; when full, new rooms (Room 2, Room 3, ...) are created automatically
+export const MATCH_KILL_LIMIT = 10; // 10-kill threshold triggers Match End Victory Podium
+export const MATCH_DURATION_SECONDS = 300; // 5-minute match countdown timer (300 seconds)
+
+export function getAvatarDisplayInfo(avatarType?: MultiplayerAvatarType | string): {
+  id: MultiplayerAvatarType;
+  title: string;
+  shortTitle: string;
+  accentHex: string;
+  badgeClass: string;
+} {
+  switch (avatarType) {
+    case 'rbc':
+      return {
+        id: 'rbc',
+        title: 'Red Blood Cell Fighter',
+        shortTitle: 'ERYTHROCYTE',
+        accentHex: '#f43f5e',
+        badgeClass: 'bg-rose-950/90 border-rose-400 text-rose-200',
+      };
+    case 'platelet':
+      return {
+        id: 'platelet',
+        title: 'Platelet Fighter',
+        shortTitle: 'THROMBOCYTE',
+        accentHex: '#fbbf24',
+        badgeClass: 'bg-amber-950/90 border-amber-400 text-amber-200',
+      };
+    case 'dendrite':
+      return {
+        id: 'dendrite',
+        title: 'Dendrite Fighter',
+        shortTitle: 'DENDRITIC CELL',
+        accentHex: '#c084fc',
+        badgeClass: 'bg-purple-950/90 border-purple-400 text-purple-200',
+      };
+    case 'antibody':
+      return {
+        id: 'antibody',
+        title: 'Antibody Fighter',
+        shortTitle: 'IMMUNOGLOBULIN-G',
+        accentHex: '#38bdf8',
+        badgeClass: 'bg-sky-950/90 border-sky-400 text-sky-200',
+      };
+    case 'mucus':
+      return {
+        id: 'mucus',
+        title: 'Mucus Cell Fighter',
+        shortTitle: 'GOBLET CELL',
+        accentHex: '#34d399',
+        badgeClass: 'bg-emerald-950/90 border-emerald-400 text-emerald-200',
+      };
+    case 'leukocyte':
+    default:
+      return {
+        id: 'leukocyte',
+        title: 'White Leukocyte Fighter',
+        shortTitle: 'LEUKOCYTE WBC',
+        accentHex: '#e2e8f0',
+        badgeClass: 'bg-slate-900/90 border-cyan-300 text-cyan-100',
+      };
+  }
+}
 
 export interface PlayerSnapshot {
   t: number;
@@ -62,6 +124,7 @@ export interface LiveArenaPlayer {
   kills: number;
   deaths: number;
   score: number;
+  accuracy?: number;
   isReady: boolean;
   shotSeq: number;
   grenadeSeq: number;
@@ -715,7 +778,8 @@ function hasMeaningfulStateDelta(prev: LiveArenaPlayer | null, next: LiveArenaPl
     Math.abs((next.vz || 0) - (prev.vz || 0)) >= 0.12 ||
     Math.abs(next.aimX - prev.aimX) >= 0.025 ||
     Math.abs(next.aimY - prev.aimY) >= 0.025 ||
-    Math.abs((next.yaw || 0) - (prev.yaw || 0)) >= 0.025
+    Math.abs((next.yaw || 0) - (prev.yaw || 0)) >= 0.025 ||
+    Math.abs((next.pitch || 0) - (prev.pitch || 0)) >= 0.025
   ) {
     return true;
   }
@@ -734,6 +798,7 @@ async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlaye
     !lastSyncedState ||
     state.status !== lastSyncedState.status ||
     state.kills !== lastSyncedState.kills ||
+    state.weaponId !== lastSyncedState.weaponId ||
     state.shotSeq !== lastSyncedState.shotSeq ||
     state.grenadeSeq !== lastSyncedState.grenadeSeq;
 
