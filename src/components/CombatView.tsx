@@ -36,6 +36,7 @@ import {
   createOrganEnvironmentProps,
   createMultiplayerStudentOperator,
   updateStudentOperatorBadge,
+  updateStudentOperatorAppearance,
   createOpenLungAlveoliLandscape,
   createAnatomicalCoverCluster,
   getArenaSurfaceElevation,
@@ -54,6 +55,8 @@ import {
   leaveDeathmatchRoom,
   kickAfkPlayerFromRoom,
   getOrCreateMultiplayerPlayerId,
+  getOrCreateMultiplayerAvatar,
+  resolvePlayerAvatarType,
   getInitialArenaSpawn,
   getBaseRoomPrefix,
   formatIndexedRoomCode,
@@ -64,6 +67,7 @@ import {
   LiveArenaPlayer,
   ArenaKillfeedEvent,
   MultiplayerPlayerStatus,
+  MultiplayerAvatarType,
 } from '../services/multiplayerService';
 import { INITIAL_WEAPONS, CURRICULUM_LEVELS, BIOLOGY_CONCEPT_CARDS } from '../data/curriculumData';
 import { RankBadge } from './RankBadge';
@@ -177,6 +181,8 @@ interface ActiveSoldier {
   isStudentOperator?: boolean;
   remotePlayerId?: string;
   studentClassName?: string;
+  avatarType?: string;
+  equippedWeaponId?: string;
   isStunned?: boolean;
   stasisCage?: THREE.Group;
   callsignCanvas?: HTMLCanvasElement;
@@ -665,6 +671,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
   );
 
   const localMpPlayerIdRef = useRef<string>(getOrCreateMultiplayerPlayerId());
+  const localMpAvatarRef = useRef<MultiplayerAvatarType>(
+    getOrCreateMultiplayerAvatar(localMpPlayerIdRef.current)
+  );
   const localShotSeqRef = useRef<number>(0);
   const localGrenadeSeqRef = useRef<number>(0);
   const playerWorldVelRef = useRef<{ vx: number; vz: number }>({ vx: 0, vz: 0 });
@@ -905,8 +914,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const weaponSupportsScope = (wpn: Weapon) => wpn.category !== 'SHOTGUN';
 
   const syncCrosshairDom = (nx: number, ny: number) => {
-    const screenX = Math.max(4, Math.min(96, (nx + 1) * 50));
-    const screenY = Math.max(5, Math.min(94, (-ny + 1) * 50));
+    const screenX = isMultiplayerDeathmatch ? 50 : Math.max(4, Math.min(96, (nx + 1) * 50));
+    const screenY = isMultiplayerDeathmatch ? 50 : Math.max(5, Math.min(94, (-ny + 1) * 50));
     if (crosshairDomRef.current) {
       crosshairDomRef.current.style.left = `${screenX}%`;
       crosshairDomRef.current.style.top = `${screenY}%`;
@@ -1354,6 +1363,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       playerId: localMpPlayerIdRef.current,
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
+      avatarType: localMpAvatarRef.current,
       x: playerPosRef.current.x,
       y: Number(playerElevationYRef.current.toFixed(2)),
       z: playerPosRef.current.z,
@@ -1398,6 +1408,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       playerId: localMpPlayerIdRef.current,
       studentName: prof?.name || 'Operative',
       className: prof?.className || 'Science Unit',
+      avatarType: localMpAvatarRef.current,
       x: playerPosRef.current.x,
       y: Number(playerElevationYRef.current.toFixed(2)),
       z: playerPosRef.current.z,
@@ -1480,6 +1491,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             playerId: localMpPlayerIdRef.current,
             studentName: prof?.name || 'Operative',
             className: prof?.className || 'Science Unit',
+            avatarType: localMpAvatarRef.current,
             x: playerPosRef.current.x,
             y: Number(playerElevationYRef.current.toFixed(2)),
             z: playerPosRef.current.z,
@@ -1634,6 +1646,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         playerId: myId,
         studentName: cachedStudentName,
         className: cachedClassName,
+        avatarType: localMpAvatarRef.current,
         x: Number(playerPosRef.current.x.toFixed(3)),
         y: Number(playerElevationYRef.current.toFixed(2)),
         z: Number(playerPosRef.current.z.toFixed(3)),
@@ -3269,16 +3282,23 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       const studentClass = remotePlayer ? remotePlayer.className : 'Science Unit';
       const isStunnedNow = remotePlayer ? remotePlayer.status === 'stunned' : false;
+      const resolvedAvatar = remotePlayer
+        ? resolvePlayerAvatarType(remotePlayer.playerId, remotePlayer.avatarType)
+        : 'leukocyte';
+      const resolvedWeaponId = remotePlayer?.weaponId || 'scar_bio';
 
-      if (isMultiplayerDeathmatch && pooledSlot.callsignCanvas && pooledSlot.callsignTexture) {
-        updateStudentOperatorBadge(
-          pooledSlot.callsignCanvas,
-          pooledSlot.callsignTexture,
-          name,
-          studentClass,
-          isStunnedNow,
-          true
-        );
+      if (isMultiplayerDeathmatch) {
+        updateStudentOperatorAppearance(soldierMesh, resolvedAvatar, resolvedWeaponId);
+        if (pooledSlot.callsignCanvas && pooledSlot.callsignTexture) {
+          updateStudentOperatorBadge(
+            pooledSlot.callsignCanvas,
+            pooledSlot.callsignTexture,
+            name,
+            studentClass,
+            isStunnedNow,
+            true
+          );
+        }
         if (pooledSlot.stasisCage) {
           pooledSlot.stasisCage.visible = isStunnedNow;
         }
@@ -3318,6 +3338,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         isStudentOperator: isMultiplayerDeathmatch,
         remotePlayerId: remotePlayer?.playerId,
         studentClassName: studentClass,
+        avatarType: resolvedAvatar,
+        equippedWeaponId: resolvedWeaponId,
         isStunned: isStunnedNow,
         stasisCage: pooledSlot.stasisCage,
         callsignCanvas: pooledSlot.callsignCanvas,
@@ -3434,6 +3456,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
             const pct = Math.max(0.02, Math.min(1, rp.hp / 100));
             existing.hpBarFill.scale.x = pct;
             existing.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
+          }
+          const nextAvatar = resolvePlayerAvatarType(rp.playerId, rp.avatarType);
+          const nextWeapon = rp.weaponId || 'scar_bio';
+          if (existing.avatarType !== nextAvatar || existing.equippedWeaponId !== nextWeapon) {
+            existing.avatarType = nextAvatar;
+            existing.equippedWeaponId = nextWeapon;
+            updateStudentOperatorAppearance(existing.mesh, nextAvatar, nextWeapon);
           }
           const nextStun = rp.status === 'stunned';
           if (existing.isStunned !== nextStun || existing.name !== rp.studentName) {
@@ -4082,7 +4111,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let rawAimX = aimPosRef.current.x;
       let rawAimY = aimPosRef.current.y;
 
-      if (isScopedRef.current) {
+      if (isMultiplayerDeathmatch || isScopedRef.current) {
         hitVector.set(0, 0);
       } else {
         hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
@@ -4091,16 +4120,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
       rawAimX = hitVector.x;
       rawAimY = hitVector.y;
 
-      if (autoAimEnabledRef.current && soldiers.length > 0) {
-        // Subtle aim friction/assist only when reticle is already directly grazing enemy torso
+      if (!isMultiplayerDeathmatch && autoAimEnabledRef.current && soldiers.length > 0) {
+        // Subtle aim friction/assist only when reticle is already directly grazing enemy torso (Solo mode only)
         let bestDist = 0.085;
         let lockedBodyNdcX = 0;
         let lockedBodyNdcY = 0;
         let hasLock = false;
         for (let i = 0; i < soldiers.length; i++) {
           const s = soldiers[i];
-          if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
-          if (isMultiplayerDeathmatch && s.isStunned) continue;
+          if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
 
           const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
           _v2.copy(s.mesh.position);
@@ -4126,6 +4154,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
+      camera.updateMatrixWorld();
       raycaster.setFromCamera(hitVector, camera);
 
       // Spawn MuzzleFlash Particle Effect & 3D Pointed Spitzer Bullet Projectile converging from the barrel directly onto the crosshair point!
@@ -4173,132 +4202,221 @@ export const CombatView: React.FC<CombatViewProps> = ({
           ? activeWpn.damage * (activeWpn.pellets || 8)
           : activeWpn.damage;
 
-      for (let i = soldiers.length - 1; i >= 0; i--) {
-        const soldier = soldiers[i];
-        // Players frozen inside the bio-stasis shield cannot be damaged or killed!
-        if (isMultiplayerDeathmatch && soldier.isStunned) continue;
-        if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+      if (isMultiplayerDeathmatch) {
+        // STRICT 3D CENTER-CROSSHAIR RAYCAST HIT DETECTION FOR MULTIPLAYER:
+        // Shooting into the sky, floor, walls, or away from the enemy NEVER hits the enemy!
+        const rayOrig = raycaster.ray.origin;
+        const rayDir = raycaster.ray.direction;
 
-        const headYOffset = soldier.isRobot
-          ? 2.62
-          : soldier.isTank
-          ? 0.82
-          : soldier.isHelicopter || soldier.isJet
-          ? 0.48
-          : 0.65;
-        const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
-
-        // Project Head & Body to 2D NDC
-        _v1.copy(soldier.mesh.position);
-        _v1.y += headYOffset;
-        const distSqHead3D = raycaster.ray.distanceSqToPoint(_v1);
-        _v1.project(camera);
-        if (_v1.z >= 1.0) continue; // Behind camera in 360-degree view
-        // Measure headshot precision strictly against the player's TRUE unassisted aim (rawAimX, rawAimY)!
-        const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
-        const headNdcY = _v1.y;
-
-        _v2.copy(soldier.mesh.position);
-        _v2.y += bodyYOffset;
-        const distSqBody3D = raycaster.ray.distanceSqToPoint(_v2);
-        _v2.project(camera);
-        if (_v2.z >= 1.0) continue;
-        const rawBodyNdcDist = Math.hypot(_v2.x - rawAimX, _v2.y - rawAimY);
-        const bodyNdcDist = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
-
-        const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.52;
-        if (Math.min(rawHeadNdcDist, bodyNdcDist) > maxNdc) continue;
-
-        // 1. PRECISION HEADSHOT DETECTION (Requires genuine manual aim on the head — never triggered by auto-aim pull!)
-        const headRadiusSq3D = soldier.isRobot
-          ? 0.42
-          : soldier.isTank
-          ? 0.18
-          : soldier.isBoss
-          ? 0.22
-          : 0.11;
-        const headPrecisionNdc = isScopedRef.current ? 0.082 : 0.064;
-        const isTrueHeadAim =
-          rawHeadNdcDist <= headPrecisionNdc &&
-          rawHeadNdcDist < rawBodyNdcDist * 0.85 &&
-          rawAimY >= headNdcY - 0.025;
-        const isHeadshot3D =
-          distSqHead3D <= headRadiusSq3D &&
-          rawHeadNdcDist <= headPrecisionNdc * 1.15 &&
-          rawAimY >= _v2.y + 0.02;
-
-        if (isTrueHeadAim || isHeadshot3D) {
-          criticalHit = true;
-          hitRegistered = true;
-          hitSoldier = soldier;
-          totalDamage = baseNormalShotDamage * 3;
-          soldier.hp -= totalDamage;
-          if (!soldier.remotePlayerId) {
-            soldier.mesh.position.z -= soldier.isTank ? 0.35 : soldier.isBoss ? 0.25 : 0.5;
+        // 1. Check if the ray hits the ground floor or intact cover barricades before reaching a target
+        let maxUnobstructedDist = 120.0;
+        if (rayDir.y < -0.025) {
+          const localGroundY = playerElevationYRef.current - 1.38;
+          const distToFloor = (localGroundY - rayOrig.y) / rayDir.y;
+          if (distToFloor > 0.2) {
+            maxUnobstructedDist = Math.min(maxUnobstructedDist, distToFloor + 0.35);
           }
-          break;
         }
 
-        // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-capsule/sphere check (tuned to exact physical model dimensions)
-        const bodyRadiusSq = soldier.isRobot
-          ? 2.2
-          : soldier.isTank
-          ? 1.15
-          : soldier.isBoss
-          ? 1.45
-          : 0.28;
-        if (distSqBody3D <= bodyRadiusSq) {
-          hitRegistered = true;
-          hitSoldier = soldier;
-          totalDamage = baseNormalShotDamage;
-          soldier.hp -= totalDamage;
-          if (!soldier.remotePlayerId) {
-            soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
+        for (let bIdx = 0; bIdx < barricadesRef.current.length; bIdx++) {
+          const bar = barricadesRef.current[bIdx];
+          if (bar.hp <= 0) continue;
+          const bx = bar.x - rayOrig.x;
+          const by = (bar.y + 0.45) - rayOrig.y;
+          const bz = bar.z - rayOrig.z;
+          const barProj = bx * rayDir.x + by * rayDir.y + bz * rayDir.z;
+          if (barProj <= 0.3 || barProj >= maxUnobstructedDist) continue;
+          const hitBarX = rayOrig.x + rayDir.x * barProj;
+          const hitBarY = rayOrig.y + rayDir.y * barProj;
+          const hitBarZ = rayOrig.z + rayDir.z * barProj;
+          if (
+            Math.hypot(hitBarX - bar.x, hitBarZ - bar.z) <= 1.05 &&
+            hitBarY >= bar.y - 0.55 &&
+            hitBarY <= bar.y + 1.15
+          ) {
+            maxUnobstructedDist = Math.min(maxUnobstructedDist, barProj);
           }
-          break;
         }
-      }
 
-      // 2D Screen-Space Hitbox Check: strict tight bounds requiring genuine aim on the enemy's visual silhouette
-      if (!hitRegistered) {
+        let closestMpHitDist = maxUnobstructedDist;
+
         for (let i = soldiers.length - 1; i >= 0; i--) {
           const soldier = soldiers[i];
-          if (isMultiplayerDeathmatch && soldier.isStunned) continue;
-          if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (soldier.isStunned) continue;
 
-          const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
-          _v2.copy(soldier.mesh.position);
-          _v2.y += bodyYOffset;
-          _v2.project(camera);
-          if (_v2.z >= 1.0) continue;
-          const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+          // Compute forward distance along the camera ray
+          const toEnemyX = soldier.mesh.position.x - rayOrig.x;
+          const toEnemyY = soldier.mesh.position.y - rayOrig.y;
+          const toEnemyZ = soldier.mesh.position.z - rayOrig.z;
+          const forwardDist = toEnemyX * rayDir.x + toEnemyY * rayDir.y + toEnemyZ * rayDir.z;
 
-          // Scaled strictly to true visual dimensions of soldiers, tanks & bosses (no massive generous ghost hitboxes)
-          const hitSilhouetteRadius = autoAimEnabledRef.current
-            ? soldier.isRobot
-              ? 0.18
-              : soldier.isTank
-              ? 0.14
-              : soldier.isBoss
-              ? 0.16
-              : 0.075
-            : soldier.isRobot
-            ? 0.15
-            : soldier.isTank
-            ? 0.11
-            : soldier.isBoss
-            ? 0.13
-            : 0.055;
-          if (distBody2D < hitSilhouetteRadius) {
+          // Target must be strictly in front of the player's camera ray and closer than any floor/cover obstacle
+          if (forwardDist <= 0.5 || forwardDist > closestMpHitDist) continue;
+
+          // Exact 3D point of the bullet ray at the enemy's depth
+          const rayAtX = rayOrig.x + rayDir.x * forwardDist;
+          const rayAtY = rayOrig.y + rayDir.y * forwardDist;
+          const rayAtZ = rayOrig.z + rayDir.z * forwardDist;
+
+          // Strict vertical bounds of the 3D operator model: feet (-0.90) to top of head (+0.82)
+          const footY = soldier.mesh.position.y - 0.90;
+          const headBottomY = soldier.mesh.position.y + 0.14;
+          const headTopY = soldier.mesh.position.y + 0.82;
+
+          // If the ray passes below the enemy's feet (shooting the floor) or above their head (shooting the sky), miss!
+          if (rayAtY < footY || rayAtY > headTopY) continue;
+
+          // Horizontal distance from the ray to the enemy's 3D body axis
+          const horizDist = Math.hypot(
+            rayAtX - soldier.mesh.position.x,
+            rayAtZ - soldier.mesh.position.z
+          );
+
+          // Check Headshot cylinder/sphere first (tight 0.36m radius around head)
+          if (rayAtY >= headBottomY && horizDist <= 0.36) {
+            closestMpHitDist = forwardDist;
+            criticalHit = true;
             hitRegistered = true;
             hitSoldier = soldier;
+            totalDamage = baseNormalShotDamage * 3;
+          } else if (horizDist <= 0.46) {
+            // Check Torso/Limbs cylinder (tight 0.46m radius around torso/legs)
+            closestMpHitDist = forwardDist;
             criticalHit = false;
+            hitRegistered = true;
+            hitSoldier = soldier;
+            totalDamage = baseNormalShotDamage;
+          }
+        }
+
+        if (hitRegistered && hitSoldier) {
+          hitSoldier.hp -= totalDamage;
+        }
+      } else {
+        for (let i = soldiers.length - 1; i >= 0; i--) {
+          const soldier = soldiers[i];
+          if (soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+
+          const headYOffset = soldier.isRobot
+            ? 2.62
+            : soldier.isTank
+            ? 0.82
+            : soldier.isHelicopter || soldier.isJet
+            ? 0.48
+            : 0.65;
+          const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
+
+          // Project Head & Body to 2D NDC
+          _v1.copy(soldier.mesh.position);
+          _v1.y += headYOffset;
+          const distSqHead3D = raycaster.ray.distanceSqToPoint(_v1);
+          _v1.project(camera);
+          if (_v1.z >= 1.0) continue; // Behind camera in 360-degree view
+          // Measure headshot precision strictly against the player's TRUE unassisted aim (rawAimX, rawAimY)!
+          const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
+          const headNdcY = _v1.y;
+
+          _v2.copy(soldier.mesh.position);
+          _v2.y += bodyYOffset;
+          const distSqBody3D = raycaster.ray.distanceSqToPoint(_v2);
+          _v2.project(camera);
+          if (_v2.z >= 1.0) continue;
+          const rawBodyNdcDist = Math.hypot(_v2.x - rawAimX, _v2.y - rawAimY);
+          const bodyNdcDist = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+
+          const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.52;
+          if (Math.min(rawHeadNdcDist, bodyNdcDist) > maxNdc) continue;
+
+          // 1. PRECISION HEADSHOT DETECTION (Requires genuine manual aim on the head — never triggered by auto-aim pull!)
+          const headRadiusSq3D = soldier.isRobot
+            ? 0.42
+            : soldier.isTank
+            ? 0.18
+            : soldier.isBoss
+            ? 0.22
+            : 0.11;
+          const headPrecisionNdc = isScopedRef.current ? 0.082 : 0.064;
+          const isTrueHeadAim =
+            rawHeadNdcDist <= headPrecisionNdc &&
+            rawHeadNdcDist < rawBodyNdcDist * 0.85 &&
+            rawAimY >= headNdcY - 0.025;
+          const isHeadshot3D =
+            distSqHead3D <= headRadiusSq3D &&
+            rawHeadNdcDist <= headPrecisionNdc * 1.15 &&
+            rawAimY >= _v2.y + 0.02;
+
+          if (isTrueHeadAim || isHeadshot3D) {
+            criticalHit = true;
+            hitRegistered = true;
+            hitSoldier = soldier;
+            totalDamage = baseNormalShotDamage * 3;
+            soldier.hp -= totalDamage;
+            if (!soldier.remotePlayerId) {
+              soldier.mesh.position.z -= soldier.isTank ? 0.35 : soldier.isBoss ? 0.25 : 0.5;
+            }
+            break;
+          }
+
+          // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-capsule/sphere check (tuned to exact physical model dimensions)
+          const bodyRadiusSq = soldier.isRobot
+            ? 2.2
+            : soldier.isTank
+            ? 1.15
+            : soldier.isBoss
+            ? 1.45
+            : 0.28;
+          if (distSqBody3D <= bodyRadiusSq) {
+            hitRegistered = true;
+            hitSoldier = soldier;
             totalDamage = baseNormalShotDamage;
             soldier.hp -= totalDamage;
             if (!soldier.remotePlayerId) {
               soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
             }
             break;
+          }
+        }
+
+        // 2D Screen-Space Hitbox Check (Solo mode only): strict tight bounds requiring genuine aim on the enemy's visual silhouette
+        if (!hitRegistered) {
+          for (let i = soldiers.length - 1; i >= 0; i--) {
+            const soldier = soldiers[i];
+            if (soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+
+            const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
+            _v2.copy(soldier.mesh.position);
+            _v2.y += bodyYOffset;
+            _v2.project(camera);
+            if (_v2.z >= 1.0) continue;
+            const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+
+            // Scaled strictly to true visual dimensions of soldiers, tanks & bosses (no massive generous ghost hitboxes)
+            const hitSilhouetteRadius = autoAimEnabledRef.current
+              ? soldier.isRobot
+                ? 0.18
+                : soldier.isTank
+                ? 0.14
+                : soldier.isBoss
+                ? 0.16
+                : 0.075
+              : soldier.isRobot
+              ? 0.15
+              : soldier.isTank
+              ? 0.11
+              : soldier.isBoss
+              ? 0.13
+              : 0.055;
+            if (distBody2D < hitSilhouetteRadius) {
+              hitRegistered = true;
+              hitSoldier = soldier;
+              criticalHit = false;
+              totalDamage = baseNormalShotDamage;
+              soldier.hp -= totalDamage;
+              if (!soldier.remotePlayerId) {
+                soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
+              }
+              break;
+            }
           }
         }
       }
@@ -4503,13 +4621,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }, 2000);
         }
       } else if (isMultiplayerDeathmatch) {
-        // In Multiplayer, players can also shoot and destroy Destructible Anatomical Cover Structures in any 360° direction!
+        // In Multiplayer, players can also shoot and destroy Destructible Anatomical Cover Structures strictly in front of their center crosshair ray!
+        const rayOrig = raycaster.ray.origin;
+        const rayDir = raycaster.ray.direction;
         for (let bIdx = 0; bIdx < barricadesRef.current.length; bIdx++) {
           const bar = barricadesRef.current[bIdx];
           if (bar.hp <= 0) continue;
           _v2.set(bar.x, bar.y + 0.55, bar.z);
+          const forwardBarDist =
+            (_v2.x - rayOrig.x) * rayDir.x +
+            (_v2.y - rayOrig.y) * rayDir.y +
+            (_v2.z - rayOrig.z) * rayDir.z;
+          if (forwardBarDist <= 0.4) continue;
           const distSqToCover = raycaster.ray.distanceSqToPoint(_v2);
-          if (distSqToCover <= 1.75) {
+          if (distSqToCover <= 1.25) {
             const coverDmg = Math.max(12, Math.round(baseNormalShotDamage * 0.48));
             const wasAlive = bar.hp > 0;
             bar.hp = Math.max(0, bar.hp - coverDmg);
@@ -4543,8 +4668,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
     let mouseEdgeNdcX = 0;
     let isMouseOverCanvas = false;
 
-    // Professional FPS Aiming (100% Unified Aim in both Solo and Multiplayer — never locks the aiming reticle!)
+    // Professional FPS Aiming:
+    // In Multiplayer Deathmatch, the crosshair stays locked in the dead center of the screen (0, 0 NDC / 50%, 50%)
+    // and the player's field of view (camera yaw & pitch) follows their aim!
     const updateAimPosition = (clientX: number, clientY: number, isRelativeDrag: boolean = false, prevX?: number, prevY?: number) => {
+      if (isMultiplayerDeathmatch) {
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        aimPosRef.current.x = 0;
+        aimPosRef.current.y = 0;
+        lastPlayerActivityRef.current = Date.now();
+        syncCrosshairDom(0, 0);
+        return;
+      }
+
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
@@ -4562,7 +4699,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         targetAimPosRef.current.x = Math.max(-0.94, Math.min(0.94, targetAimPosRef.current.x + dxNorm));
         targetAimPosRef.current.y = Math.max(-0.90, Math.min(0.90, targetAimPosRef.current.y + dyNorm));
       } else {
-        // True 1:1 cursor-to-crosshair & scope-reticle NDC mapping (identical in hipfire and scope!)
+        // True 1:1 cursor-to-crosshair & scope-reticle NDC mapping (Solo mode)
         const x = THREE.MathUtils.clamp(((clientX - cachedRect.left) / w) * 2 - 1, -0.94, 0.94);
         const y = THREE.MathUtils.clamp(-((clientY - cachedRect.top) / h) * 2 + 1, -0.90, 0.90);
         targetAimPosRef.current.x = x;
@@ -4597,7 +4734,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           joystickCenterRef.current = { x: clientX, y: clientY };
           joystickOffsetRef.current = { x: 0, y: 0 };
         } else if (firingTouchIdRef.current === null) {
-          // Touch in Aim/Shoot Zone: tap aims smoothly & fires, hold for 2s deploys tactical scope!
+          // Touch in Aim/Shoot Zone: tap fires from center crosshair (MP) or touch point (Solo), hold for 2s deploys tactical scope!
           firingTouchIdRef.current = touch.identifier;
           lastFiringTouchPosRef.current = { x: clientX, y: clientY };
           isPointerDownRef.current = true;
@@ -4644,16 +4781,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const prevY = lastFiringTouchPosRef.current.y;
           lastFiringTouchPosRef.current = { x: touch.clientX, y: touch.clientY };
           if (isMultiplayerDeathmatch) {
-            const touchSens = isScopedRef.current ? 0.0042 : 0.0075;
+            const touchSens = isScopedRef.current ? 0.0042 : 0.0078;
             targetCameraYawRef.current -= (touch.clientX - prevX) * touchSens;
-            targetCameraYawRef.current = Math.atan2(
-              Math.sin(targetCameraYawRef.current),
-              Math.cos(targetCameraYawRef.current)
-            );
             targetCameraPitchRef.current = THREE.MathUtils.clamp(
-              targetCameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.75),
-              -0.85,
-              0.85
+              targetCameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.78),
+              -0.78,
+              0.78
             );
           }
           updateAimPosition(touch.clientX, touch.clientY, true, prevX, prevY);
@@ -4707,7 +4840,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         audioSuspendedRef.current = false;
         setAudioSuspended(false);
       }
-      // Never lock/hide the OS mouse cursor in Solo or Multiplayer so the player never has to press ESC to see or use their mouse!
       if (document.pointerLockElement) {
         document.exitPointerLock?.();
       }
@@ -4738,12 +4870,28 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const normY = THREE.MathUtils.clamp(-((e.clientY - cachedRect.top) / h) * 2 + 1, -1, 1);
       mouseEdgeNdcX = normX;
 
-      // Controlled, non-spinning 360° circular mapping:
-      // Moving from center (0) to left (-1) smoothly rotates 0° -> +180° (back via left).
-      // Moving from center (0) to right (+1) smoothly rotates 0° -> -180° (back via right).
-      // When the mouse stops anywhere (including at the left or right extremity), rotation stops immediately!
-      targetCameraYawRef.current = -normX * Math.PI;
-      targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.24, -0.55, 0.55);
+      if (isMultiplayerDeathmatch) {
+        // Professional FPS Center-Crosshair FOV Camera Rotation:
+        // The crosshair stays centered at (50%, 50%) while the player's field of view smoothly follows mouse aim!
+        const prev = lastMouseClientPosRef.current;
+        if (prev) {
+          const dx = e.clientX - prev.x;
+          const dy = e.clientY - prev.y;
+          const mouseSens = isScopedRef.current ? 0.0028 : 0.0052;
+          targetCameraYawRef.current -= dx * mouseSens;
+          targetCameraPitchRef.current = THREE.MathUtils.clamp(
+            targetCameraPitchRef.current - dy * (mouseSens * 0.72),
+            -0.68,
+            0.68
+          );
+        } else {
+          targetCameraYawRef.current = -normX * Math.PI;
+          targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.42, -0.68, 0.68);
+        }
+      } else {
+        targetCameraYawRef.current = -normX * Math.PI;
+        targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.24, -0.55, 0.55);
+      }
 
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       updateAimPosition(e.clientX, e.clientY, false);
@@ -5058,24 +5206,37 @@ export const CombatView: React.FC<CombatViewProps> = ({
           lastPlayerActivityRef.current = Date.now();
         }
 
-        // Consume any smooth server reconciliation corrections for aiming & position
+        // Consume any smooth server reconciliation corrections for position & yaw (keep crosshair locked at center 0,0 in Multiplayer!)
         const corr = predictionEngineRef.current.consumeFrameCorrection(delta);
-        if (Math.abs(corr.dAimX) > 0 || Math.abs(corr.dAimY) > 0) {
-          targetAimPosRef.current.x = THREE.MathUtils.clamp(targetAimPosRef.current.x + corr.dAimX, -0.94, 0.94);
-          targetAimPosRef.current.y = THREE.MathUtils.clamp(targetAimPosRef.current.y + corr.dAimY, -0.90, 0.90);
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        aimPosRef.current.x = 0;
+        aimPosRef.current.y = 0;
+
+        // If cursor is pushed to the extreme left or right edge of the screen, smoothly turn camera FOV in that direction while keeping crosshair centered
+        if (isMouseOverCanvas && Math.abs(mouseEdgeNdcX) > 0.78) {
+          const edgeStrength = (Math.abs(mouseEdgeNdcX) - 0.78) / 0.22;
+          const turnRate = (isScopedRef.current ? 1.15 : 2.1) * edgeStrength;
+          targetCameraYawRef.current -= Math.sign(mouseEdgeNdcX) * turnRate * delta;
         }
 
-        // Smooth, controlled 360-degree rotation towards targetCameraYawRef (never keeps spinning when mouse stops!)
+        // Smooth shortest-angle 360-degree camera FOV rotation following the player's aim
+        const baseYaw = cameraYawRef.current + corr.dYaw;
+        const yawDiff = Math.atan2(
+          Math.sin(targetCameraYawRef.current - baseYaw),
+          Math.cos(targetCameraYawRef.current - baseYaw)
+        );
         cameraYawRef.current = THREE.MathUtils.damp(
-          cameraYawRef.current + corr.dYaw,
-          targetCameraYawRef.current,
-          12,
+          baseYaw,
+          baseYaw + yawDiff,
+          18,
           delta
         );
+        targetCameraYawRef.current = cameraYawRef.current + yawDiff * 0.85;
         cameraPitchRef.current = THREE.MathUtils.damp(
           cameraPitchRef.current,
           targetCameraPitchRef.current,
-          14,
+          18,
           delta
         );
 
@@ -5399,8 +5560,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         camera.updateProjectionMatrix();
       }
 
-      // Soft Subtle Auto-Aim Friction (Assists fine-tuning without magnetically locking onto enemies from afar)
-      if (autoAimEnabledRef.current && activeSoldiersRef.current.length > 0) {
+      // Soft Subtle Auto-Aim Friction (Solo mode only — in Multiplayer, crosshair stays locked in the dead center of the FOV!)
+      if (!isMultiplayerDeathmatch && autoAimEnabledRef.current && activeSoldiersRef.current.length > 0) {
         let closestDist = 0.11;
         let pullTargetX = 0;
         let pullTargetY = 0;
@@ -5410,8 +5571,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
         for (let i = 0; i < activeSoldiersRef.current.length; i++) {
           const s = activeSoldiersRef.current[i];
-          if (isMultiplayerDeathmatch && s.isStunned) continue;
-          if (!isMultiplayerDeathmatch && s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+          if (s.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
           const bodyYOffset = s.isRobot ? 1.85 : s.isTank ? 0.35 : 0.18;
           _v1.copy(s.mesh.position);
           _v1.y += bodyYOffset;
@@ -5442,10 +5602,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      // High-frequency 60 FPS sub-pixel aim interpolation (buttery smooth manual & assisted aiming!)
-      aimPosRef.current.x = THREE.MathUtils.damp(aimPosRef.current.x, targetAimPosRef.current.x, 30, delta);
-      aimPosRef.current.y = THREE.MathUtils.damp(aimPosRef.current.y, targetAimPosRef.current.y, 30, delta);
-      syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
+      // High-frequency 60 FPS sub-pixel aim interpolation (in Multiplayer, locked at center 0,0 while FOV follows aim!)
+      if (isMultiplayerDeathmatch) {
+        targetAimPosRef.current.x = 0;
+        targetAimPosRef.current.y = 0;
+        aimPosRef.current.x = 0;
+        aimPosRef.current.y = 0;
+        syncCrosshairDom(0, 0);
+      } else {
+        aimPosRef.current.x = THREE.MathUtils.damp(aimPosRef.current.x, targetAimPosRef.current.x, 30, delta);
+        aimPosRef.current.y = THREE.MathUtils.damp(aimPosRef.current.y, targetAimPosRef.current.y, 30, delta);
+        syncCrosshairDom(aimPosRef.current.x, aimPosRef.current.y);
+      }
 
       // Identical camera pitch & yaw formula in Hipfire and Scope so Scope Aim and Weapon Aim never deviate!
       cameraRollShakeRef.current = THREE.MathUtils.damp(cameraRollShakeRef.current, 0, 12, delta);
@@ -6423,9 +6591,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   soldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
                 }
 
-                // Orient opponent in true 360° shared world space using their look yaw + aim offset
+                // Sync opponent's biological fighter character avatar & realistic 3D equipped weapon in real time
+                const nextAvatar = resolvePlayerAvatarType(rp.playerId, rp.avatarType);
+                const nextWeapon = rp.weaponId || 'scar_bio';
+                if (soldier.avatarType !== nextAvatar || soldier.equippedWeaponId !== nextWeapon) {
+                  soldier.avatarType = nextAvatar;
+                  soldier.equippedWeaponId = nextWeapon;
+                  updateStudentOperatorAppearance(soldier.mesh, nextAvatar, nextWeapon);
+                }
+
+                // Orient opponent in true 360° shared world space using their look yaw
                 // Local camera forward is (-sin(yaw), -cos(yaw)); soldier model forward is +Z (0, +1), so model yaw = PI + pred.yaw
-                const desiredYaw = Math.PI + pred.yaw - pred.aimX * 0.28;
+                const desiredYaw = Math.PI + pred.yaw;
                 const yawDiff = Math.atan2(
                   Math.sin(desiredYaw - soldier.mesh.rotation.y),
                   Math.cos(desiredYaw - soldier.mesh.rotation.y)
@@ -6493,11 +6670,36 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   }
                 }
 
-                // Trigger real-time 3D projectile when remote human player fires!
+                // Trigger visual 3D muzzle flash & tracer along the remote player's ACTUAL look direction when they fire!
+                // (Never aimbots at local player and never spawns damaging AI bullets — authoritative PvP damage is handled strictly by sendPlayerHitEvent when a shot genuinely hits!)
                 const lastShotProcessed = remoteShotSeqProcessedRef.current[rp.playerId] || 0;
                 if (rp.shotSeq > lastShotProcessed && rp.status === 'active') {
                   remoteShotSeqProcessedRef.current[rp.playerId] = rp.shotSeq;
-                  fireEnemyProjectile(soldier, soldierBulletSpeed * 1.2, 14);
+                  sounds.playEnemyShoot();
+                  const rYaw = pred.yaw;
+                  const rPitch = rp.pitch || 0;
+                  const dirX = -Math.sin(rYaw) * Math.cos(rPitch);
+                  const dirY = Math.sin(rPitch);
+                  const dirZ = -Math.cos(rYaw) * Math.cos(rPitch);
+                  _v1.set(
+                    soldier.mesh.position.x + dirX * 0.78,
+                    soldier.mesh.position.y + 0.14 + dirY * 0.78,
+                    soldier.mesh.position.z + dirZ * 0.78
+                  );
+                  _v3.set(dirX, dirY, dirZ).normalize();
+                  _v2.copy(_v1).addScaledVector(_v3, 28);
+                  triggerMuzzleFlash(_v1, _v3, 'RIFLE');
+                  const remoteTracer = acquirePlayerTracer(0xf43f5e);
+                  remoteTracer.position.copy(_v1);
+                  remoteTracer.lookAt(_v2);
+                  const tSpeed = 58;
+                  activePlayerTracersRef.current.push({
+                    mesh: remoteTracer,
+                    vx: _v3.x * tSpeed,
+                    vy: _v3.y * tSpeed,
+                    vz: _v3.z * tSpeed,
+                    life: 0.5,
+                  });
                 }
               }
             }
@@ -8045,6 +8247,16 @@ export const CombatView: React.FC<CombatViewProps> = ({
       enemyPool.forEach((slot) => {
         registerWarmup(slot.group);
         registerWarmup(slot.parachuteGroup, false);
+        const ud = slot.group.userData as {
+          avatarVariants?: Record<string, THREE.Group>;
+          weaponVariants?: Record<string, THREE.Group>;
+        };
+        if (ud?.avatarVariants) {
+          Object.values(ud.avatarVariants).forEach((av) => registerWarmup(av, false));
+        }
+        if (ud?.weaponVariants) {
+          Object.values(ud.weaponVariants).forEach((wv) => registerWarmup(wv, false));
+        }
       });
       refugeePoolRef.current.forEach((r) => registerWarmup(r.mesh));
       registerWarmup(prebuiltBosses.helicopter?.group);

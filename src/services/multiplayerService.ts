@@ -12,6 +12,23 @@ import { StudentProfile } from '../types/game';
 
 export type MultiplayerPlayerStatus = 'active' | 'stunned' | 'reviving';
 
+export type MultiplayerAvatarType =
+  | 'leukocyte'
+  | 'rbc'
+  | 'platelet'
+  | 'dendrite'
+  | 'antibody'
+  | 'mucus';
+
+export const MULTIPLAYER_AVATAR_TYPES: MultiplayerAvatarType[] = [
+  'leukocyte',
+  'rbc',
+  'platelet',
+  'dendrite',
+  'antibody',
+  'mucus',
+];
+
 export const AFK_TIMEOUT_MS = 60_000; // 1 minute (60 seconds) without movement, actions, or solving questions
 export const MAX_PLAYERS_PER_ROOM = 5; // Each room holds up to 5 players; when full, new rooms (Room 2, Room 3, ...) are created automatically
 
@@ -32,6 +49,7 @@ export interface LiveArenaPlayer {
   playerId: string;
   studentName: string;
   className: string;
+  avatarType?: MultiplayerAvatarType;
   x: number;
   y: number;
   z: number;
@@ -400,6 +418,39 @@ export interface ArenaKillfeedEvent {
 }
 
 const PLAYER_ID_STORAGE_KEY = 'bio_ops_mp_player_id_v1';
+const PLAYER_AVATAR_STORAGE_KEY = 'bio_ops_mp_avatar_type_v1';
+
+export function resolvePlayerAvatarType(
+  playerId: string,
+  explicitAvatar?: MultiplayerAvatarType
+): MultiplayerAvatarType {
+  if (explicitAvatar && MULTIPLAYER_AVATAR_TYPES.includes(explicitAvatar)) {
+    return explicitAvatar;
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < playerId.length; i++) {
+    hash ^= playerId.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return MULTIPLAYER_AVATAR_TYPES[(hash >>> 0) % MULTIPLAYER_AVATAR_TYPES.length];
+}
+
+export function getOrCreateMultiplayerAvatar(playerId?: string): MultiplayerAvatarType {
+  try {
+    const existing = sessionStorage.getItem(PLAYER_AVATAR_STORAGE_KEY) as MultiplayerAvatarType | null;
+    if (existing && MULTIPLAYER_AVATAR_TYPES.includes(existing)) {
+      return existing;
+    }
+    const randomPick =
+      MULTIPLAYER_AVATAR_TYPES[Math.floor(Math.random() * MULTIPLAYER_AVATAR_TYPES.length)];
+    sessionStorage.setItem(PLAYER_AVATAR_STORAGE_KEY, randomPick);
+    return randomPick;
+  } catch {
+    return playerId
+      ? resolvePlayerAvatarType(playerId)
+      : MULTIPLAYER_AVATAR_TYPES[Math.floor(Math.random() * MULTIPLAYER_AVATAR_TYPES.length)];
+  }
+}
 
 export function getOrCreateMultiplayerPlayerId(): string {
   try {
@@ -532,6 +583,7 @@ export async function joinDeathmatchRoom(
     playerId,
     studentName,
     className,
+    avatarType: getOrCreateMultiplayerAvatar(playerId),
     x: safeSpawn.x,
     y: 0,
     z: safeSpawn.z,
@@ -650,6 +702,7 @@ function hasMeaningfulStateDelta(prev: LiveArenaPlayer | null, next: LiveArenaPl
     next.grenadeSeq !== prev.grenadeSeq ||
     next.isCrouched !== prev.isCrouched ||
     next.weaponId !== prev.weaponId ||
+    next.avatarType !== prev.avatarType ||
     next.hp !== prev.hp
   ) {
     return true;
@@ -962,6 +1015,7 @@ export function subscribeToDeathmatchRoom(
 
     return {
       ...incoming,
+      avatarType: incoming.avatarType || prev?.avatarType || resolvePlayerAvatarType(incoming.playerId),
       vx,
       vz,
       vAimX,

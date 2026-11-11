@@ -5913,6 +5913,52 @@ export function updateStudentOperatorBadge(
   texture.needsUpdate = true;
 }
 
+export function updateStudentOperatorAppearance(
+  operatorGroup: THREE.Group,
+  avatarType: string = 'leukocyte',
+  weaponId: string = 'scar_bio'
+) {
+  const ud = operatorGroup.userData as {
+    avatarVariants?: Record<string, THREE.Group>;
+    weaponVariants?: Record<string, THREE.Group>;
+    limbMeshes?: THREE.Mesh[];
+    limbMatsByAvatar?: Record<string, THREE.Material>;
+    currentAvatar?: string;
+    currentWeapon?: string;
+  };
+  if (!ud) return;
+
+  const validAvatars = ['leukocyte', 'rbc', 'platelet', 'dendrite', 'antibody', 'mucus'];
+  const resolvedAvatar = validAvatars.includes(avatarType) ? avatarType : 'leukocyte';
+
+  if (ud.avatarVariants && ud.currentAvatar !== resolvedAvatar) {
+    ud.currentAvatar = resolvedAvatar;
+    for (const key of validAvatars) {
+      if (ud.avatarVariants[key]) {
+        ud.avatarVariants[key].visible = key === resolvedAvatar;
+      }
+    }
+    if (ud.limbMeshes && ud.limbMatsByAvatar && ud.limbMatsByAvatar[resolvedAvatar]) {
+      const mat = ud.limbMatsByAvatar[resolvedAvatar];
+      for (let i = 0; i < ud.limbMeshes.length; i++) {
+        ud.limbMeshes[i].material = mat;
+      }
+    }
+  }
+
+  const validWeapons = ['scar_bio', 'pump_shotgun', 'bolt_sniper', 'drum_lmg'];
+  const resolvedWeapon = validWeapons.includes(weaponId) ? weaponId : 'scar_bio';
+
+  if (ud.weaponVariants && ud.currentWeapon !== resolvedWeapon) {
+    ud.currentWeapon = resolvedWeapon;
+    for (const wKey of validWeapons) {
+      if (ud.weaponVariants[wKey]) {
+        ud.weaponVariants[wKey].visible = wKey === resolvedWeapon;
+      }
+    }
+  }
+}
+
 export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   group: THREE.Group;
   leftLeg: THREE.Group;
@@ -5927,71 +5973,343 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
 } {
   const group = new THREE.Group();
 
-  const squadColors = [0xe11d48, 0xd97706, 0x7c3aed, 0x0284c7, 0x059669];
+  const squadColors = [0xe11d48, 0xd97706, 0x7c3aed, 0x0284c7, 0x059669, 0x10b981];
   const accentHex = squadColors[slotIdx % squadColors.length];
 
-  // Translucent Leukocyte Soma Head
-  const bodyMat = createFastLitMaterial({
-    color: 0xf8fafc,
-    roughness: 0.22,
-    metalness: 0.1,
-    emissive: accentHex,
-    emissiveIntensity: 0.16,
-    transparent: true,
-    opacity: 0.72,
-  });
-  const soma = new THREE.Mesh(new THREE.SphereGeometry(0.66, 16, 16), bodyMat);
-  soma.position.set(0, 0.22, 0);
-  group.add(soma);
+  const avatarVariants: Record<string, THREE.Group> = {};
+  const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const eyePupilMat = new THREE.MeshBasicMaterial({ color: 0x09090b });
+  const browDarkMat = createFastLitMaterial({ color: 0x0f172a, roughness: 0.4 });
+  const vestMat = createFastLitMaterial({ color: 0x1e293b, roughness: 0.52 });
 
-  // Visible 3-Lobed Purple Polymorphonuclear Nucleus Inside Leukocyte
-  const purpleLobeMat = createFastLitMaterial({
-    color: 0x9333ea,
-    emissive: 0x7e22ce,
-    emissiveIntensity: 1.25,
-    roughness: 0.25,
-  });
-  [
-    [-0.22, 0.26, 0.12],
-    [0, 0.36, 0.16],
-    [0.22, 0.26, 0.12],
-  ].forEach(([lx, ly, lz]) => {
-    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), purpleLobeMat);
-    lobe.position.set(lx, ly, lz);
-    group.add(lobe);
-  });
+  // Helper to attach fierce front-facing tactical eyes (+Z forward)
+  const attachFierceEyes = (parent: THREE.Group, yPos: number, zPos: number, browColor: number = 0x0f172a) => {
+    const bMat = browColor === 0x0f172a ? browDarkMat : createFastLitMaterial({ color: browColor, roughness: 0.35 });
+    [-1, 1].forEach((side) => {
+      const eyeW = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10), eyeWhiteMat);
+      eyeW.scale.set(1, 0.85, 0.55);
+      eyeW.position.set(side * 0.21, yPos, zPos);
+      parent.add(eyeW);
 
-  // Tactical Commando Beret & Visor
-  const beretMat = createFastLitMaterial({ color: accentHex, roughness: 0.45 });
-  const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.16, 14), beretMat);
-  beret.position.set(0.06, 0.78, 0);
-  beret.rotation.z = -0.22;
-  group.add(beret);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), eyePupilMat);
+      pupil.position.set(side * 0.21, yPos - 0.01, zPos + 0.05);
+      parent.add(pupil);
 
-  const visor = new THREE.Mesh(
-    new THREE.BoxGeometry(0.58, 0.14, 0.14),
-    createFastLitMaterial({ color: 0x09090b, metalness: 0.9, roughness: 0.1 })
-  );
-  visor.position.set(0, 0.18, 0.58);
-  group.add(visor);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.045, 0.08), bMat);
+      brow.position.set(side * 0.21, yPos + 0.09, zPos + 0.04);
+      brow.rotation.z = side * 0.32;
+      parent.add(brow);
+    });
+  };
 
-  // Armored Tactical Vest
-  const vest = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.64, 0.68, 0.48, 14),
-    createFastLitMaterial({ color: 0x1e293b, roughness: 0.55 })
-  );
-  vest.position.set(0, -0.18, 0);
-  group.add(vest);
+  // ==========================================================================
+  // 1. WHITE LEUKOCYTE FIGHTER ('leukocyte')
+  // ==========================================================================
+  {
+    const leukoGroup = new THREE.Group();
+    const bodyMat = createFastLitMaterial({
+      color: 0xf8fafc,
+      roughness: 0.22,
+      metalness: 0.1,
+      emissive: accentHex,
+      emissiveIntensity: 0.16,
+      transparent: true,
+      opacity: 0.74,
+    });
+    const soma = new THREE.Mesh(new THREE.SphereGeometry(0.66, 16, 16), bodyMat);
+    soma.position.set(0, 0.22, 0);
+    leukoGroup.add(soma);
 
-  const chestStripe = new THREE.Mesh(
-    new THREE.BoxGeometry(0.52, 0.22, 0.14),
-    createFastLitMaterial({ color: accentHex, roughness: 0.4 })
-  );
-  chestStripe.position.set(0, -0.16, 0.62);
-  group.add(chestStripe);
+    const purpleLobeMat = createFastLitMaterial({
+      color: 0x9333ea,
+      emissive: 0x7e22ce,
+      emissiveIntensity: 1.25,
+      roughness: 0.25,
+    });
+    [
+      [-0.22, 0.26, 0.12],
+      [0, 0.36, 0.16],
+      [0.22, 0.26, 0.12],
+    ].forEach(([lx, ly, lz]) => {
+      const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), purpleLobeMat);
+      lobe.position.set(lx, ly, lz);
+      leukoGroup.add(lobe);
+    });
+
+    const beretMat = createFastLitMaterial({ color: accentHex, roughness: 0.45 });
+    const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.16, 14), beretMat);
+    beret.position.set(0.06, 0.78, 0);
+    beret.rotation.z = -0.22;
+    leukoGroup.add(beret);
+
+    const visor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.58, 0.14, 0.14),
+      createFastLitMaterial({ color: 0x09090b, metalness: 0.9, roughness: 0.1 })
+    );
+    visor.position.set(0, 0.18, 0.58);
+    leukoGroup.add(visor);
+
+    const vest = new THREE.Mesh(new THREE.CylinderGeometry(0.64, 0.68, 0.48, 14), vestMat);
+    vest.position.set(0, -0.18, 0);
+    leukoGroup.add(vest);
+
+    const chestStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.52, 0.22, 0.14),
+      createFastLitMaterial({ color: accentHex, roughness: 0.4 })
+    );
+    chestStripe.position.set(0, -0.16, 0.62);
+    leukoGroup.add(chestStripe);
+
+    avatarVariants['leukocyte'] = leukoGroup;
+    group.add(leukoGroup);
+  }
+
+  // ==========================================================================
+  // 2. RED BLOOD CELL (ERYTHROCYTE) FIGHTER ('rbc')
+  // ==========================================================================
+  {
+    const rbcGroup = new THREE.Group();
+    const rbcMat = createFastLitMaterial({
+      color: 0xe11d48,
+      emissive: 0xbe123c,
+      emissiveIntensity: 0.45,
+      roughness: 0.28,
+    });
+    const rbcDimpleMat = createFastLitMaterial({
+      color: 0x9f1239,
+      emissive: 0x881337,
+      emissiveIntensity: 0.35,
+      roughness: 0.35,
+    });
+
+    // Biconcave disc standing upright facing +Z
+    const torus = new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.25, 14, 24), rbcMat);
+    torus.position.set(0, 0.16, 0);
+    torus.scale.set(1.0, 1.0, 0.72);
+    rbcGroup.add(torus);
+
+    const centerWeb = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.16, 16), rbcDimpleMat);
+    centerWeb.rotation.x = Math.PI / 2;
+    centerWeb.position.set(0, 0.16, 0);
+    rbcGroup.add(centerWeb);
+
+    // Tactical Crimson Headband & Commando Belt
+    const headband = new THREE.Mesh(
+      new THREE.BoxGeometry(1.12, 0.12, 0.46),
+      createFastLitMaterial({ color: 0xfef08a, emissive: 0xfacc15, emissiveIntensity: 0.4, roughness: 0.3 })
+    );
+    headband.position.set(0, 0.56, 0.04);
+    rbcGroup.add(headband);
+
+    attachFierceEyes(rbcGroup, 0.24, 0.24, 0x4c0519);
+
+    const belt = new THREE.Mesh(new THREE.CylinderGeometry(0.54, 0.58, 0.24, 14), vestMat);
+    belt.position.set(0, -0.36, 0);
+    rbcGroup.add(belt);
+
+    rbcGroup.visible = false;
+    avatarVariants['rbc'] = rbcGroup;
+    group.add(rbcGroup);
+  }
+
+  // ==========================================================================
+  // 3. PLATELET (THROMBOCYTE) FIGHTER ('platelet')
+  // ==========================================================================
+  {
+    const pltGroup = new THREE.Group();
+    const pltMat = createFastLitMaterial({
+      color: 0xfbbf24,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.55,
+      roughness: 0.28,
+    });
+    const spikeMat = createFastLitMaterial({
+      color: 0xfef08a,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.65,
+      roughness: 0.25,
+    });
+
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.58, 16, 14), pltMat);
+    core.position.set(0, 0.14, 0);
+    core.scale.set(1.08, 0.92, 0.78);
+    pltGroup.add(core);
+
+    // 8 Radiating Activated Platelet Pseudopodia Spikes
+    const spikeGeo = new THREE.ConeGeometry(0.11, 0.48, 7);
+    for (let s = 0; s < 8; s++) {
+      const ang = (s / 8) * Math.PI * 2;
+      const spike = new THREE.Mesh(spikeGeo, spikeMat);
+      spike.position.set(Math.cos(ang) * 0.66, 0.14 + Math.sin(ang) * 0.58, (s % 2 === 0 ? 1 : -1) * 0.08);
+      spike.rotation.z = ang - Math.PI / 2;
+      pltGroup.add(spike);
+    }
+
+    attachFierceEyes(pltGroup, 0.2, 0.44, 0x78350f);
+
+    const vest = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.56, 0.3, 12), vestMat);
+    vest.position.set(0, -0.32, 0);
+    pltGroup.add(vest);
+
+    pltGroup.visible = false;
+    avatarVariants['platelet'] = pltGroup;
+    group.add(pltGroup);
+  }
+
+  // ==========================================================================
+  // 4. DENDRITE FIGHTER ('dendrite')
+  // ==========================================================================
+  {
+    const dendGroup = new THREE.Group();
+    const dendMat = createFastLitMaterial({
+      color: 0xc084fc,
+      emissive: 0x9333ea,
+      emissiveIntensity: 0.68,
+      roughness: 0.25,
+    });
+    const tipMat = createFastLitMaterial({
+      color: 0x22d3ee,
+      emissive: 0x06b6d4,
+      emissiveIntensity: 0.9,
+      roughness: 0.2,
+    });
+
+    const soma = new THREE.Mesh(new THREE.OctahedronGeometry(0.58, 2), dendMat);
+    soma.position.set(0, 0.16, 0);
+    soma.scale.set(1.05, 1.0, 0.78);
+    dendGroup.add(soma);
+
+    const branchGeo = new THREE.ConeGeometry(0.1, 0.62, 6);
+    const tipGeo = new THREE.SphereGeometry(0.09, 8, 8);
+    for (let b = 0; b < 6; b++) {
+      const ang = (b / 6) * Math.PI * 2 + 0.25;
+      const branch = new THREE.Mesh(branchGeo, dendMat);
+      branch.position.set(Math.cos(ang) * 0.68, 0.18 + Math.sin(ang) * 0.62, 0);
+      branch.rotation.z = ang - Math.PI / 2;
+      dendGroup.add(branch);
+
+      const tip = new THREE.Mesh(tipGeo, tipMat);
+      tip.position.set(Math.cos(ang) * 0.96, 0.18 + Math.sin(ang) * 0.88, 0);
+      dendGroup.add(tip);
+    }
+
+    attachFierceEyes(dendGroup, 0.22, 0.44, 0x3b0764);
+
+    const vest = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.54, 0.3, 12), vestMat);
+    vest.position.set(0, -0.34, 0);
+    dendGroup.add(vest);
+
+    dendGroup.visible = false;
+    avatarVariants['dendrite'] = dendGroup;
+    group.add(dendGroup);
+  }
+
+  // ==========================================================================
+  // 5. ANTIBODY (IMMUNOGLOBULIN Y-FIGHTER) ('antibody')
+  // ==========================================================================
+  {
+    const abGroup = new THREE.Group();
+    const abBodyMat = createFastLitMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.75,
+      roughness: 0.22,
+    });
+    const abTipMat = createFastLitMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.9,
+      roughness: 0.2,
+    });
+
+    // Fc Vertical Stem
+    const fcStem = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.52, 8, 12), abBodyMat);
+    fcStem.position.set(0, -0.08, 0);
+    abGroup.add(fcStem);
+
+    // Left & Right Y-Shaped Fab Arms + Antigen-Binding Golden Claws
+    [-1, 1].forEach((side) => {
+      const fabArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.48, 8, 10), abBodyMat);
+      fabArm.position.set(side * 0.34, 0.44, 0);
+      fabArm.rotation.z = -side * 0.62;
+      abGroup.add(fabArm);
+
+      const fabTip = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 1), abTipMat);
+      fabTip.position.set(side * 0.56, 0.72, 0);
+      abGroup.add(fabTip);
+    });
+
+    attachFierceEyes(abGroup, 0.14, 0.24, 0x082f49);
+
+    const belt = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.22, 12), vestMat);
+    belt.position.set(0, -0.36, 0);
+    abGroup.add(belt);
+
+    abGroup.visible = false;
+    avatarVariants['antibody'] = abGroup;
+    group.add(abGroup);
+  }
+
+  // ==========================================================================
+  // 6. MUCUS CELL (GOBLET CELL) FIGHTER ('mucus')
+  // ==========================================================================
+  {
+    const mucGroup = new THREE.Group();
+    const gobletMat = createFastLitMaterial({
+      color: 0x10b981,
+      emissive: 0x059669,
+      emissiveIntensity: 0.55,
+      roughness: 0.25,
+    });
+    const mucinGelMat = createFastLitMaterial({
+      color: 0xa3e635,
+      emissive: 0x65a30d,
+      emissiveIntensity: 0.85,
+      roughness: 0.18,
+    });
+
+    // Tapered Goblet Chalice Cup
+    const chalice = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.36, 0.88, 16), gobletMat);
+    chalice.position.set(0, 0.14, 0);
+    mucGroup.add(chalice);
+
+    // Bubbling Mucin Gel Crown overflowing the Goblet top
+    [
+      [0, 0.64, 0, 0.28],
+      [-0.32, 0.58, 0.14, 0.22],
+      [0.32, 0.58, 0.14, 0.22],
+      [0, 0.56, 0.32, 0.2],
+      [-0.24, 0.6, -0.22, 0.21],
+      [0.24, 0.6, -0.22, 0.21],
+    ].forEach(([mx, my, mz, mr]) => {
+      const drop = new THREE.Mesh(new THREE.SphereGeometry(mr, 10, 10), mucinGelMat);
+      drop.position.set(mx, my, mz);
+      mucGroup.add(drop);
+    });
+
+    attachFierceEyes(mucGroup, 0.22, 0.48, 0x064e3b);
+
+    const belt = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, 0.24, 14), vestMat);
+    belt.position.set(0, -0.34, 0);
+    mucGroup.add(belt);
+
+    mucGroup.visible = false;
+    avatarVariants['mucus'] = mucGroup;
+    group.add(mucGroup);
+  }
+
+  // Limb materials per avatar character so arms and legs match the biological cell fighter!
+  const limbMatsByAvatar: Record<string, THREE.Material> = {
+    leukocyte: createFastLitMaterial({ color: 0xe2e8f0, roughness: 0.35 }),
+    rbc: createFastLitMaterial({ color: 0xf43f5e, roughness: 0.32 }),
+    platelet: createFastLitMaterial({ color: 0xfbbf24, roughness: 0.32 }),
+    dendrite: createFastLitMaterial({ color: 0xc084fc, roughness: 0.32 }),
+    antibody: createFastLitMaterial({ color: 0x38bdf8, roughness: 0.32 }),
+    mucus: createFastLitMaterial({ color: 0x34d399, roughness: 0.32 }),
+  };
 
   // Articulated Legs
-  const limbMat = createFastLitMaterial({ color: 0xe2e8f0, roughness: 0.35 });
+  const limbMat = limbMatsByAvatar['leukocyte'];
   const bootMat = createFastLitMaterial({ color: 0x0f172a, roughness: 0.7 });
 
   const leftLeg = new THREE.Group();
@@ -6014,28 +6332,40 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   rightLeg.add(rBoot);
   group.add(rightLeg);
 
-  // Articulated Arms + Assault Rifle + Scope Glint
+  // Articulated Arms + Realistic 3D Equipped Weapons (SCAR, Shotgun, Sniper, Drum LMG) + Scope Glint
   const leftArm = new THREE.Group();
-  leftArm.position.set(-0.7, 0.02, 0.12);
+  leftArm.position.set(-0.66, 0.02, 0.14);
   const lArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 6, 8), limbMat);
-  lArmMesh.position.set(0.06, -0.14, 0.16);
-  lArmMesh.rotation.x = 0.65;
+  lArmMesh.position.set(0.12, -0.14, 0.18);
+  lArmMesh.rotation.x = 0.68;
+  lArmMesh.rotation.z = -0.25;
   leftArm.add(lArmMesh);
   group.add(leftArm);
 
   const rightArm = new THREE.Group();
-  rightArm.position.set(0.7, 0.02, 0.12);
+  rightArm.position.set(0.66, 0.02, 0.14);
   const rArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 6, 8), limbMat);
-  rArmMesh.position.set(-0.06, -0.14, 0.16);
+  rArmMesh.position.set(-0.08, -0.14, 0.16);
   rArmMesh.rotation.x = 0.65;
   rightArm.add(rArmMesh);
 
-  const rifle = new THREE.Mesh(
-    new THREE.BoxGeometry(0.12, 0.18, 0.88),
-    createFastLitMaterial({ color: 0x334155, metalness: 0.85, roughness: 0.2 })
-  );
-  rifle.position.set(-0.1, -0.18, 0.44);
-  rightArm.add(rifle);
+  // Pre-build all 4 realistic 3D weapons on the operator's right arm so players clearly see the exact weapon their enemy carries!
+  const weaponHolder = new THREE.Group();
+  // Position in front of the operator's chest/hands and rotate Math.PI on Y so the weapon barrel (-Z in local weapon space) points forward (+Z)
+  weaponHolder.position.set(-0.18, -0.14, 0.38);
+  weaponHolder.rotation.set(-0.55, Math.PI, 0);
+  weaponHolder.scale.set(0.78, 0.78, 0.78);
+  rightArm.add(weaponHolder);
+
+  const weaponVariants: Record<string, THREE.Group> = {};
+  const weaponIds = ['scar_bio', 'pump_shotgun', 'bolt_sniper', 'drum_lmg'];
+  for (let wIdx = 0; wIdx < weaponIds.length; wIdx++) {
+    const wId = weaponIds[wIdx];
+    const wModel = createFortniteWeaponModel(wId, '');
+    wModel.group.visible = wId === 'scar_bio';
+    weaponVariants[wId] = wModel.group;
+    weaponHolder.add(wModel.group);
+  }
 
   const scopeGlintMat = new THREE.MeshBasicMaterial({
     color: 0xfef08a,
@@ -6043,10 +6373,23 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
     opacity: 0.0,
   });
   const scopeGlint = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), scopeGlintMat);
-  scopeGlint.position.set(-0.1, -0.04, 0.88);
+  scopeGlint.position.set(-0.18, -0.02, 0.92);
   rightArm.add(scopeGlint);
 
   group.add(rightArm);
+
+  group.userData = {
+    avatarVariants,
+    weaponVariants,
+    limbMeshes: [lThigh, rThigh, lArmMesh, rArmMesh],
+    limbMatsByAvatar,
+    currentAvatar: 'leukocyte',
+    currentWeapon: 'scar_bio',
+  };
+
+  // Pick initial diverse avatar based on slotIdx so even before network sync, slots look varied
+  const initialAvatars = ['leukocyte', 'rbc', 'platelet', 'dendrite', 'antibody', 'mucus'];
+  updateStudentOperatorAppearance(group, initialAvatars[slotIdx % initialAvatars.length], 'scar_bio');
 
   // 3D Bio-Stasis Freeze Crystal Cage (Visible when opponent student's 1-minute timer expires and they are stunned solving 3 questions!)
   const stasisCage = new THREE.Group();
