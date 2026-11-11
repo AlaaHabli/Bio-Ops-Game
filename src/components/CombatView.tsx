@@ -194,6 +194,8 @@ interface ActiveSoldier {
   callsignCanvas?: HTMLCanvasElement;
   callsignTexture?: THREE.CanvasTexture;
   stunTimer?: number;
+  lastLocalDamagedAt?: number;
+  localEliminatedUntil?: number;
 }
 
 interface ActiveEnemyAirdrop {
@@ -1400,6 +1402,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       z: playerPosRef.current.z,
       aimX: aimPosRef.current.x,
       aimY: aimPosRef.current.y,
+      yaw: Number(cameraYawRef.current.toFixed(3)),
+      pitch: Number(cameraPitchRef.current.toFixed(3)),
+      inputSeq: predictionEngineRef.current.getCurrentSeq(),
+      lastActivityAt: lastPlayerActivityRef.current,
       weaponId: currentWeaponRef.current.id,
       hp: 0,
       maxHp: 100,
@@ -1445,6 +1451,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       z: playerPosRef.current.z,
       aimX: aimPosRef.current.x,
       aimY: aimPosRef.current.y,
+      yaw: Number(cameraYawRef.current.toFixed(3)),
+      pitch: Number(cameraPitchRef.current.toFixed(3)),
+      inputSeq: predictionEngineRef.current.getCurrentSeq(),
+      lastActivityAt: lastPlayerActivityRef.current,
       weaponId: currentWeaponRef.current.id,
       hp: playerHpRef.current,
       maxHp: 100,
@@ -1761,6 +1771,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
           sounds.triggerHaptic([45, 30, 45], 'heavy');
           if (nextHp <= 0 || hit.eliminated) {
             triggerMpEliminatedStateRef.current?.(hit.attackerName, hit.weaponName);
+          } else {
+            pushLocalMpStateNowRef.current?.();
           }
         },
         (kfEvent) => {
@@ -1768,7 +1780,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         },
         (authoritativeLocal) => {
           if (afkKickedRef.current || mpMatchEndedRef.current) return;
-          const reconcileRes = predictionEngineRef.current.reconcileServerState(
+          predictionEngineRef.current.reconcileServerState(
             authoritativeLocal,
             {
               x: playerPosRef.current.x,
@@ -1780,10 +1792,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
               pitch: cameraPitchRef.current,
             }
           );
-          if (reconcileRes.snapRequired) {
-            playerPosRef.current.x = reconcileRes.x;
-            playerPosRef.current.z = reconcileRes.z;
-          }
         },
         (_kickedPlayerId, kickedName) => {
           setMpKillfeed((prev) => [
@@ -3610,10 +3618,32 @@ export const CombatView: React.FC<CombatViewProps> = ({
         } else {
           existing.flankTargetX = mappedX;
           existing.firingLineZ = mappedZ;
-          existing.hp = displayHp;
-          existing.hitsLeft = Math.max(0.2, (displayHp / 100) * 3);
+          const nowPerf = performance.now();
+          const isLocallyEliminated = Boolean(
+            existing.localEliminatedUntil && nowPerf < existing.localEliminatedUntil
+          );
+          const isRecentlyDamagedLocally = Boolean(
+            existing.lastLocalDamagedAt && nowPerf - existing.lastLocalDamagedAt < 3500
+          );
+          const remoteIsProtected = rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
+          const nextStun = remoteIsProtected || isLocallyEliminated;
+
+          if (nextStun) {
+            existing.hp = 100;
+            existing.hitsLeft = 3;
+            if (remoteIsProtected) {
+              existing.lastLocalDamagedAt = 0;
+            }
+          } else if (isRecentlyDamagedLocally) {
+            existing.hp = Math.min(existing.hp, displayHp);
+            existing.hitsLeft = Math.min(existing.hitsLeft, Math.max(0.2, (displayHp / 100) * 3));
+          } else {
+            existing.hp = displayHp;
+            existing.hitsLeft = Math.max(0.2, (displayHp / 100) * 3);
+          }
+
           if (existing.hpBarFill) {
-            const pct = Math.max(0.02, Math.min(1, displayHp / 100));
+            const pct = Math.max(0.02, Math.min(1, existing.hp / 100));
             existing.hpBarFill.scale.x = pct;
             existing.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
           }
@@ -3625,7 +3655,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
             existing.equippedWeaponId = nextWeapon;
           }
           updateStudentOperatorAppearance(existing.mesh, nextAvatar, nextWeapon);
-          const nextStun = rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
           if (existing.isStunned !== nextStun || existing.name !== rp.studentName) {
             existing.isStunned = nextStun;
             existing.name = rp.studentName;
@@ -4453,6 +4482,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
 
         if (hitRegistered && hitSoldier) {
+          hitSoldier.lastLocalDamagedAt = performance.now();
           hitSoldier.hp -= totalDamage;
         }
       } else {
@@ -4692,9 +4722,23 @@ export const CombatView: React.FC<CombatViewProps> = ({
               Math.random() > 0.5 ? 'atp' : 'shield'
             );
           }
-          releaseSoldierToPool(hitSoldier);
-          const sIdx = soldiers.indexOf(hitSoldier);
-          if (sIdx !== -1) soldiers.splice(sIdx, 1);
+          if (isMultiplayerDeathmatch && hitSoldier.remotePlayerId) {
+            // Keep remote player in the 3D arena inside their reviving stasis shield so spawnInterval never respawns a duplicate
+            hitSoldier.localEliminatedUntil = performance.now() + 2500;
+            hitSoldier.lastLocalDamagedAt = 0;
+            hitSoldier.isStunned = true;
+            hitSoldier.hp = 100;
+            hitSoldier.hitsLeft = 3;
+            if (hitSoldier.stasisCage) hitSoldier.stasisCage.visible = true;
+            if (hitSoldier.hpBarFill) {
+              hitSoldier.hpBarFill.scale.x = 1;
+              hitSoldier.hpBarFill.position.x = 0;
+            }
+          } else {
+            releaseSoldierToPool(hitSoldier);
+            const sIdx = soldiers.indexOf(hitSoldier);
+            if (sIdx !== -1) soldiers.splice(sIdx, 1);
+          }
         }
 
         if (eliminatedSoldier) {
@@ -4734,6 +4778,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
               pitch: Number(cameraPitchRef.current.toFixed(3)),
               aimX: aimPosRef.current.x,
               aimY: aimPosRef.current.y,
+              inputSeq: predictionEngineRef.current.getCurrentSeq(),
+              lastActivityAt: lastPlayerActivityRef.current,
               weaponId: currentWeaponRef.current.id,
               hp: playerHpRef.current,
               maxHp: 100,
@@ -4881,8 +4927,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       syncCrosshairDom(targetAimPosRef.current.x, targetAimPosRef.current.y);
     };
 
+    let lastTouchInteractionTime = 0;
+
     // Dedicated Multi-Touch Handlers for Phone (Allows simultaneous Moving & Hold-Shoot Scoping!)
     const handleTouchStart = (e: TouchEvent) => {
+      lastTouchInteractionTime = performance.now();
       if (e.cancelable) e.preventDefault(); // Prevents mobile OS long-press magnifying glass ("zooming lens")!
       sounds.unlockAudio();
       if (cachedRect.width === 0 || cachedRect.height === 0) {
@@ -4921,6 +4970,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleTouchMove = (e: TouchEvent) => {
+      lastTouchInteractionTime = performance.now();
       if (e.cancelable) e.preventDefault();
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
@@ -4966,6 +5016,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
+      lastTouchInteractionTime = performance.now();
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         if (touch.identifier === movementTouchIdRef.current) {
@@ -5006,6 +5057,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleMouseDown = (e: MouseEvent) => {
+      if (performance.now() - lastTouchInteractionTime < 1000) return;
       sounds.unlockAudio();
       if (audioSuspendedRef.current) {
         audioSuspendedRef.current = false;
@@ -5029,6 +5081,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Ignore synthetic mousemove events generated after tapping HUD buttons on touchscreen devices,
+      // and ignore cursor movement while hovering over interactive HUD buttons (such as FRAG [G])
+      if (performance.now() - lastTouchInteractionTime < 1000) return;
+      if (e.target instanceof Element && e.target.closest('button, input, a')) return;
+
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
       }
@@ -5254,9 +5311,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
       lastFrameTime = nowTime;
       elapsedAccumulator += frameDelta;
       const elapsed = elapsedAccumulator;
-      // Fixed time-step physics accumulator: clamps maximum substeps to MAX_PHYSICS_SUBSTEPS (4) to prevent spiral of death
+      // Use real frameDelta (clamped to <=50ms) so 60Hz, 120Hz, 144Hz, and 240Hz devices all move at the exact same speed!
       physicsAccumulator = Math.min(physicsAccumulator + frameDelta, FIXED_DELTA_TIME * MAX_PHYSICS_SUBSTEPS);
-      const delta = FIXED_DELTA_TIME;
+      const delta = frameDelta;
 
       // Rebuild 2D Spatial Partitioning Grids for O(1) localized collision lookups
       barricadeSpatialGrid.clear();
@@ -5281,6 +5338,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (keysDownRef.current['d'] || keysDownRef.current['arrowright']) inputX += 1;
       if (keysDownRef.current['w'] || keysDownRef.current['arrowup']) inputZ -= 1;
       if (keysDownRef.current['s'] || keysDownRef.current['arrowdown']) inputZ += 1;
+
+      // Normalize movement vector so diagonal WASD movement or combined inputs never exceed 1.0x base speed
+      const inputMag = Math.hypot(inputX, inputZ);
+      if (inputMag > 1) {
+        inputX /= inputMag;
+        inputZ /= inputMag;
+      }
 
       if (isMultiplayerDeathmatch && mpStatusRef.current !== 'active') {
         inputX = 0;
@@ -5411,8 +5475,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
         playerPosRef.current.x = wallRes.x;
         playerPosRef.current.z = wallRes.z;
         const invDt = 1 / Math.max(0.008, delta);
-        playerWorldVelRef.current.vx = (wallRes.x - prevPos.x) * invDt;
-        playerWorldVelRef.current.vz = (wallRes.z - prevPos.z) * invDt;
+        playerWorldVelRef.current.vx = THREE.MathUtils.clamp((wallRes.x - prevPos.x) * invDt, -14.0, 14.0);
+        playerWorldVelRef.current.vz = THREE.MathUtils.clamp((wallRes.z - prevPos.z) * invDt, -14.0, 14.0);
         playerIsRooftopRef.current = wallRes.isRooftop;
         playerIsInsideBuildingRef.current = wallRes.isInside;
         playerElevationYRef.current = THREE.MathUtils.damp(
@@ -5842,6 +5906,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               const fragHpDmg = Math.round(360 * falloff);
               const fragHitsDmg = horizDist < 5.0 ? 4 : 3;
               const prevHpForSync = Math.max(0, Math.round(s.hp));
+              s.lastLocalDamagedAt = performance.now();
               s.hp -= fragHpDmg;
               s.hitsLeft = Math.max(0, s.hitsLeft - fragHitsDmg);
               if (isMultiplayerDeathmatch && s.remotePlayerId) {
@@ -5880,8 +5945,22 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 } else {
                   triggerMembraneDisintegration(s.mesh.position, s.type);
                 }
-                releaseSoldierToPool(s);
-                activeSoldiersRef.current.splice(j, 1);
+                if (isMultiplayerDeathmatch && s.remotePlayerId) {
+                  s.localEliminatedUntil = performance.now() + 2500;
+                  s.lastLocalDamagedAt = 0;
+                  s.isStunned = true;
+                  s.hp = 100;
+                  s.hitsLeft = 3;
+                  if (s.stasisCage) s.stasisCage.visible = true;
+                  if (s.hpBarFill) {
+                    s.hpBarFill.scale.x = 1;
+                    s.hpBarFill.position.x = 0;
+                  }
+                } else {
+                  releaseSoldierToPool(s);
+                  const mainIdx = activeSoldiersRef.current.indexOf(s);
+                  if (mainIdx !== -1) activeSoldiersRef.current.splice(mainIdx, 1);
+                }
                 if (s.isHelicopter || s.isRobot || s.isJet) {
                   setBossInfo(null);
                   setBossDefeatedBanner(true);
@@ -5905,6 +5984,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
                     },
                     ...prev.slice(0, 4),
                   ]);
+                  pushLocalMpStateNowRef.current?.();
+                  if (killsRef.current >= MATCH_KILL_LIMIT) {
+                    triggerMultiplayerMatchEndRef.current?.('kill_limit');
+                  }
                 }
               }
             }
@@ -6728,11 +6811,34 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   );
                 }
 
-                // Instantaneous HP bar sync in render loop
-                soldier.hp = rp.hp;
-                soldier.hitsLeft = Math.max(0.2, (rp.hp / 100) * 3);
+                // Instantaneous HP bar & stasis shield sync in render loop (preserves multi-shot local damage)
+                const isLocallyEliminated = Boolean(
+                  soldier.localEliminatedUntil && nowTime < soldier.localEliminatedUntil
+                );
+                const isRecentlyDamagedLocally = Boolean(
+                  soldier.lastLocalDamagedAt && nowTime - soldier.lastLocalDamagedAt < 3500
+                );
+                const remoteIsProtected =
+                  rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
+                const isCurrentlyStunned = remoteIsProtected || isLocallyEliminated;
+                const displayHp = rp.hp > 0 ? rp.hp : 100;
+
+                if (isCurrentlyStunned) {
+                  soldier.hp = 100;
+                  soldier.hitsLeft = 3;
+                  if (remoteIsProtected) {
+                    soldier.lastLocalDamagedAt = 0;
+                  }
+                } else if (isRecentlyDamagedLocally) {
+                  soldier.hp = Math.min(soldier.hp, displayHp);
+                  soldier.hitsLeft = Math.min(soldier.hitsLeft, Math.max(0.2, (displayHp / 100) * 3));
+                } else {
+                  soldier.hp = displayHp;
+                  soldier.hitsLeft = Math.max(0.2, (displayHp / 100) * 3);
+                }
+
                 if (soldier.hpBarFill) {
-                  const pct = Math.max(0.02, Math.min(1, rp.hp / 100));
+                  const pct = Math.max(0.02, Math.min(1, soldier.hp / 100));
                   soldier.hpBarFill.scale.x = pct;
                   soldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
                 }
@@ -6756,8 +6862,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 );
                 soldier.mesh.rotation.y += yawDiff * Math.min(1, delta * 18);
 
-                const isCurrentlyStunned =
-                  rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
                 soldier.isStunned = isCurrentlyStunned;
                 if (isCurrentlyStunned) {
                   if (soldier.stasisCage) {

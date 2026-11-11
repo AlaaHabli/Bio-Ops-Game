@@ -250,88 +250,13 @@ export class ClientPredictionEngine {
       return { snapRequired: false, x: currentLocal.x, z: currentLocal.z };
     }
 
-    const ackCmd = this.pendingInputs[ackIndex];
     // Remove all acknowledged commands up to and including ackSeq
     this.pendingInputs.splice(0, ackIndex + 1);
-
-    // Check if the server-acknowledged state at ackSeq matches our historical prediction at ackSeq
-    const serverAckDivergence = Math.hypot(
-      serverState.x - ackCmd.predictedX,
-      serverState.z - ackCmd.predictedZ
-    );
-    const serverAimDivergence = Math.hypot(
-      serverState.aimX - ackCmd.aimX,
-      serverState.aimY - ackCmd.aimY
-    );
-
-    if (serverAckDivergence < 0.08 && serverAimDivergence < 0.025) {
-      // Prediction matched authoritative server state — zero correction needed
-      return { snapRequired: false, x: currentLocal.x, z: currentLocal.z };
-    }
-
-    // Replay all unacknowledged input commands on top of the authoritative server state
-    let simX = serverState.x;
-    let simZ = serverState.z;
-    let prevPredX = ackCmd.predictedX;
-    let prevPredZ = ackCmd.predictedZ;
-    let simAimX = serverState.aimX;
-    let simAimY = serverState.aimY;
-    let simYaw = serverState.yaw ?? currentLocal.yaw;
-
-    for (let i = 0; i < this.pendingInputs.length; i++) {
-      const cmd = this.pendingInputs[i];
-      const stepDx = cmd.predictedX - prevPredX;
-      const stepDz = cmd.predictedZ - prevPredZ;
-      prevPredX = cmd.predictedX;
-      prevPredZ = cmd.predictedZ;
-
-      if (stepSimulator) {
-        const next = stepSimulator(
-          simX,
-          simZ,
-          cmd.worldMoveX,
-          cmd.worldMoveZ,
-          cmd.moveSpeed,
-          cmd.dt
-        );
-        simX = next.x;
-        simZ = next.z;
-      } else {
-        simX += stepDx;
-        simZ += stepDz;
-      }
-      simAimX = cmd.aimX;
-      simAimY = cmd.aimY;
-      simYaw = cmd.yaw;
-    }
-
-    const errX = simX - currentLocal.x;
-    const errZ = simZ - currentLocal.z;
-    const posErrorMag = Math.hypot(errX, errZ);
-
-    if (posErrorMag > 3.5) {
-      // Hard snap only on extreme desync / teleport boundary
-      this.corrX = 0;
-      this.corrZ = 0;
-      return { snapRequired: true, x: simX, z: simZ };
-    }
-
-    if (posErrorMag >= 0.06) {
-      this.corrX = errX;
-      this.corrZ = errZ;
-    }
-
-    const errAimX = simAimX - currentLocal.aimX;
-    const errAimY = simAimY - currentLocal.aimY;
-    if (Math.hypot(errAimX, errAimY) >= 0.03) {
-      this.corrAimX = errAimX * 0.5;
-      this.corrAimY = errAimY * 0.5;
-    }
-
-    const errYaw = Math.atan2(Math.sin(simYaw - currentLocal.yaw), Math.cos(simYaw - currentLocal.yaw));
-    if (Math.abs(errYaw) >= 0.03) {
-      this.corrYaw = errYaw * 0.5;
-    }
+    this.corrX = 0;
+    this.corrZ = 0;
+    this.corrAimX = 0;
+    this.corrAimY = 0;
+    this.corrYaw = 0;
 
     return { snapRequired: false, x: currentLocal.x, z: currentLocal.z };
   }
@@ -430,13 +355,15 @@ export function predictRemoteEntityState(
     } else if (history.length > 0) {
       // Extrapolate from newest snapshot if renderTime is past the latest snapshot
       const newest = history[history.length - 1];
-      const extraSec = Math.min(0.25, Math.max(0, (renderTime - newest.t) / 1000));
+      const extraSec = Math.min(0.12, Math.max(0, (renderTime - newest.t) / 1000));
       const damp = 1 - extraSec * 1.5;
       const effExtra = extraSec * Math.max(0.3, damp);
 
-      const worldX = newest.x + newest.vx * effExtra;
+      const safeVx = THREE_Math_clamp(newest.vx || 0, -14.0, 14.0);
+      const safeVz = THREE_Math_clamp(newest.vz || 0, -14.0, 14.0);
+      const worldX = newest.x + safeVx * effExtra;
       const worldY = newest.y;
-      const worldZ = newest.z + newest.vz * effExtra;
+      const worldZ = newest.z + safeVz * effExtra;
       const aimX = newest.aimX;
       const aimY = newest.aimY;
       const yaw = newest.yaw;
@@ -453,7 +380,7 @@ export function predictRemoteEntityState(
         : nowPerf
       : nowPerf;
   const packetAgeSec = Math.min(
-    0.2,
+    0.12,
     Math.max(0, (refClock - (rp.receivedAt || refClock)) / 1000)
   );
   const horizonDamp = 1 - packetAgeSec * 1.35;
@@ -461,9 +388,11 @@ export function predictRemoteEntityState(
 
   const safeRx = typeof rp.x === 'number' && Number.isFinite(rp.x) ? rp.x : 0;
   const safeRz = typeof rp.z === 'number' && Number.isFinite(rp.z) ? rp.z : -7.2;
-  const worldX = safeRx + (rp.vx || 0) * effAge;
+  const safeVx = THREE_Math_clamp(rp.vx || 0, -14.0, 14.0);
+  const safeVz = THREE_Math_clamp(rp.vz || 0, -14.0, 14.0);
+  const worldX = safeRx + safeVx * effAge;
   const worldY = typeof rp.y === 'number' && Number.isFinite(rp.y) ? rp.y : 0;
-  const worldZ = safeRz + (rp.vz || 0) * effAge;
+  const worldZ = safeRz + safeVz * effAge;
   const aimX = Math.max(-1, Math.min(1, (rp.aimX || 0) + (rp.vAimX || 0) * effAge * 0.55));
   const aimY = Math.max(-1, Math.min(1, (rp.aimY || 0) + (rp.vAimY || 0) * effAge * 0.55));
   const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.65;
@@ -924,7 +853,7 @@ export async function sendPlayerHitEvent(
   const roomCode = sanitizeRoomCode(rawRoomCode);
   const newHp = Math.max(0, Math.round(targetCurrentHp - damage));
   const eliminated = targetCurrentHp > 0 && newHp <= 0;
-  const hitSeq = Date.now();
+  const hitSeq = Date.now() * 1000 + Math.floor(Math.random() * 1000);
 
   const hitPayload = {
     type: 'PLAYER_HIT',
@@ -937,12 +866,13 @@ export async function sendPlayerHitEvent(
     eliminated,
     isHeadshot,
     hitSeq,
-    timestamp: hitSeq,
+    timestamp: Date.now(),
   };
 
   postToEquivalentBuses(roomCode, hitPayload);
 
   try {
+    // Do NOT overwrite lastPing on the target's document so cross-device clock differences never reject hits or movement
     const updateData: Record<string, any> = {
       hp: newHp,
       lastHitByName: attackerName.slice(0, 32),
@@ -951,7 +881,6 @@ export async function sendPlayerHitEvent(
       lastHitTargetHp: newHp,
       lastHitHeadshot: isHeadshot,
       lastHitSeq: hitSeq,
-      lastPing: hitSeq,
     };
     if (eliminated) {
       updateData.status = 'reviving';
@@ -1052,7 +981,10 @@ export function subscribeToDeathmatchRoom(
       receivedAt: typeof performance !== 'undefined' ? performance.now() : nowEpoch,
     });
   }
-  let lastProcessedHitSeq = 0;
+  const processedHitSeqs = new Set<number>();
+  if (initialLocalPlayer?.lastHitSeq) {
+    processedHitSeqs.add(initialLocalPlayer.lastHitSeq);
+  }
   let overflowTriggered = false;
 
   const stampIncomingPlayer = (incoming: LiveArenaPlayer): LiveArenaPlayer => {
@@ -1092,8 +1024,14 @@ export function subscribeToDeathmatchRoom(
         ? incoming.hp
         : prev?.hp ?? 100;
 
-    let vx = typeof incoming.vx === 'number' && Number.isFinite(incoming.vx) ? incoming.vx : 0;
-    let vz = typeof incoming.vz === 'number' && Number.isFinite(incoming.vz) ? incoming.vz : 0;
+    let vx =
+      typeof incoming.vx === 'number' && Number.isFinite(incoming.vx)
+        ? THREE_Math_clamp(incoming.vx, -14.0, 14.0)
+        : 0;
+    let vz =
+      typeof incoming.vz === 'number' && Number.isFinite(incoming.vz)
+        ? THREE_Math_clamp(incoming.vz, -14.0, 14.0)
+        : 0;
     let vAimX = 0;
     let vAimY = 0;
     let vYaw = 0;
@@ -1105,12 +1043,12 @@ export function subscribeToDeathmatchRoom(
       lastActivityAt = nowEpoch;
     } else {
       const dtSec = prev.receivedAt ? (nowPerf - prev.receivedAt) / 1000 : 0;
-      if (dtSec > 0.012 && dtSec < 0.5) {
+      if (dtSec > 0.05 && dtSec < 0.5) {
         const dx = safeX - prev.x;
         const dz = safeZ - prev.z;
         if (Math.abs(vx) < 0.01 && Math.abs(vz) < 0.01 && Math.hypot(dx, dz) > 0.03) {
-          vx = dx / dtSec;
-          vz = dz / dtSec;
+          vx = THREE_Math_clamp(dx / dtSec, -14.0, 14.0);
+          vz = THREE_Math_clamp(dz / dtSec, -14.0, 14.0);
         }
         vAimX = (safeAimX - prev.aimX) / dtSec;
         vAimY = (safeAimY - prev.aimY) / dtSec;
@@ -1308,8 +1246,8 @@ export function subscribeToDeathmatchRoom(
           playersMap.set(msg.targetPlayerId, { ...existing });
           emitPlayers();
         }
-        if (msg.targetPlayerId === localPlayerId && msg.hitSeq > lastProcessedHitSeq) {
-          lastProcessedHitSeq = msg.hitSeq;
+        if (msg.targetPlayerId === localPlayerId && msg.hitSeq && !processedHitSeqs.has(msg.hitSeq)) {
+          processedHitSeqs.add(msg.hitSeq);
           onLocalHitReceived?.({
             attackerName: msg.attackerName,
             weaponName: msg.weaponName,
@@ -1355,25 +1293,49 @@ export function subscribeToDeathmatchRoom(
           if (!data || !resolvedId) return;
           data.playerId = resolvedId;
 
-          // Ignore older mirror snapshots if a newer snapshot for this player was already processed
+          // 1. ALWAYS process incoming hits on the local player first, BEFORE any pending-write or mirror-ping filtering!
+          if (
+            resolvedId === localPlayerId &&
+            data.lastHitSeq &&
+            !processedHitSeqs.has(data.lastHitSeq) &&
+            data.lastHitByName
+          ) {
+            processedHitSeqs.add(data.lastHitSeq);
+            const resolvedHp =
+              typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
+            onLocalHitReceived?.({
+              attackerName: data.lastHitByName,
+              weaponName: data.lastHitWeapon || 'Rifle',
+              damage: data.lastHitDamage || 25,
+              newHp: resolvedHp,
+              eliminated: resolvedHp <= 0 || data.status === 'reviving',
+              isHeadshot: data.lastHitHeadshot,
+              hitSeq: data.lastHitSeq,
+            });
+          }
+
+          // 2. Ignore older mirror snapshots only when no combat state (kills, status, lastHitSeq) changed
           const existingPlayer = playersMap.get(resolvedId);
           if (
             existingPlayer &&
             typeof existingPlayer.rawRemotePing === 'number' &&
             typeof data.lastPing === 'number' &&
-            data.lastPing < existingPlayer.rawRemotePing
+            data.lastPing < existingPlayer.rawRemotePing &&
+            data.kills === existingPlayer.kills &&
+            data.status === existingPlayer.status &&
+            data.lastHitSeq === existingPlayer.lastHitSeq
           ) {
             return;
           }
 
-          // For the local player: ensure playersMap always tracks localPlayerId for accurate room count,
-          // while skipping redundant pending-write churn when localPlayerId is already registered.
+          // 3. For the local player: ensure playersMap always tracks localPlayerId for accurate room count & scoreboard
           if (resolvedId === localPlayerId && change.doc.metadata.hasPendingWrites) {
             const prevLocal = playersMap.get(localPlayerId);
             if (
               !prevLocal ||
               prevLocal.status !== data.status ||
-              prevLocal.kills !== data.kills
+              prevLocal.kills !== data.kills ||
+              prevLocal.score !== data.score
             ) {
               playersMap.set(localPlayerId, stampIncomingPlayer(data));
               hasMeaningfulRemoteChange = true;
@@ -1387,27 +1349,6 @@ export function subscribeToDeathmatchRoom(
 
           if (resolvedId === localPlayerId) {
             onServerReconcileLocal?.(stamped);
-          }
-
-          // Check if local player received a hit via Firestore from a remote device
-          if (
-            resolvedId === localPlayerId &&
-            data.lastHitSeq &&
-            data.lastHitSeq > lastProcessedHitSeq &&
-            data.lastHitByName
-          ) {
-            lastProcessedHitSeq = data.lastHitSeq;
-            const resolvedHp =
-              typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
-            onLocalHitReceived?.({
-              attackerName: data.lastHitByName,
-              weaponName: data.lastHitWeapon || 'Rifle',
-              damage: data.lastHitDamage || 25,
-              newHp: resolvedHp,
-              eliminated: resolvedHp <= 0 || data.status === 'reviving',
-              isHeadshot: data.lastHitHeadshot,
-              hitSeq: data.lastHitSeq,
-            });
           }
         });
         if (hasMeaningfulRemoteChange) {
