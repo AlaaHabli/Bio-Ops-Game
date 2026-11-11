@@ -147,6 +147,8 @@ export interface LiveArenaPlayer {
   joinedAt?: number;
   lastPing: number;
   receivedAt?: number;
+  rawRemotePing?: number;
+  rawRemoteActivityAt?: number;
   snapshotHistory?: PlayerSnapshot[];
 }
 
@@ -457,9 +459,11 @@ export function predictRemoteEntityState(
   const horizonDamp = 1 - packetAgeSec * 1.35;
   const effAge = packetAgeSec * Math.max(0.4, horizonDamp);
 
-  const worldX = rp.x + (rp.vx || 0) * effAge;
+  const safeRx = typeof rp.x === 'number' && Number.isFinite(rp.x) ? rp.x : 0;
+  const safeRz = typeof rp.z === 'number' && Number.isFinite(rp.z) ? rp.z : -7.2;
+  const worldX = safeRx + (rp.vx || 0) * effAge;
   const worldY = typeof rp.y === 'number' && Number.isFinite(rp.y) ? rp.y : 0;
-  const worldZ = rp.z + (rp.vz || 0) * effAge;
+  const worldZ = safeRz + (rp.vz || 0) * effAge;
   const aimX = Math.max(-1, Math.min(1, (rp.aimX || 0) + (rp.vAimX || 0) * effAge * 0.55));
   const aimY = Math.max(-1, Math.min(1, (rp.aimY || 0) + (rp.vAimY || 0) * effAge * 0.55));
   const yaw = (rp.yaw || 0) + (rp.vYaw || 0) * effAge * 0.65;
@@ -543,12 +547,28 @@ export function getBaseRoomPrefix(raw: string): string {
 export function formatIndexedRoomCode(basePrefix: string, roomIndex: number): string {
   const safeBase = getBaseRoomPrefix(basePrefix);
   const idx = Math.max(1, Math.floor(roomIndex));
-  return `${safeBase}-${idx}`;
+  return idx === 1 ? safeBase : `${safeBase}-${idx}`;
 }
 
 export function getRoomIndexFromCode(roomCode: string): number {
   const match = sanitizeRoomCode(roomCode).match(/-(\d+)$/);
   return match ? Math.max(1, parseInt(match[1], 10)) : 1;
+}
+
+/**
+ * Returns all equivalent Firestore room document IDs for a given room code so that
+ * Room 1 ('BIO-FFA') and legacy indexed Room 1 ('BIO-FFA-1') are seamlessly bridged
+ * across separate devices regardless of cached bundles or room input format.
+ */
+function getEquivalentRoomCodes(rawRoomCode: string): string[] {
+  const code = sanitizeRoomCode(rawRoomCode);
+  const base = getBaseRoomPrefix(code);
+  const idx = getRoomIndexFromCode(code);
+  if (idx === 1) {
+    const legacyIndexed = `${base}-1`;
+    return code === base ? [base, legacyIndexed] : [code, base];
+  }
+  return [code];
 }
 
 // Local BroadcastChannel for zero-latency cross-tab multiplayer on the same machine alongside Firestore cloud sync
@@ -608,6 +628,13 @@ function getBus(roomCode: string): RoomBroadcastBus {
   return bus;
 }
 
+function postToEquivalentBuses(rawRoomCode: string, data: any) {
+  const codes = getEquivalentRoomCodes(rawRoomCode);
+  for (let i = 0; i < codes.length; i++) {
+    getBus(codes[i]).post(data);
+  }
+}
+
 export function getInitialArenaSpawn(playerId: string): { x: number; z: number } {
   let hash = 2166136261;
   for (let i = 0; i < playerId.length; i++) {
@@ -616,10 +643,10 @@ export function getInitialArenaSpawn(playerId: string): { x: number; z: number }
   }
   const normX = ((hash >>> 0) % 1000) / 1000;
   const normZ = (((hash >>> 10) & 0x3ff) % 1000) / 1000;
-  // Safe open fighting courtyard in South sector (clear of Central Bunker at Z=-22, Watchtower at X=14, and Cover Clusters)
-  const rawX = (normX - 0.5) * 18.0;
-  const x = Math.abs(rawX) < 2.2 ? (rawX < 0 ? -3.4 : 3.4) : rawX;
-  const z = -9.2 + normZ * 3.8; // Z in [-9.2, -5.4]
+  // Unobstructed central fighting courtyard in South sector (clear of cover clusters at z=-3.8 and z=-10.5)
+  const side = (hash & 1) === 0 ? -1 : 1;
+  const x = side * (2.2 + normX * 2.4); // X in [-4.6, -2.2] or [2.2, 4.6]
+  const z = -8.5 + normZ * 2.5; // Z in [-8.5, -6.0]
   return {
     x: Number(x.toFixed(2)),
     z: Number(z.toFixed(2)),
@@ -641,6 +668,8 @@ export async function joinDeathmatchRoom(
   const now = Date.now();
 
   const safeSpawn = spawnCoords || getInitialArenaSpawn(playerId);
+  // Orient initial yaw toward courtyard center (0, -7.2) so players immediately see each other on join
+  const initialYaw = Number(Math.atan2(-safeSpawn.x, -(-7.2 - safeSpawn.z)).toFixed(3));
 
   const initialPlayer: LiveArenaPlayer = {
     playerId,
@@ -654,7 +683,7 @@ export async function joinDeathmatchRoom(
     vz: 0,
     aimX: 0,
     aimY: 0,
-    yaw: 0,
+    yaw: initialYaw,
     pitch: 0,
     inputSeq: 0,
     lastActivityAt: now,
@@ -673,44 +702,50 @@ export async function joinDeathmatchRoom(
     lastPing: now,
   };
 
+  // Reset module-level sync state so fresh joins always push immediately
+  lastFirestoreSyncAt = 0;
+  lastSyncedState = null;
+
   // Auto-scaling 5-player room matchmaking:
-  // Check Room 1 (e.g. BIO-FFA-1); if it has 5 active players, check Room 2 (BIO-FFA-2), then Room 3 (BIO-FFA-3), and so on.
+  // Check Room 1 (e.g. BIO-FFA / BIO-FFA-1); if it has 5 active players, check Room 2 (BIO-FFA-2), etc.
   let assignedRoomCode = formatIndexedRoomCode(basePrefix, Math.max(1, minRoomIndex));
   try {
     for (let idx = Math.max(1, minRoomIndex); idx <= 50; idx++) {
       const candidateCode = formatIndexedRoomCode(basePrefix, idx);
-      const playersCol = collection(db, 'multiplayer_rooms', candidateCode, 'players');
-      const snap = await Promise.race([
-        getDocs(playersCol),
+      const eqCodes = getEquivalentRoomCodes(candidateCode);
+      const snaps = await Promise.race([
+        Promise.all(eqCodes.map((c) => getDocs(collection(db, 'multiplayer_rooms', c, 'players')))),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
       ]);
-      if (!snap) {
+      if (!snaps) {
         assignedRoomCode = candidateCode;
         break;
       }
 
       const checkNow = Date.now();
-      let activeOthersCount = 0;
+      const activeOtherIds = new Set<string>();
       let alreadyInRoom = false;
 
-      snap.docs.forEach((docSnap) => {
-        const p = docSnap.data() as LiveArenaPlayer;
-        if (!p || !p.playerId) return;
-        if (p.playerId === playerId) {
-          alreadyInRoom = true;
-          return;
-        }
-        const pingAge = checkNow - (p.lastPing || 0);
-        const activityAge = checkNow - (p.lastActivityAt || p.lastPing || 0);
-        if (pingAge < AFK_TIMEOUT_MS && activityAge < AFK_TIMEOUT_MS) {
-          activeOthersCount += 1;
-        } else {
-          // Prune stale/disconnected player doc so it never blocks room capacity
-          void deleteDoc(docSnap.ref).catch(() => {});
-        }
+      snaps.forEach((snap) => {
+        snap.docs.forEach((docSnap) => {
+          const p = docSnap.data() as LiveArenaPlayer;
+          if (!p || !p.playerId) return;
+          if (p.playerId === playerId) {
+            alreadyInRoom = true;
+            return;
+          }
+          const pingAge = checkNow - (p.lastPing || 0);
+          // Tolerate up to 2 minutes of cross-device clock skew when checking active room capacity
+          if (Math.abs(pingAge) < 120_000) {
+            activeOtherIds.add(p.playerId);
+          } else if (pingAge > 600_000) {
+            // Only prune very old (>10 min) abandoned docs so clock skew between devices never deletes an active player!
+            void deleteDoc(docSnap.ref).catch(() => {});
+          }
+        });
       });
 
-      if (alreadyInRoom || activeOthersCount < MAX_PLAYERS_PER_ROOM) {
+      if (alreadyInRoom || activeOtherIds.size < MAX_PLAYERS_PER_ROOM) {
         assignedRoomCode = candidateCode;
         break;
       }
@@ -719,28 +754,33 @@ export async function joinDeathmatchRoom(
     // Fallback to assignedRoomCode if offline
   }
 
-  getBus(assignedRoomCode).post({ type: 'PLAYER_STATE', player: initialPlayer });
-  getBus(assignedRoomCode).post({ type: 'REQUEST_ROOM_SYNC', requesterId: playerId });
+  postToEquivalentBuses(assignedRoomCode, { type: 'PLAYER_STATE', player: initialPlayer });
+  postToEquivalentBuses(assignedRoomCode, { type: 'REQUEST_ROOM_SYNC', requesterId: playerId });
 
   try {
-    const roomRef = doc(db, 'multiplayer_rooms', assignedRoomCode);
-    void setDoc(
-      roomRef,
-      {
-        roomCode: assignedRoomCode,
-        hostName: studentName,
-        stage: 'Open-World Deathmatch',
-        status: 'combat',
-        currentRound: 1,
-        totalRounds: 99,
-        lastUpdated: Date.now(),
-        updatedAtServer: serverTimestamp(),
-      },
-      { merge: true }
-    ).catch(() => {});
+    const eqCodes = getEquivalentRoomCodes(assignedRoomCode);
+    await Promise.all(
+      eqCodes.map(async (code) => {
+        const roomRef = doc(db, 'multiplayer_rooms', code);
+        void setDoc(
+          roomRef,
+          {
+            roomCode: code,
+            hostName: studentName,
+            stage: 'Open-World Deathmatch',
+            status: 'combat',
+            currentRound: 1,
+            totalRounds: 99,
+            lastUpdated: Date.now(),
+            updatedAtServer: serverTimestamp(),
+          },
+          { merge: true }
+        ).catch(() => {});
 
-    const playerRef = doc(db, 'multiplayer_rooms', assignedRoomCode, 'players', playerId);
-    await setDoc(playerRef, initialPlayer, { merge: true });
+        const playerRef = doc(db, 'multiplayer_rooms', code, 'players', playerId);
+        await setDoc(playerRef, initialPlayer, { merge: true });
+      })
+    );
   } catch {
     // Fallback to local BroadcastChannel bus silently if offline
   }
@@ -783,8 +823,8 @@ function hasMeaningfulStateDelta(prev: LiveArenaPlayer | null, next: LiveArenaPl
   ) {
     return true;
   }
-  // Periodic heartbeat every 3.0s when completely idle
-  return now - lastFirestoreSyncAt >= 3000;
+  // Periodic heartbeat every 2.0s when completely idle
+  return now - lastFirestoreSyncAt >= 2000;
 }
 
 async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlayer): Promise<void> {
@@ -832,8 +872,13 @@ async function flushFirestorePlayerWrite(roomCode: string, state: LiveArenaPlaye
   isFirestoreWriteInFlight = true;
 
   try {
-    const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', state.playerId);
-    await setDoc(playerRef, state, { merge: true });
+    const eqCodes = getEquivalentRoomCodes(roomCode);
+    await Promise.all(
+      eqCodes.map((code) => {
+        const playerRef = doc(db, 'multiplayer_rooms', code, 'players', state.playerId);
+        return setDoc(playerRef, state, { merge: true });
+      })
+    );
   } catch {
     // Offline or transient network error — ignore so gameplay never stutters
   } finally {
@@ -859,8 +904,8 @@ export async function syncLocalPlayerState(
     lastPing: now,
   };
 
-  // Immediate 0ms broadcast to local tabs
-  getBus(roomCode).post({ type: 'PLAYER_STATE', player: updated });
+  // Immediate 0ms broadcast to local tabs across equivalent room channels
+  postToEquivalentBuses(roomCode, { type: 'PLAYER_STATE', player: updated });
 
   // Non-blocking single-flight cloud sync (~10.5Hz) for low-latency cross-phone gameplay without UI stutter
   void flushFirestorePlayerWrite(roomCode, updated);
@@ -895,10 +940,9 @@ export async function sendPlayerHitEvent(
     timestamp: hitSeq,
   };
 
-  getBus(roomCode).post(hitPayload);
+  postToEquivalentBuses(roomCode, hitPayload);
 
   try {
-    const targetRef = doc(db, 'multiplayer_rooms', roomCode, 'players', targetPlayerId);
     const updateData: Record<string, any> = {
       hp: newHp,
       lastHitByName: attackerName.slice(0, 32),
@@ -912,7 +956,13 @@ export async function sendPlayerHitEvent(
     if (eliminated) {
       updateData.status = 'reviving';
     }
-    await setDoc(targetRef, updateData, { merge: true });
+    const eqCodes = getEquivalentRoomCodes(roomCode);
+    await Promise.all(
+      eqCodes.map((code) => {
+        const targetRef = doc(db, 'multiplayer_rooms', code, 'players', targetPlayerId);
+        return setDoc(targetRef, updateData, { merge: true });
+      })
+    );
   } catch {
     // Ignore network glitch
   }
@@ -927,10 +977,15 @@ export async function leaveDeathmatchRoom(rawRoomCode: string, playerId: string)
     pendingFlushTimer = null;
   }
   pendingSyncPayload = null;
-  getBus(roomCode).post({ type: 'PLAYER_LEFT', playerId });
+  postToEquivalentBuses(roomCode, { type: 'PLAYER_LEFT', playerId });
   try {
-    const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerId);
-    await deleteDoc(playerRef);
+    const eqCodes = getEquivalentRoomCodes(roomCode);
+    await Promise.all(
+      eqCodes.map((code) => {
+        const playerRef = doc(db, 'multiplayer_rooms', code, 'players', playerId);
+        return deleteDoc(playerRef);
+      })
+    );
   } catch {
     // Ignore cleanup errors
   }
@@ -947,15 +1002,20 @@ export async function kickAfkPlayerFromRoom(
     pendingFlushTimer = null;
   }
   pendingSyncPayload = null;
-  getBus(roomCode).post({
+  postToEquivalentBuses(roomCode, {
     type: 'PLAYER_AFK_KICK',
     playerId,
     studentName,
     timestamp: Date.now(),
   });
   try {
-    const playerRef = doc(db, 'multiplayer_rooms', roomCode, 'players', playerId);
-    await deleteDoc(playerRef);
+    const eqCodes = getEquivalentRoomCodes(roomCode);
+    await Promise.all(
+      eqCodes.map((code) => {
+        const playerRef = doc(db, 'multiplayer_rooms', code, 'players', playerId);
+        return deleteDoc(playerRef);
+      })
+    );
   } catch {
     // Ignore cleanup errors
   }
@@ -981,11 +1041,15 @@ export function subscribeToDeathmatchRoom(
   initialLocalPlayer?: LiveArenaPlayer
 ): () => void {
   const roomCode = sanitizeRoomCode(rawRoomCode);
+  const eqCodes = getEquivalentRoomCodes(roomCode);
   const playersMap = new Map<string, LiveArenaPlayer>();
   if (initialLocalPlayer && initialLocalPlayer.playerId === localPlayerId) {
+    const nowEpoch = Date.now();
     playersMap.set(localPlayerId, {
       ...initialLocalPlayer,
-      receivedAt: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+      lastPing: nowEpoch,
+      lastActivityAt: nowEpoch,
+      receivedAt: typeof performance !== 'undefined' ? performance.now() : nowEpoch,
     });
   }
   let lastProcessedHitSeq = 0;
@@ -995,43 +1059,73 @@ export function subscribeToDeathmatchRoom(
     const nowPerf = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const nowEpoch = Date.now();
     const prev = playersMap.get(incoming.playerId);
-    let vx = incoming.vx ?? 0;
-    let vz = incoming.vz ?? 0;
+
+    const fallbackSpawn = getInitialArenaSpawn(incoming.playerId || 'stu_default');
+    const safeX =
+      typeof incoming.x === 'number' && Number.isFinite(incoming.x)
+        ? incoming.x
+        : prev?.x ?? fallbackSpawn.x;
+    const safeY =
+      typeof incoming.y === 'number' && Number.isFinite(incoming.y) ? incoming.y : prev?.y ?? 0;
+    const safeZ =
+      typeof incoming.z === 'number' && Number.isFinite(incoming.z)
+        ? incoming.z
+        : prev?.z ?? fallbackSpawn.z;
+    const safeYaw =
+      typeof incoming.yaw === 'number' && Number.isFinite(incoming.yaw)
+        ? incoming.yaw
+        : prev?.yaw ?? 0;
+    const safePitch =
+      typeof incoming.pitch === 'number' && Number.isFinite(incoming.pitch)
+        ? incoming.pitch
+        : prev?.pitch ?? 0;
+    const safeAimX =
+      typeof incoming.aimX === 'number' && Number.isFinite(incoming.aimX)
+        ? incoming.aimX
+        : prev?.aimX ?? 0;
+    const safeAimY =
+      typeof incoming.aimY === 'number' && Number.isFinite(incoming.aimY)
+        ? incoming.aimY
+        : prev?.aimY ?? 0;
+    const safeHp =
+      typeof incoming.hp === 'number' && Number.isFinite(incoming.hp)
+        ? incoming.hp
+        : prev?.hp ?? 100;
+
+    let vx = typeof incoming.vx === 'number' && Number.isFinite(incoming.vx) ? incoming.vx : 0;
+    let vz = typeof incoming.vz === 'number' && Number.isFinite(incoming.vz) ? incoming.vz : 0;
     let vAimX = 0;
     let vAimY = 0;
     let vYaw = 0;
-    const isValidEpochTimestamp = (ts?: number): ts is number =>
-      typeof ts === 'number' && Number.isFinite(ts) && ts > 1_700_000_000_000 && ts <= nowEpoch + 60_000;
 
-    let lastActivityAt = isValidEpochTimestamp(incoming.lastActivityAt)
-      ? incoming.lastActivityAt
-      : nowEpoch;
+    // Always track AFK & ping relative to the local device's clock (nowEpoch) so clock skew between 2 devices never kicks active players!
+    let lastActivityAt = nowEpoch;
 
-    // On initial snapshot of a player (before any local session delta), start their local AFK window from nowEpoch
     if (!prev) {
       lastActivityAt = nowEpoch;
     } else {
       const dtSec = prev.receivedAt ? (nowPerf - prev.receivedAt) / 1000 : 0;
       if (dtSec > 0.012 && dtSec < 0.5) {
-        const dx = incoming.x - prev.x;
-        const dz = incoming.z - prev.z;
+        const dx = safeX - prev.x;
+        const dz = safeZ - prev.z;
         if (Math.abs(vx) < 0.01 && Math.abs(vz) < 0.01 && Math.hypot(dx, dz) > 0.03) {
           vx = dx / dtSec;
           vz = dz / dtSec;
         }
-        vAimX = (incoming.aimX - prev.aimX) / dtSec;
-        vAimY = (incoming.aimY - prev.aimY) / dtSec;
-        vYaw = ((incoming.yaw || 0) - (prev.yaw || 0)) / dtSec;
+        vAimX = (safeAimX - prev.aimX) / dtSec;
+        vAimY = (safeAimY - prev.aimY) / dtSec;
+        vYaw = (safeYaw - (prev.yaw || 0)) / dtSec;
       }
 
       // Detect whether this player performed any movement, aiming, shooting, or quiz answer action
       const hasMovedOrAimed =
-        Math.abs(incoming.x - prev.x) > 0.02 ||
-        Math.abs(incoming.z - prev.z) > 0.02 ||
-        Math.abs(incoming.y - prev.y) > 0.02 ||
-        Math.abs(incoming.aimX - prev.aimX) > 0.015 ||
-        Math.abs(incoming.aimY - prev.aimY) > 0.015 ||
-        Math.abs((incoming.yaw || 0) - (prev.yaw || 0)) > 0.015;
+        Math.abs(safeX - prev.x) > 0.015 ||
+        Math.abs(safeZ - prev.z) > 0.015 ||
+        Math.abs(safeY - prev.y) > 0.015 ||
+        Math.abs(safeAimX - prev.aimX) > 0.012 ||
+        Math.abs(safeAimY - prev.aimY) > 0.012 ||
+        Math.abs(safeYaw - (prev.yaw || 0)) > 0.012 ||
+        Math.abs(safePitch - (prev.pitch || 0)) > 0.012;
       const hasPerformedAction =
         incoming.shotSeq !== prev.shotSeq ||
         incoming.grenadeSeq !== prev.grenadeSeq ||
@@ -1040,57 +1134,82 @@ export function subscribeToDeathmatchRoom(
         incoming.kills !== prev.kills ||
         incoming.weaponId !== prev.weaponId ||
         incoming.isCrouched !== prev.isCrouched;
+      const remoteActivityAdvanced =
+        typeof incoming.lastActivityAt === 'number' &&
+        typeof prev.rawRemoteActivityAt === 'number' &&
+        incoming.lastActivityAt > prev.rawRemoteActivityAt;
 
-      if (
-        isValidEpochTimestamp(incoming.lastActivityAt) &&
-        incoming.lastActivityAt > (prev.lastActivityAt || 0)
-      ) {
-        lastActivityAt = incoming.lastActivityAt;
-      } else if (hasMovedOrAimed || hasPerformedAction) {
+      if (hasMovedOrAimed || hasPerformedAction || remoteActivityAdvanced) {
         lastActivityAt = nowEpoch;
       } else {
-        lastActivityAt = isValidEpochTimestamp(prev.lastActivityAt)
-          ? prev.lastActivityAt
-          : nowEpoch;
+        lastActivityAt = prev.lastActivityAt || nowEpoch;
       }
     }
 
     // Maintain a rolling history of snapshots for state snapshot interpolation
     const snapshotHistory: PlayerSnapshot[] = prev?.snapshotHistory ? [...prev.snapshotHistory] : [];
-    snapshotHistory.push({
-      t: nowPerf,
-      x: incoming.x,
-      y: incoming.y ?? 0,
-      z: incoming.z,
-      yaw: incoming.yaw ?? 0,
-      pitch: incoming.pitch ?? 0,
-      aimX: incoming.aimX ?? 0,
-      aimY: incoming.aimY ?? 0,
-      vx,
-      vz,
-    });
-    // Keep snapshots from the last 1500ms (max 30 snapshots)
-    const cutoff = nowPerf - 1500;
-    while (snapshotHistory.length > 2 && snapshotHistory[0].t < cutoff) {
-      snapshotHistory.shift();
-    }
-    if (snapshotHistory.length > 30) {
-      snapshotHistory.splice(0, snapshotHistory.length - 30);
+    const isDuplicateMirrorSnapshot =
+      prev &&
+      typeof incoming.lastPing === 'number' &&
+      incoming.lastPing === prev.rawRemotePing &&
+      Math.abs(safeX - prev.x) < 0.001 &&
+      Math.abs(safeZ - prev.z) < 0.001 &&
+      Math.abs(safeYaw - (prev.yaw || 0)) < 0.001;
+
+    if (!isDuplicateMirrorSnapshot) {
+      snapshotHistory.push({
+        t: nowPerf,
+        x: safeX,
+        y: safeY,
+        z: safeZ,
+        yaw: safeYaw,
+        pitch: safePitch,
+        aimX: safeAimX,
+        aimY: safeAimY,
+        vx,
+        vz,
+      });
+      // Keep snapshots from the last 1500ms (max 30 snapshots)
+      const cutoff = nowPerf - 1500;
+      while (snapshotHistory.length > 2 && snapshotHistory[0].t < cutoff) {
+        snapshotHistory.shift();
+      }
+      if (snapshotHistory.length > 30) {
+        snapshotHistory.splice(0, snapshotHistory.length - 30);
+      }
     }
 
     return {
       ...incoming,
+      studentName: incoming.studentName || prev?.studentName || 'Operative',
+      className: incoming.className || prev?.className || 'Science Unit',
+      status: incoming.status || prev?.status || 'active',
+      weaponId: incoming.weaponId || prev?.weaponId || 'scar_bio',
+      x: safeX,
+      y: safeY,
+      z: safeZ,
+      yaw: safeYaw,
+      pitch: safePitch,
+      aimX: safeAimX,
+      aimY: safeAimY,
+      hp: safeHp,
+      maxHp: incoming.maxHp || 100,
+      kills: typeof incoming.kills === 'number' ? incoming.kills : prev?.kills ?? 0,
+      deaths: typeof incoming.deaths === 'number' ? incoming.deaths : prev?.deaths ?? 0,
+      score: typeof incoming.score === 'number' ? incoming.score : prev?.score ?? 0,
+      shotSeq: typeof incoming.shotSeq === 'number' ? incoming.shotSeq : prev?.shotSeq ?? 0,
+      grenadeSeq: typeof incoming.grenadeSeq === 'number' ? incoming.grenadeSeq : prev?.grenadeSeq ?? 0,
       avatarType: incoming.avatarType || prev?.avatarType || resolvePlayerAvatarType(incoming.playerId),
       vx,
       vz,
       vAimX,
       vAimY,
       vYaw,
-      joinedAt: isValidEpochTimestamp(incoming.joinedAt)
-        ? incoming.joinedAt
-        : prev?.joinedAt || nowEpoch,
+      joinedAt: prev?.joinedAt || nowEpoch,
       lastActivityAt,
-      lastPing: isValidEpochTimestamp(incoming.lastPing) ? incoming.lastPing : nowEpoch,
+      lastPing: nowEpoch,
+      rawRemotePing: incoming.lastPing,
+      rawRemoteActivityAt: incoming.lastActivityAt,
       receivedAt: nowPerf,
       snapshotHistory,
     };
@@ -1122,7 +1241,9 @@ export function subscribeToDeathmatchRoom(
         playersMap.delete(v.playerId);
         onRemoteAfkKicked?.(v.playerId, v.studentName);
         if (v.playerId !== localPlayerId) {
-          void deleteDoc(doc(db, 'multiplayer_rooms', roomCode, 'players', v.playerId)).catch(() => {});
+          eqCodes.forEach((code) => {
+            void deleteDoc(doc(db, 'multiplayer_rooms', code, 'players', v.playerId)).catch(() => {});
+          });
         }
       });
     }
@@ -1153,141 +1274,159 @@ export function subscribeToDeathmatchRoom(
     emitPlayers();
   }
 
-  // 1. Subscribe to instant BroadcastChannel messages
-  const bus = getBus(roomCode);
-  const unsubBus = bus.subscribe((msg) => {
-    if (msg.type === 'PLAYER_STATE' && msg.player) {
-      const incoming = msg.player as LiveArenaPlayer;
-      const p = stampIncomingPlayer(incoming);
-      playersMap.set(p.playerId, p);
-      emitPlayers();
-    } else if (msg.type === 'REQUEST_ROOM_SYNC' && msg.requesterId !== localPlayerId) {
-      const me = playersMap.get(localPlayerId) || lastSyncedState;
-      if (me && me.playerId === localPlayerId) {
-        bus.post({ type: 'PLAYER_STATE', player: { ...me, lastPing: Date.now() } });
-      }
-    } else if (msg.type === 'PLAYER_LEFT' && msg.playerId) {
-      playersMap.delete(msg.playerId);
-      emitPlayers();
-    } else if (msg.type === 'PLAYER_AFK_KICK' && msg.playerId) {
-      playersMap.delete(msg.playerId);
-      onRemoteAfkKicked?.(msg.playerId, msg.studentName || 'Operative');
-      emitPlayers();
-    } else if (msg.type === 'PLAYER_HIT') {
-      const existing = playersMap.get(msg.targetPlayerId);
-      if (existing && existing.status !== 'active') {
-        return;
-      }
-      if (existing) {
-        existing.hp = msg.newHp;
-        if (msg.eliminated) {
-          existing.status = 'reviving';
-        }
-        playersMap.set(msg.targetPlayerId, { ...existing });
+  // 1. Subscribe to instant BroadcastChannel messages across all equivalent room codes
+  const unsubBuses = eqCodes.map((code) => {
+    const bus = getBus(code);
+    return bus.subscribe((msg) => {
+      if (msg.type === 'PLAYER_STATE' && msg.player) {
+        const incoming = msg.player as LiveArenaPlayer;
+        const p = stampIncomingPlayer(incoming);
+        playersMap.set(p.playerId, p);
         emitPlayers();
-      }
-      if (msg.targetPlayerId === localPlayerId && msg.hitSeq > lastProcessedHitSeq) {
-        lastProcessedHitSeq = msg.hitSeq;
-        onLocalHitReceived?.({
-          attackerName: msg.attackerName,
-          weaponName: msg.weaponName,
-          damage: msg.damage,
-          newHp: msg.newHp,
-          eliminated: msg.eliminated,
-          isHeadshot: msg.isHeadshot,
-          hitSeq: msg.hitSeq,
-        });
-      }
-      if (msg.eliminated && onKillfeedEvent) {
-        const victimName = existing?.studentName || 'Operative';
-        onKillfeedEvent({
-          id: `${msg.hitSeq}_${msg.targetPlayerId}`,
-          killerName: msg.attackerName,
-          victimName,
-          weaponName: msg.weaponName,
-          isHeadshot: msg.isHeadshot,
-          timestamp: msg.timestamp || Date.now(),
-        });
-      }
-    }
-  });
-
-  // 2. Subscribe to Firebase Firestore real-time collection snapshot
-  const playersCol = collection(db, 'multiplayer_rooms', roomCode, 'players');
-  const unsubFirestore = onSnapshot(
-    playersCol,
-    (snapshot) => {
-      let hasMeaningfulRemoteChange = false;
-      snapshot.docChanges().forEach((change) => {
-        const data = change.doc.data() as LiveArenaPlayer;
-        if (change.type === 'removed') {
-          if (change.doc.id !== localPlayerId) {
-            playersMap.delete(change.doc.id);
-            hasMeaningfulRemoteChange = true;
-          }
+      } else if (msg.type === 'REQUEST_ROOM_SYNC' && msg.requesterId !== localPlayerId) {
+        const me = playersMap.get(localPlayerId) || lastSyncedState;
+        if (me && me.playerId === localPlayerId) {
+          bus.post({ type: 'PLAYER_STATE', player: { ...me, lastPing: Date.now() } });
+        }
+      } else if (msg.type === 'PLAYER_LEFT' && msg.playerId) {
+        playersMap.delete(msg.playerId);
+        emitPlayers();
+      } else if (msg.type === 'PLAYER_AFK_KICK' && msg.playerId) {
+        playersMap.delete(msg.playerId);
+        onRemoteAfkKicked?.(msg.playerId, msg.studentName || 'Operative');
+        emitPlayers();
+      } else if (msg.type === 'PLAYER_HIT') {
+        const existing = playersMap.get(msg.targetPlayerId);
+        if (existing && existing.status !== 'active') {
           return;
         }
-        if (!data || !data.playerId) return;
-
-        // For the local player: ensure playersMap always tracks localPlayerId for accurate room count,
-        // while skipping redundant pending-write churn when localPlayerId is already registered.
-        if (change.doc.id === localPlayerId && change.doc.metadata.hasPendingWrites) {
-          const prevLocal = playersMap.get(localPlayerId);
-          if (
-            !prevLocal ||
-            prevLocal.status !== data.status ||
-            prevLocal.kills !== data.kills
-          ) {
-            playersMap.set(localPlayerId, stampIncomingPlayer(data));
-            hasMeaningfulRemoteChange = true;
+        if (existing) {
+          existing.hp = msg.newHp;
+          if (msg.eliminated) {
+            existing.status = 'reviving';
           }
-          return;
+          playersMap.set(msg.targetPlayerId, { ...existing });
+          emitPlayers();
         }
-
-        const stamped = stampIncomingPlayer(data);
-        playersMap.set(data.playerId, stamped);
-        hasMeaningfulRemoteChange = true;
-
-        if (data.playerId === localPlayerId) {
-          onServerReconcileLocal?.(stamped);
-        }
-
-        // Check if local player received a hit via Firestore from a remote device
-        if (
-          data.playerId === localPlayerId &&
-          data.lastHitSeq &&
-          data.lastHitSeq > lastProcessedHitSeq &&
-          data.lastHitByName
-        ) {
-          lastProcessedHitSeq = data.lastHitSeq;
-          const resolvedHp =
-            typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
+        if (msg.targetPlayerId === localPlayerId && msg.hitSeq > lastProcessedHitSeq) {
+          lastProcessedHitSeq = msg.hitSeq;
           onLocalHitReceived?.({
-            attackerName: data.lastHitByName,
-            weaponName: data.lastHitWeapon || 'Rifle',
-            damage: data.lastHitDamage || 25,
-            newHp: resolvedHp,
-            eliminated: resolvedHp <= 0 || data.status === 'reviving',
-            isHeadshot: data.lastHitHeadshot,
-            hitSeq: data.lastHitSeq,
+            attackerName: msg.attackerName,
+            weaponName: msg.weaponName,
+            damage: msg.damage,
+            newHp: msg.newHp,
+            eliminated: msg.eliminated,
+            isHeadshot: msg.isHeadshot,
+            hitSeq: msg.hitSeq,
           });
         }
-      });
-      if (hasMeaningfulRemoteChange) {
-        emitPlayers();
+        if (msg.eliminated && onKillfeedEvent) {
+          const victimName = existing?.studentName || 'Operative';
+          onKillfeedEvent({
+            id: `${msg.hitSeq}_${msg.targetPlayerId}`,
+            killerName: msg.attackerName,
+            victimName,
+            weaponName: msg.weaponName,
+            isHeadshot: msg.isHeadshot,
+            timestamp: msg.timestamp || Date.now(),
+          });
+        }
       }
-    },
-    (err) => {
-      console.warn('Firestore multiplayer room snapshot warning:', err);
-    }
-  );
+    });
+  });
+
+  // 2. Subscribe to Firebase Firestore real-time collection snapshots across all equivalent room codes
+  const unsubFirestores = eqCodes.map((code) => {
+    const playersCol = collection(db, 'multiplayer_rooms', code, 'players');
+    return onSnapshot(
+      playersCol,
+      (snapshot) => {
+        let hasMeaningfulRemoteChange = false;
+        snapshot.docChanges().forEach((change) => {
+          const data = change.doc.data() as LiveArenaPlayer;
+          if (change.type === 'removed') {
+            if (change.doc.id !== localPlayerId) {
+              playersMap.delete(change.doc.id);
+              hasMeaningfulRemoteChange = true;
+            }
+            return;
+          }
+          const resolvedId = data?.playerId || change.doc.id;
+          if (!data || !resolvedId) return;
+          data.playerId = resolvedId;
+
+          // Ignore older mirror snapshots if a newer snapshot for this player was already processed
+          const existingPlayer = playersMap.get(resolvedId);
+          if (
+            existingPlayer &&
+            typeof existingPlayer.rawRemotePing === 'number' &&
+            typeof data.lastPing === 'number' &&
+            data.lastPing < existingPlayer.rawRemotePing
+          ) {
+            return;
+          }
+
+          // For the local player: ensure playersMap always tracks localPlayerId for accurate room count,
+          // while skipping redundant pending-write churn when localPlayerId is already registered.
+          if (resolvedId === localPlayerId && change.doc.metadata.hasPendingWrites) {
+            const prevLocal = playersMap.get(localPlayerId);
+            if (
+              !prevLocal ||
+              prevLocal.status !== data.status ||
+              prevLocal.kills !== data.kills
+            ) {
+              playersMap.set(localPlayerId, stampIncomingPlayer(data));
+              hasMeaningfulRemoteChange = true;
+            }
+            return;
+          }
+
+          const stamped = stampIncomingPlayer(data);
+          playersMap.set(resolvedId, stamped);
+          hasMeaningfulRemoteChange = true;
+
+          if (resolvedId === localPlayerId) {
+            onServerReconcileLocal?.(stamped);
+          }
+
+          // Check if local player received a hit via Firestore from a remote device
+          if (
+            resolvedId === localPlayerId &&
+            data.lastHitSeq &&
+            data.lastHitSeq > lastProcessedHitSeq &&
+            data.lastHitByName
+          ) {
+            lastProcessedHitSeq = data.lastHitSeq;
+            const resolvedHp =
+              typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
+            onLocalHitReceived?.({
+              attackerName: data.lastHitByName,
+              weaponName: data.lastHitWeapon || 'Rifle',
+              damage: data.lastHitDamage || 25,
+              newHp: resolvedHp,
+              eliminated: resolvedHp <= 0 || data.status === 'reviving',
+              isHeadshot: data.lastHitHeadshot,
+              hitSeq: data.lastHitSeq,
+            });
+          }
+        });
+        if (hasMeaningfulRemoteChange) {
+          emitPlayers();
+        }
+      },
+      (err) => {
+        console.warn('Firestore multiplayer room snapshot warning:', err);
+      }
+    );
+  });
 
   // Periodic stale & AFK player check every 3 seconds
   const pruneTimer = setInterval(emitPlayers, 3000);
 
   return () => {
     clearInterval(pruneTimer);
-    unsubBus();
-    unsubFirestore();
+    unsubBuses.forEach((u) => u());
+    unsubFirestores.forEach((u) => u());
   };
 }
+

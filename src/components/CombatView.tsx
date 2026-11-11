@@ -730,10 +730,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const playerIsInsideBuildingRef = useRef<boolean>(false);
 
   // 360-Degree Controlled Camera Rotation & Aiming (Smoothly follows mouse/touch without dizzying auto-spin)
-  const cameraYawRef = useRef<number>(0);
+  const initialMpSpawn = isMultiplayerDeathmatch
+    ? getInitialArenaSpawn(localMpPlayerIdRef.current)
+    : { x: 0, z: 0 };
+  const initialMpYaw = isMultiplayerDeathmatch
+    ? Math.atan2(-initialMpSpawn.x, -(-7.2 - initialMpSpawn.z))
+    : 0;
+  const cameraBaseYawOffsetRef = useRef<number>(initialMpYaw);
+  const hasLockedOpponentYawRef = useRef<boolean>(false);
+  const cameraYawRef = useRef<number>(initialMpYaw);
   const cameraPitchRef = useRef<number>(0);
-  const targetCameraYawRef = useRef<number>(0);
+  const targetCameraYawRef = useRef<number>(initialMpYaw);
   const targetCameraPitchRef = useRef<number>(0);
+  const onExitToMenuRef = useRef(onExitToMenu);
+  onExitToMenuRef.current = onExitToMenu;
 
   // Helicopter Supply Drop & Super Ability System State
   // Drop interval: Every 15 seconds into death ground randomly
@@ -1644,9 +1654,45 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setAfkWarningSecondsLeft(null);
 
     let isCancelled = false;
+    let hasJoinedRoom = false;
     let currentUnsub: (() => void) | null = null;
 
+    const pushStateNow = () => {
+      if (afkKickedRef.current || isCancelled || !hasJoinedRoom) return;
+      syncLocalPlayerState(activeRoomCodeRef.current, {
+        playerId: myId,
+        studentName: cachedStudentName,
+        className: cachedClassName,
+        avatarType: localMpAvatarRef.current,
+        x: Number(playerPosRef.current.x.toFixed(3)),
+        y: Number(playerElevationYRef.current.toFixed(2)),
+        z: Number(playerPosRef.current.z.toFixed(3)),
+        vx: Number(playerWorldVelRef.current.vx.toFixed(2)),
+        vz: Number(playerWorldVelRef.current.vz.toFixed(2)),
+        yaw: Number(cameraYawRef.current.toFixed(3)),
+        pitch: Number(cameraPitchRef.current.toFixed(3)),
+        aimX: Number(aimPosRef.current.x.toFixed(3)),
+        aimY: Number(aimPosRef.current.y.toFixed(3)),
+        inputSeq: predictionEngineRef.current.getCurrentSeq(),
+        lastActivityAt: lastPlayerActivityRef.current,
+        weaponId: currentWeaponRef.current.id,
+        hp: playerHpRef.current,
+        maxHp: 100,
+        status: mpStatusRef.current,
+        kills: killsRef.current,
+        deaths: mpDeathsRef.current,
+        score: scoreRef.current,
+        accuracy: getLocalAccuracyPct(),
+        isReady: true,
+        shotSeq: localShotSeqRef.current,
+        grenadeSeq: localGrenadeSeqRef.current,
+        isCrouched: isCrouchingRef.current,
+        lastPing: Date.now(),
+      });
+    };
+
     const connectToAvailableRoom = async (minRoomIndex: number = 1) => {
+      hasJoinedRoom = false;
       const { roomCode: assignedCode, initialPlayer } = await joinDeathmatchRoom(
         multiplayerRoomCode,
         prof,
@@ -1663,6 +1709,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       activeRoomCodeRef.current = assignedCode;
       setActiveRoomCode(assignedCode);
+      hasJoinedRoom = true;
+      pushStateNow();
 
       if (currentUnsub) {
         currentUnsub();
@@ -1674,6 +1722,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
         myId,
         (players) => {
           mpOnlinePlayersRef.current = players;
+          // Auto-orient initial camera base yaw toward the first connected opponent so both devices immediately see each other
+          if (!hasLockedOpponentYawRef.current) {
+            const firstOpponent = players.find((p) => p.playerId !== myId);
+            if (firstOpponent) {
+              hasLockedOpponentYawRef.current = true;
+              const oppDx = firstOpponent.x - playerPosRef.current.x;
+              const oppDz = firstOpponent.z - playerPosRef.current.z;
+              if (Math.hypot(oppDx, oppDz) > 0.1) {
+                const faceYaw = Math.atan2(-oppDx, -oppDz);
+                cameraBaseYawOffsetRef.current = faceYaw;
+                targetCameraYawRef.current = faceYaw;
+                cameraYawRef.current = faceYaw;
+              }
+            }
+          }
           const nextKey = players
             .map((p) => `${p.playerId}:${p.status}:${p.kills}:${p.score}:${p.accuracy || 0}:${p.weaponId}`)
             .join('|');
@@ -1745,40 +1808,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     void connectToAvailableRoom(1);
 
-    const pushStateNow = () => {
-      if (afkKickedRef.current || isCancelled) return;
-      syncLocalPlayerState(activeRoomCodeRef.current, {
-        playerId: myId,
-        studentName: cachedStudentName,
-        className: cachedClassName,
-        avatarType: localMpAvatarRef.current,
-        x: Number(playerPosRef.current.x.toFixed(3)),
-        y: Number(playerElevationYRef.current.toFixed(2)),
-        z: Number(playerPosRef.current.z.toFixed(3)),
-        vx: Number(playerWorldVelRef.current.vx.toFixed(2)),
-        vz: Number(playerWorldVelRef.current.vz.toFixed(2)),
-        yaw: Number(cameraYawRef.current.toFixed(3)),
-        pitch: Number(cameraPitchRef.current.toFixed(3)),
-        aimX: Number(aimPosRef.current.x.toFixed(3)),
-        aimY: Number(aimPosRef.current.y.toFixed(3)),
-        inputSeq: predictionEngineRef.current.getCurrentSeq(),
-        lastActivityAt: lastPlayerActivityRef.current,
-        weaponId: currentWeaponRef.current.id,
-        hp: playerHpRef.current,
-        maxHp: 100,
-        status: mpStatusRef.current,
-        kills: killsRef.current,
-        deaths: mpDeathsRef.current,
-        score: scoreRef.current,
-        accuracy: getLocalAccuracyPct(),
-        isReady: true,
-        shotSeq: localShotSeqRef.current,
-        grenadeSeq: localGrenadeSeqRef.current,
-        isCrouched: isCrouchingRef.current,
-        lastPing: Date.now(),
-      });
-    };
-
     pushLocalMpStateNowRef.current = pushStateNow;
     const syncTimer = setInterval(pushStateNow, 85);
 
@@ -1804,7 +1833,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         sounds.playCombatAlarm();
         void kickAfkPlayerFromRoom(activeRoomCodeRef.current, myId, cachedStudentName);
         afkExitTimeout = setTimeout(() => {
-          onExitToMenu?.();
+          onExitToMenuRef.current?.();
         }, 3200);
       } else if (idleMs >= 45_000) {
         const secsLeft = Math.max(1, Math.ceil((AFK_TIMEOUT_MS - idleMs) / 1000));
@@ -1816,6 +1845,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     return () => {
       isCancelled = true;
+      hasJoinedRoom = false;
       pushLocalMpStateNowRef.current = null;
       clearInterval(syncTimer);
       clearInterval(afkWatchdogTimer);
@@ -1823,7 +1853,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (currentUnsub) currentUnsub();
       void leaveDeathmatchRoom(activeRoomCodeRef.current, myId);
     };
-  }, [isMultiplayerDeathmatch, multiplayerRoomCode, onExitToMenu]);
+  }, [isMultiplayerDeathmatch, multiplayerRoomCode]);
 
   // 60-second combat countdown & 5-minute Multiplayer Match Countdown
   const timeLeftRef = useRef<number>(60);
@@ -3417,7 +3447,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
         : -7.2 - (soldierId % 4) * 1.05;
 
       const studentClass = remotePlayer ? remotePlayer.className : 'Science Unit';
-      const isStunnedNow = remotePlayer ? remotePlayer.status === 'stunned' : false;
+      const isStunnedNow = remotePlayer
+        ? remotePlayer.status === 'stunned' || remotePlayer.status === 'reviving' || remotePlayer.hp <= 0
+        : false;
       const resolvedAvatar = remotePlayer
         ? resolvePlayerAvatarType(remotePlayer.playerId, remotePlayer.avatarType)
         : 'leukocyte';
@@ -3567,29 +3599,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const activeRemoteIds = new Set<string>();
 
       remoteHumanList.forEach((rp) => {
-        if (rp.status === 'reviving' || rp.hp <= 0) {
-          const deadIdx = activeSoldiersRef.current.findIndex((s) => s.remotePlayerId === rp.playerId);
-          if (deadIdx !== -1) {
-            releaseSoldierToPool(activeSoldiersRef.current[deadIdx]);
-            activeSoldiersRef.current.splice(deadIdx, 1);
-          }
-          return;
-        }
-
         activeRemoteIds.add(rp.playerId);
         const existing = activeSoldiersRef.current.find((s) => s.remotePlayerId === rp.playerId);
         const mappedX = THREE.MathUtils.clamp(rp.x, -32.0, 32.0);
         const mappedZ = THREE.MathUtils.clamp(rp.z, -46.0, 12.0);
+        const displayHp = rp.hp > 0 ? rp.hp : 100;
 
         if (!existing) {
           spawnSoldierOrTank(mappedZ, 'strep', mappedX, false, rp);
         } else {
           existing.flankTargetX = mappedX;
           existing.firingLineZ = mappedZ;
-          existing.hp = rp.hp;
-          existing.hitsLeft = Math.max(0.2, (rp.hp / 100) * 3);
+          existing.hp = displayHp;
+          existing.hitsLeft = Math.max(0.2, (displayHp / 100) * 3);
           if (existing.hpBarFill) {
-            const pct = Math.max(0.02, Math.min(1, rp.hp / 100));
+            const pct = Math.max(0.02, Math.min(1, displayHp / 100));
             existing.hpBarFill.scale.x = pct;
             existing.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
           }
@@ -3601,7 +3625,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             existing.equippedWeaponId = nextWeapon;
           }
           updateStudentOperatorAppearance(existing.mesh, nextAvatar, nextWeapon);
-          const nextStun = rp.status === 'stunned';
+          const nextStun = rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
           if (existing.isStunned !== nextStun || existing.name !== rp.studentName) {
             existing.isStunned = nextStun;
             existing.name = rp.studentName;
@@ -5018,10 +5042,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
       mouseEdgeNdcX = normX;
 
       if (isMultiplayerDeathmatch) {
-        // Controlled 1:1 cursor-to-FOV camera mapping:
+        // Controlled 1:1 cursor-to-FOV camera mapping centered on cameraBaseYawOffsetRef:
         // The crosshair remains locked at the center (50%, 50%) while the camera FOV smoothly follows cursor position
         // without any edge auto-spinning or wrap-around jumps when aiming right, left, or below!
-        targetCameraYawRef.current = -normX * Math.PI;
+        targetCameraYawRef.current = cameraBaseYawOffsetRef.current - normX * Math.PI;
         targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.44, -0.62, 0.62);
       } else {
         targetCameraYawRef.current = -normX * Math.PI;
@@ -6732,7 +6756,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 );
                 soldier.mesh.rotation.y += yawDiff * Math.min(1, delta * 18);
 
-                const isCurrentlyStunned = rp.status === 'stunned';
+                const isCurrentlyStunned =
+                  rp.status === 'stunned' || rp.status === 'reviving' || rp.hp <= 0;
                 soldier.isStunned = isCurrentlyStunned;
                 if (isCurrentlyStunned) {
                   if (soldier.stasisCage) {
