@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { LevelConfig, Weapon, HitMarkerInfo, KillfeedEntry, BiologyConceptCard } from '../types/game';
 import { sounds } from '../services/soundEffects';
@@ -36,8 +36,6 @@ import {
   createOrganEnvironmentProps,
   createMultiplayerStudentOperator,
   updateStudentOperatorBadge,
-  MULTIPLAYER_CELL_ARCHETYPES,
-  CellArchetype,
   createOpenLungAlveoliLandscape,
   createAnatomicalCoverCluster,
   getArenaSurfaceElevation,
@@ -97,9 +95,6 @@ import {
   CheckCircle2,
   XCircle,
   Radio,
-  Trophy,
-  Medal,
-  Award,
 } from 'lucide-react';
 
 interface CombatViewProps {
@@ -187,9 +182,6 @@ interface ActiveSoldier {
   callsignCanvas?: HTMLCanvasElement;
   callsignTexture?: THREE.CanvasTexture;
   stunTimer?: number;
-  setEquippedWeapon?: (weaponId: string) => void;
-  currentWeaponId?: string;
-  cellArchetypeName?: string;
 }
 
 interface ActiveEnemyAirdrop {
@@ -806,129 +798,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const reinforceCooldownRef = useRef<number>(0);
   const isAirdropActiveRef = useRef<boolean>(false);
   const phaseCompleteCalledRef = useRef<boolean>(false);
-
-  // Multiplayer Match End & Victory Podium State (10 Kills or 5-Minute Timer)
-  const [mpMatchOver, setMpMatchOver] = useState<boolean>(false);
-  const mpMatchOverRef = useRef<boolean>(false);
-  const [mpMatchTimeLeft, setMpMatchTimeLeft] = useState<number>(300); // 5-minute match timer (300 seconds)
-  const mpMatchTimerRef = useRef<number>(300);
-  const localShotsFiredRef = useRef<number>(0);
-  const localShotsHitRef = useRef<number>(0);
-  const [podiumData, setPodiumData] = useState<Array<{
-    rank: number;
-    callsign: string;
-    cellArchetypeName: string;
-    kills: number;
-    accuracyPct: number;
-    score: number;
-    isLocal: boolean;
-  }>>([]);
-
-  const localCellArchetype = useMemo(() => {
-    const idStr = localMpPlayerIdRef.current || 'local_operative';
-    const sum = idStr.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-    return MULTIPLAYER_CELL_ARCHETYPES[Math.abs(sum) % MULTIPLAYER_CELL_ARCHETYPES.length];
-  }, []);
-
-  const triggerMpMatchOver = (_reason: string = 'MATCH OVER') => {
-    if (mpMatchOverRef.current) return;
-    mpMatchOverRef.current = true;
-    setMpMatchOver(true);
-    isPointerDownRef.current = false;
-    sounds.playVictory();
-
-    const localAcc = Math.min(
-      100,
-      Math.max(
-        15,
-        Math.round(
-          (localShotsHitRef.current / Math.max(1, localShotsFiredRef.current)) * 100
-        )
-      )
-    );
-
-    const localEntry = {
-      callsign: loadStudentProfile()?.name || 'Operative (You)',
-      cellArchetypeName: localCellArchetype.name,
-      kills: killsRef.current,
-      accuracyPct: localAcc,
-      score: scoreRef.current,
-      isLocal: true,
-    };
-
-    const remoteEntries = mpOnlinePlayersRef.current
-      .filter((p) => p.playerId !== localMpPlayerIdRef.current)
-      .map((rp, idx) => {
-        const arch = MULTIPLAYER_CELL_ARCHETYPES[(idx + 1) % MULTIPLAYER_CELL_ARCHETYPES.length];
-        const rKills = rp.kills || 0;
-        const rDeaths = rp.deaths || 0;
-        const rScore = rp.score || 0;
-        const rAcc = Math.min(94, Math.max(34, Math.round(48 + rKills * 3.8 - rDeaths * 1.2)));
-        return {
-          callsign: rp.studentName || `Operative ${idx + 2}`,
-          cellArchetypeName: arch.name,
-          kills: rKills,
-          accuracyPct: rAcc,
-          score: rScore,
-          isLocal: false,
-        };
-      });
-
-    const sorted = [localEntry, ...remoteEntries].sort((a, b) => b.kills - a.kills || b.score - a.score);
-
-    const fallbackArchetypes = [
-      { name: 'Red Blood Cell Fighter', callsign: 'Bio-Vanguard Alpha' },
-      { name: 'Platelet Combatant', callsign: 'Hemostasis Delta' },
-      { name: 'Dendritic Scout', callsign: 'Synapse Echo' },
-    ];
-    while (sorted.length < 3) {
-      const fb = fallbackArchetypes[sorted.length % fallbackArchetypes.length];
-      sorted.push({
-        callsign: fb.callsign,
-        cellArchetypeName: fb.name,
-        kills: Math.max(0, Math.round((sorted[0]?.kills || 1) * 0.4)),
-        accuracyPct: 54,
-        score: Math.max(0, Math.round((sorted[0]?.score || 100) * 0.35)),
-        isLocal: false,
-      });
-    }
-
-    const finalPodium = sorted.slice(0, 3).map((item, idx) => ({
-      rank: idx + 1,
-      ...item,
-    }));
-
-    setPodiumData(finalPodium);
-  };
-
-  const checkMpMatchEnd = () => {
-    if (!isMultiplayerDeathmatch || mpMatchOverRef.current) return;
-    const localKills = killsRef.current;
-    const anyRemoteWon = mpOnlinePlayersRef.current.some((p) => (p.kills || 0) >= 10);
-    if (localKills >= 10 || anyRemoteWon || mpMatchTimerRef.current <= 0) {
-      triggerMpMatchOver('MATCH COMPLETED');
-    }
-  };
-
-  const handleStartNextMatch = () => {
-    mpMatchOverRef.current = false;
-    setMpMatchOver(false);
-    mpMatchTimerRef.current = 300;
-    setMpMatchTimeLeft(300);
-    killsRef.current = 0;
-    setKills(0);
-    scoreRef.current = 0;
-    setScore(0);
-    localShotsFiredRef.current = 0;
-    localShotsHitRef.current = 0;
-    playerHpRef.current = 100;
-    setPlayerHp(100);
-    const spawn = getInitialArenaSpawn(localMpPlayerIdRef.current);
-    playerPosRef.current.x = spawn.x;
-    playerPosRef.current.z = spawn.z;
-    sounds.playCombatAlarm();
-  };
-
   const handleStimpackRef = useRef<(() => void) | null>(null);
   const handleThrowGrenadeRef = useRef<(() => void) | null>(null);
   const handleAirdropReinforcementsRef = useRef<(() => void) | null>(null);
@@ -1041,10 +910,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     if (crosshairDomRef.current) {
       crosshairDomRef.current.style.left = `${screenX}%`;
       crosshairDomRef.current.style.top = `${screenY}%`;
-    }
-    if (scopeReticleDomRef.current) {
-      scopeReticleDomRef.current.style.left = `${screenX}%`;
-      scopeReticleDomRef.current.style.top = `${screenY}%`;
     }
   };
 
@@ -1849,14 +1714,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const timer = setInterval(() => {
       if (isPausedForConceptRef.current || isGamePausedRef.current) return;
       if (isMultiplayerDeathmatch && mpStatusRef.current !== 'active') return;
-
-      if (isMultiplayerDeathmatch && !mpMatchOverRef.current) {
-        mpMatchTimerRef.current = Math.max(0, mpMatchTimerRef.current - 1);
-        setMpMatchTimeLeft(mpMatchTimerRef.current);
-        if (mpMatchTimerRef.current <= 0) {
-          checkMpMatchEnd();
-        }
-      }
 
       // Show at most 1 queued biology concept in this phase after 3.2s warmup (Solo mode only)
       const nowCheck = performance.now();
@@ -2792,9 +2649,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       stasisCage?: THREE.Group;
       callsignCanvas?: HTMLCanvasElement;
       callsignTexture?: THREE.CanvasTexture;
-      setEquippedWeapon?: (weaponId: string) => void;
-      currentWeaponId?: string;
-      cellArchetypeName?: string;
     }
 
     const enemyPool: PooledEnemySlot[] = [];
@@ -2812,9 +2666,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let stasisCage: THREE.Group | undefined;
       let callsignCanvas: HTMLCanvasElement | undefined;
       let callsignTexture: THREE.CanvasTexture | undefined;
-      let setEquippedWeapon: ((weaponId: string) => void) | undefined;
-      let currentWeaponId: string | undefined;
-      let cellArchetypeName: string | undefined;
 
       if (isMultiplayerDeathmatch) {
         const studentOp = createMultiplayerStudentOperator(enemyPool.length);
@@ -2827,9 +2678,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         stasisCage = studentOp.stasisCage;
         callsignCanvas = studentOp.callsignCanvas;
         callsignTexture = studentOp.callsignTexture;
-        setEquippedWeapon = studentOp.setEquippedWeapon;
-        currentWeaponId = studentOp.currentWeaponId;
-        cellArchetypeName = studentOp.cellArchetype.name;
         hpBarFill = attachCompactHpBar(group, 1.44);
       } else if (eType === 'tank') {
         const tankData = createBacteriaTank();
@@ -2880,9 +2728,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         stasisCage,
         callsignCanvas,
         callsignTexture,
-        setEquippedWeapon,
-        currentWeaponId,
-        cellArchetypeName,
       };
       enemyPool.push(slot);
       return slot;
@@ -3439,11 +3284,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      if (remotePlayer?.weaponId && pooledSlot.setEquippedWeapon) {
-        pooledSlot.setEquippedWeapon(remotePlayer.weaponId);
-        pooledSlot.currentWeaponId = remotePlayer.weaponId;
-      }
-
       const soldier: ActiveSoldier = {
         id: soldierId,
         type,
@@ -3482,9 +3322,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
         stasisCage: pooledSlot.stasisCage,
         callsignCanvas: pooledSlot.callsignCanvas,
         callsignTexture: pooledSlot.callsignTexture,
-        setEquippedWeapon: pooledSlot.setEquippedWeapon,
-        currentWeaponId: pooledSlot.currentWeaponId || remotePlayer?.weaponId || 'scar_bio',
-        cellArchetypeName: pooledSlot.cellArchetypeName,
       };
 
       activeSoldiersRef.current.push(soldier);
@@ -3613,10 +3450,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 true
               );
             }
-          }
-          if (rp.weaponId && existing.setEquippedWeapon && existing.currentWeaponId !== rp.weaponId) {
-            existing.setEquippedWeapon(rp.weaponId);
-            existing.currentWeaponId = rp.weaponId;
           }
         }
       });
@@ -4150,7 +3983,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       if (isMultiplayerDeathmatch) {
         localShotSeqRef.current += 1;
-        localShotsFiredRef.current += 1;
         lastPlayerActivityRef.current = Date.now();
         pushLocalMpStateNowRef.current?.();
       }
@@ -4250,7 +4082,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       let rawAimX = aimPosRef.current.x;
       let rawAimY = aimPosRef.current.y;
 
-      hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
+      if (isScopedRef.current) {
+        hitVector.set(0, 0);
+      } else {
+        hitVector.set(aimPosRef.current.x, aimPosRef.current.y);
+      }
 
       rawAimX = hitVector.x;
       rawAimY = hitVector.y;
@@ -4355,41 +4191,43 @@ export const CombatView: React.FC<CombatViewProps> = ({
         // Project Head & Body to 2D NDC
         _v1.copy(soldier.mesh.position);
         _v1.y += headYOffset;
+        const distSqHead3D = raycaster.ray.distanceSqToPoint(_v1);
         _v1.project(camera);
+        if (_v1.z >= 1.0) continue; // Behind camera in 360-degree view
+        // Measure headshot precision strictly against the player's TRUE unassisted aim (rawAimX, rawAimY)!
+        const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
+        const headNdcY = _v1.y;
 
         _v2.copy(soldier.mesh.position);
         _v2.y += bodyYOffset;
+        const distSqBody3D = raycaster.ray.distanceSqToPoint(_v2);
         _v2.project(camera);
+        if (_v2.z >= 1.0) continue;
+        const rawBodyNdcDist = Math.hypot(_v2.x - rawAimX, _v2.y - rawAimY);
+        const bodyNdcDist = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
 
-        // Target must be in front of camera (Z in NDC < 1.0)
-        if (_v1.z >= 1.0 || _v2.z >= 1.0) continue;
+        const maxNdc = soldier.isRobot || soldier.isBoss ? 0.85 : 0.52;
+        if (Math.min(rawHeadNdcDist, bodyNdcDist) > maxNdc) continue;
 
-        // Verify target is ahead along camera forward vector (not behind player)
-        _v3.copy(soldier.mesh.position);
-        _v3.y += bodyYOffset;
-        const forwardDist = _v3.sub(camera.position).dot(raycaster.ray.direction);
-        if (forwardDist <= 0.4) continue;
-
-        // Measure true 2D crosshair distance on screen
-        const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
-        const rawHeadNdcDist = Math.hypot(_v1.x - rawAimX, _v1.y - rawAimY);
-
-        // Strict visual silhouette radius for genuine hits (no random hits when shooting elsewhere!)
-        const maxSilhouetteRadius = soldier.isRobot || soldier.isBoss
-          ? 0.16
+        // 1. PRECISION HEADSHOT DETECTION (Requires genuine manual aim on the head — never triggered by auto-aim pull!)
+        const headRadiusSq3D = soldier.isRobot
+          ? 0.42
           : soldier.isTank
-          ? 0.12
-          : autoAimEnabledRef.current
-          ? 0.075
-          : 0.058;
+          ? 0.18
+          : soldier.isBoss
+          ? 0.22
+          : 0.11;
+        const headPrecisionNdc = isScopedRef.current ? 0.082 : 0.064;
+        const isTrueHeadAim =
+          rawHeadNdcDist <= headPrecisionNdc &&
+          rawHeadNdcDist < rawBodyNdcDist * 0.85 &&
+          rawAimY >= headNdcY - 0.025;
+        const isHeadshot3D =
+          distSqHead3D <= headRadiusSq3D &&
+          rawHeadNdcDist <= headPrecisionNdc * 1.15 &&
+          rawAimY >= _v2.y + 0.02;
 
-        if (distBody2D > maxSilhouetteRadius && rawHeadNdcDist > maxSilhouetteRadius) continue;
-
-        // 1. PRECISION HEADSHOT CHECK (Manual head aim)
-        const headPrecisionNdc = isScopedRef.current ? 0.075 : 0.055;
-        const isHeadAim = rawHeadNdcDist <= headPrecisionNdc && rawAimY >= _v1.y - 0.035;
-
-        if (isHeadAim) {
+        if (isTrueHeadAim || isHeadshot3D) {
           criticalHit = true;
           hitRegistered = true;
           hitSoldier = soldier;
@@ -4401,9 +4239,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
           break;
         }
 
-        // 2. ACCURATE BODY HIT CHECK
-        if (distBody2D <= maxSilhouetteRadius) {
-          criticalHit = false;
+        // 2. General Body Hit (Soldiers, Tanks, Bosses) via analytical 3D ray-capsule/sphere check (tuned to exact physical model dimensions)
+        const bodyRadiusSq = soldier.isRobot
+          ? 2.2
+          : soldier.isTank
+          ? 1.15
+          : soldier.isBoss
+          ? 1.45
+          : 0.28;
+        if (distSqBody3D <= bodyRadiusSq) {
           hitRegistered = true;
           hitSoldier = soldier;
           totalDamage = baseNormalShotDamage;
@@ -4415,11 +4259,52 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
+      // 2D Screen-Space Hitbox Check: strict tight bounds requiring genuine aim on the enemy's visual silhouette
+      if (!hitRegistered) {
+        for (let i = soldiers.length - 1; i >= 0; i--) {
+          const soldier = soldiers[i];
+          if (isMultiplayerDeathmatch && soldier.isStunned) continue;
+          if (!isMultiplayerDeathmatch && soldier.mesh.position.z >= playerPosRef.current.z - 1.2) continue;
+
+          const bodyYOffset = soldier.isRobot ? 1.85 : soldier.isTank ? 0.35 : 0.18;
+          _v2.copy(soldier.mesh.position);
+          _v2.y += bodyYOffset;
+          _v2.project(camera);
+          if (_v2.z >= 1.0) continue;
+          const distBody2D = Math.hypot(_v2.x - hitVector.x, _v2.y - hitVector.y);
+
+          // Scaled strictly to true visual dimensions of soldiers, tanks & bosses (no massive generous ghost hitboxes)
+          const hitSilhouetteRadius = autoAimEnabledRef.current
+            ? soldier.isRobot
+              ? 0.18
+              : soldier.isTank
+              ? 0.14
+              : soldier.isBoss
+              ? 0.16
+              : 0.075
+            : soldier.isRobot
+            ? 0.15
+            : soldier.isTank
+            ? 0.11
+            : soldier.isBoss
+            ? 0.13
+            : 0.055;
+          if (distBody2D < hitSilhouetteRadius) {
+            hitRegistered = true;
+            hitSoldier = soldier;
+            criticalHit = false;
+            totalDamage = baseNormalShotDamage;
+            soldier.hp -= totalDamage;
+            if (!soldier.remotePlayerId) {
+              soldier.mesh.position.z -= soldier.isTank ? 0.14 : soldier.isBoss ? 0.1 : 0.2;
+            }
+            break;
+          }
+        }
+      }
+
       if (hitRegistered && hitSoldier) {
         sounds.playHitmarker(criticalHit);
-        if (isMultiplayerDeathmatch) {
-          localShotsHitRef.current += 1;
-        }
 
         if (isMultiplayerDeathmatch && hitSoldier.remotePlayerId) {
           const prevTargetHp = Math.max(0, Math.round(hitSoldier.hp + totalDamage));
@@ -4540,9 +4425,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setKills(killsRef.current);
           setComboStreak(comboStreakRef.current);
           setScore(scoreRef.current);
-          if (isMultiplayerDeathmatch) {
-            checkMpMatchEnd();
-          }
 
           if (isMultiplayerDeathmatch) {
             const prof = loadStudentProfile();
@@ -5183,15 +5065,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
           targetAimPosRef.current.y = THREE.MathUtils.clamp(targetAimPosRef.current.y + corr.dAimY, -0.90, 0.90);
         }
 
-        // Smooth, controlled 360-degree rotation towards targetCameraYawRef using shortest angular arc (smooth view changes in all directions!)
-        const diffYaw = Math.atan2(
-          Math.sin(targetCameraYawRef.current - cameraYawRef.current),
-          Math.cos(targetCameraYawRef.current - cameraYawRef.current)
-        );
+        // Smooth, controlled 360-degree rotation towards targetCameraYawRef (never keeps spinning when mouse stops!)
         cameraYawRef.current = THREE.MathUtils.damp(
-          cameraYawRef.current,
-          cameraYawRef.current + diffYaw + corr.dYaw,
-          15,
+          cameraYawRef.current + corr.dYaw,
+          targetCameraYawRef.current,
+          12,
           delta
         );
         cameraPitchRef.current = THREE.MathUtils.damp(
@@ -5573,8 +5451,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
       cameraRollShakeRef.current = THREE.MathUtils.damp(cameraRollShakeRef.current, 0, 12, delta);
       const targetRoll = isScopedRef.current ? 0 : -inputX * 0.03 + cameraRollShakeRef.current;
       const lateralTunnelTilt = isMultiplayerDeathmatch ? 0 : -playerPosRef.current.x * 0.018;
-      const targetYaw = lateralTunnelTilt - aimPosRef.current.x * 0.12;
-      const targetPitch = aimPosRef.current.y * 0.10 + Math.abs(cameraRollShakeRef.current) * 0.25;
+      const targetYaw = isScopedRef.current
+        ? lateralTunnelTilt - aimPosRef.current.x * (isMultiplayerDeathmatch ? 0.72 : 0.65)
+        : lateralTunnelTilt - aimPosRef.current.x * (isMultiplayerDeathmatch ? 0.28 : 0.08);
+      const targetPitch = isScopedRef.current
+        ? aimPosRef.current.y * 0.45
+        : aimPosRef.current.y * 0.07 + Math.abs(cameraRollShakeRef.current) * 0.25;
       if (!isMultiplayerDeathmatch) {
         camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, targetRoll, 16, delta);
         camera.rotation.y = THREE.MathUtils.damp(camera.rotation.y, targetYaw, 22, delta);
@@ -6539,11 +6421,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   const pct = Math.max(0.02, Math.min(1, rp.hp / 100));
                   soldier.hpBarFill.scale.x = pct;
                   soldier.hpBarFill.position.x = -(0.82 * (1 - pct)) / 2;
-                }
-
-                if (rp.weaponId && soldier.setEquippedWeapon && soldier.currentWeaponId !== rp.weaponId) {
-                  soldier.setEquippedWeapon(rp.weaponId);
-                  soldier.currentWeaponId = rp.weaponId;
                 }
 
                 // Orient opponent in true 360° shared world space using their look yaw + aim offset
@@ -8121,19 +7998,19 @@ export const CombatView: React.FC<CombatViewProps> = ({
           const baseWpnY = -0.33 + reloadOffsetY + swapOffsetY;
           const baseWpnZ = -0.82 + reloadOffsetZ;
 
-          targetX = baseWpnX - inputX * 0.05 + aimX * 0.05 + breathBobX;
-          targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimY * 0.04 + breathBobY;
-          targetZ = baseWpnZ + recoilRef.current.z;
+          targetX = baseWpnX - inputX * 0.06 + aimX * 0.24 + breathBobX;
+          targetY = baseWpnY - Math.abs(inputX) * 0.015 + aimY * 0.18 + breathBobY;
+          targetZ = baseWpnZ + recoilRef.current.z - (Math.abs(aimX) + Math.abs(aimY)) * 0.04;
 
           const dx = aimCamX - targetX;
           const dy = aimCamY - targetY;
           const dz = aimCamZ - targetZ;
-          const aimYaw = THREE.MathUtils.clamp(Math.atan2(-dx, -dz), -0.15, 0.15);
-          const aimPitch = THREE.MathUtils.clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.22, 0.22);
+          const aimYaw = THREE.MathUtils.clamp(Math.atan2(-dx, -dz), -0.68, 0.68);
+          const aimPitch = THREE.MathUtils.clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.52, 0.52);
 
           targetRotX = 0.02 + aimPitch - recoilRef.current.rotX + reloadRotX + swapRotX;
           targetRotY = aimYaw + (isReloadingRef.current ? 0.22 : 0);
-          targetRotZ = reloadRotZ + inputX * 0.02;
+          targetRotZ = -aimX * 0.14 + inputX * 0.09 + reloadRotZ;
         }
 
         const dampSpeed = scopedNow ? 26 : 22;
@@ -8622,11 +8499,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   <span className="flex items-center gap-1 text-emerald-400">
                     <Radio className="w-3 h-3 animate-pulse" />
                     <span>ROOM: {activeRoomCode}</span>
-                  </span>
-                  <span className="text-slate-600">|</span>
-                  <span className="flex items-center gap-1 text-yellow-300">
-                    <Trophy className="w-3 h-3 text-yellow-400" />
-                    <span>MATCH: {Math.floor(mpMatchTimeLeft / 60)}:{(mpMatchTimeLeft % 60).toString().padStart(2, '0')}</span>
                   </span>
                   <span className="text-slate-600">|</span>
                   <span className="flex items-center gap-1 text-cyan-300">
@@ -9805,133 +9677,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
             >
               RETURN TO MAIN MENU
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* MULTIPLAYER MATCH OVER VICTORY SCREEN & 1ST/2ND/3RD PLACE PODIUM */}
-      {isMultiplayerDeathmatch && mpMatchOver && (
-        <div className="fixed inset-0 z-50 bg-slate-950/92 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 pointer-events-auto font-mono select-none overflow-y-auto">
-          <div className="w-full max-w-2xl bg-zinc-950 border-2 border-yellow-400/80 rounded-2xl p-5 sm:p-8 shadow-[0_0_60px_rgba(250,204,21,0.35)] flex flex-col items-center gap-6 text-white text-center animate-in fade-in zoom-in-95 duration-200">
-            {/* Header Banner */}
-            <div className="flex flex-col items-center gap-1.5">
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-yellow-500/20 border border-yellow-400/60 text-yellow-300 text-xs sm:text-sm font-black tracking-widest uppercase shadow-sm">
-                <Trophy className="w-4 h-4 text-yellow-400 animate-bounce" />
-                <span>MATCH OVER • VICTORY PODIUM</span>
-                <Trophy className="w-4 h-4 text-yellow-400 animate-bounce" />
-              </div>
-              <h2 className="text-xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-amber-200 to-yellow-400 tracking-wider uppercase">
-                CELLULAR CHAMPIONSHIP
-              </h2>
-              <p className="text-xs text-zinc-400 font-sans">
-                First to 10 Eliminations or 5-Minute Timer Reached in Room <span className="font-mono text-cyan-300 font-bold">{activeRoomCode}</span>
-              </p>
-            </div>
-
-            {/* 3D-Style Olympic Victory Podium (1st Center, 2nd Left, 3rd Right) */}
-            <div className="w-full grid grid-cols-3 gap-2 sm:gap-4 items-end pt-4 pb-2">
-              {/* 2ND PLACE (SILVER - LEFT) */}
-              {podiumData[1] && (
-                <div className="flex flex-col items-center gap-2 order-1">
-                  <div className="flex flex-col items-center bg-slate-900/90 border-2 border-slate-400 rounded-xl p-2.5 sm:p-3.5 w-full shadow-lg">
-                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-slate-400/20 border border-slate-300 flex items-center justify-center text-slate-200 font-black text-sm sm:text-base">
-                      2nd
-                    </div>
-                    <span className="text-xs sm:text-sm font-bold text-white truncate max-w-full mt-1">
-                      {podiumData[1].callsign}
-                    </span>
-                    <span className="text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-tight">
-                      {podiumData[1].cellArchetypeName}
-                    </span>
-                    <div className="mt-2 text-[10px] sm:text-xs font-mono space-y-0.5 text-zinc-300 w-full bg-slate-950/60 p-1.5 rounded">
-                      <div><span className="text-rose-400 font-black">{podiumData[1].kills}</span> KILLS</div>
-                      <div><span className="text-cyan-300 font-bold">{podiumData[1].accuracyPct}%</span> ACC</div>
-                      <div className="text-amber-300 font-bold">{podiumData[1].score} PTS</div>
-                    </div>
-                  </div>
-                  {/* Podium Base 2 */}
-                  <div className="w-full h-16 sm:h-20 bg-gradient-to-t from-slate-800 to-slate-700 rounded-t-lg border-t-2 border-slate-400 flex items-center justify-center font-black text-slate-300 text-lg sm:text-2xl shadow-inner">
-                    2
-                  </div>
-                </div>
-              )}
-
-              {/* 1ST PLACE (GOLD - CENTER ELEVATED) */}
-              {podiumData[0] && (
-                <div className="flex flex-col items-center gap-2 order-2">
-                  <div className="flex flex-col items-center bg-amber-950/80 border-2 border-yellow-400 rounded-xl p-3 sm:p-4 w-full shadow-[0_0_30px_rgba(250,204,21,0.4)] scale-105 z-10">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-yellow-400/20 border-2 border-yellow-400 flex items-center justify-center text-yellow-300 font-black text-base sm:text-lg shadow-sm">
-                      👑 1st
-                    </div>
-                    <span className="text-sm sm:text-base font-black text-yellow-200 truncate max-w-full mt-1">
-                      {podiumData[0].callsign}
-                    </span>
-                    <span className="text-[10px] sm:text-xs text-yellow-400/90 font-bold uppercase tracking-tight">
-                      {podiumData[0].cellArchetypeName}
-                    </span>
-                    <div className="mt-2 text-[11px] sm:text-xs font-mono space-y-0.5 text-zinc-200 w-full bg-black/60 p-2 rounded border border-yellow-400/30">
-                      <div><span className="text-rose-400 font-black text-sm">{podiumData[0].kills}</span> KILLS</div>
-                      <div><span className="text-cyan-300 font-bold">{podiumData[0].accuracyPct}%</span> ACCURACY</div>
-                      <div className="text-yellow-300 font-black text-sm">{podiumData[0].score} PTS</div>
-                    </div>
-                  </div>
-                  {/* Podium Base 1 */}
-                  <div className="w-full h-24 sm:h-28 bg-gradient-to-t from-amber-700 via-amber-600 to-yellow-500 rounded-t-lg border-t-4 border-yellow-300 flex items-center justify-center font-black text-yellow-950 text-2xl sm:text-4xl shadow-2xl">
-                    1
-                  </div>
-                </div>
-              )}
-
-              {/* 3RD PLACE (BRONZE - RIGHT) */}
-              {podiumData[2] && (
-                <div className="flex flex-col items-center gap-2 order-3">
-                  <div className="flex flex-col items-center bg-amber-950/40 border-2 border-amber-600/80 rounded-xl p-2.5 sm:p-3.5 w-full shadow-lg">
-                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-amber-700/20 border border-amber-500 flex items-center justify-center text-amber-400 font-black text-sm sm:text-base">
-                      3rd
-                    </div>
-                    <span className="text-xs sm:text-sm font-bold text-white truncate max-w-full mt-1">
-                      {podiumData[2].callsign}
-                    </span>
-                    <span className="text-[9px] sm:text-[10px] text-amber-500/90 uppercase tracking-tight">
-                      {podiumData[2].cellArchetypeName}
-                    </span>
-                    <div className="mt-2 text-[10px] sm:text-xs font-mono space-y-0.5 text-zinc-300 w-full bg-slate-950/60 p-1.5 rounded">
-                      <div><span className="text-rose-400 font-black">{podiumData[2].kills}</span> KILLS</div>
-                      <div><span className="text-cyan-300 font-bold">{podiumData[2].accuracyPct}%</span> ACC</div>
-                      <div className="text-amber-300 font-bold">{podiumData[2].score} PTS</div>
-                    </div>
-                  </div>
-                  {/* Podium Base 3 */}
-                  <div className="w-full h-12 sm:h-14 bg-gradient-to-t from-amber-900 to-amber-800 rounded-t-lg border-t-2 border-amber-600 flex items-center justify-center font-black text-amber-300 text-base sm:text-xl shadow-inner">
-                    3
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center justify-center gap-3 w-full pt-2">
-              <button
-                onClick={() => {
-                  sounds.unlockAudio();
-                  handleStartNextMatch();
-                }}
-                className="flex-1 max-w-xs py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs sm:text-sm tracking-wider uppercase cursor-pointer transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] flex items-center justify-center gap-2"
-              >
-                <Repeat className="w-4 h-4" />
-                <span>PLAY NEXT MATCH</span>
-              </button>
-              <button
-                onClick={() => {
-                  sounds.unlockAudio();
-                  onExitToMenu?.();
-                }}
-                className="px-5 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-white/20 text-white font-black text-xs sm:text-sm tracking-wider uppercase cursor-pointer transition-colors flex items-center gap-2"
-              >
-                <Home className="w-4 h-4 text-zinc-400" />
-                <span>LOBBY</span>
-              </button>
-            </div>
           </div>
         </div>
       )}

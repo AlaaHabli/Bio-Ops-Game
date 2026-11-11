@@ -5913,22 +5913,6 @@ export function updateStudentOperatorBadge(
   texture.needsUpdate = true;
 }
 
-export interface CellArchetype {
-  id: string;
-  name: string;
-  shortName: string;
-  colorName: string;
-  accentHex: number;
-}
-
-export const MULTIPLAYER_CELL_ARCHETYPES: CellArchetype[] = [
-  { id: 'leukocyte', name: 'Leukocyte Commando', shortName: 'LEUKOCYTE', colorName: 'White/Cyan', accentHex: 0x0284c7 },
-  { id: 'erythrocyte', name: 'Erythrocyte Brawler', shortName: 'RED BLOOD CELL', colorName: 'Crimson Ruby', accentHex: 0xdc2626 },
-  { id: 'platelet', name: 'Thrombocyte Guardian', shortName: 'PLATELET', colorName: 'Amber Gold', accentHex: 0xd97706 },
-  { id: 'goblet', name: 'Goblet Vanguard', shortName: 'MUCUS CELL', colorName: 'Emerald Lime', accentHex: 0x059669 },
-  { id: 'dendritic', name: 'Dendritic Scout', shortName: 'DENDRITE CELL', colorName: 'Indigo Violet', accentHex: 0x7c3aed },
-];
-
 export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   group: THREE.Group;
   leftLeg: THREE.Group;
@@ -5940,197 +5924,50 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   callsignBadge: THREE.Mesh;
   callsignCanvas: HTMLCanvasElement;
   callsignTexture: THREE.CanvasTexture;
-  cellArchetype: CellArchetype;
-  setEquippedWeapon: (weaponId: string) => void;
-  currentWeaponId: string;
 } {
   const group = new THREE.Group();
 
-  const archetypeIdx = Math.abs(slotIdx) % MULTIPLAYER_CELL_ARCHETYPES.length;
-  const cellArchetype = MULTIPLAYER_CELL_ARCHETYPES[archetypeIdx];
-  const accentHex = cellArchetype.accentHex;
+  const squadColors = [0xe11d48, 0xd97706, 0x7c3aed, 0x0284c7, 0x059669];
+  const accentHex = squadColors[slotIdx % squadColors.length];
 
-  // --------------------------------------------------------------------------
-  // DISTINCT 3D CELL GEOMETRY & ORGANELLES PER ARCHETYPE
-  // --------------------------------------------------------------------------
-  if (archetypeIdx === 0) {
-    // 1. LEUKOCYTE COMMANDO (Translucent White Blood Cell with 3-lobed Purple Nucleus)
-    const bodyMat = createFastLitMaterial({
-      color: 0xf8fafc,
-      roughness: 0.22,
-      metalness: 0.1,
-      emissive: accentHex,
-      emissiveIntensity: 0.16,
-      transparent: true,
-      opacity: 0.74,
-    });
-    const soma = new THREE.Mesh(new THREE.SphereGeometry(0.66, 16, 16), bodyMat);
-    soma.position.set(0, 0.22, 0);
-    group.add(soma);
+  // Translucent Leukocyte Soma Head
+  const bodyMat = createFastLitMaterial({
+    color: 0xf8fafc,
+    roughness: 0.22,
+    metalness: 0.1,
+    emissive: accentHex,
+    emissiveIntensity: 0.16,
+    transparent: true,
+    opacity: 0.72,
+  });
+  const soma = new THREE.Mesh(new THREE.SphereGeometry(0.66, 16, 16), bodyMat);
+  soma.position.set(0, 0.22, 0);
+  group.add(soma);
 
-    const purpleLobeMat = createFastLitMaterial({
-      color: 0x9333ea,
-      emissive: 0x7e22ce,
-      emissiveIntensity: 1.25,
-      roughness: 0.25,
-    });
-    [[-0.22, 0.26, 0.12], [0, 0.36, 0.16], [0.22, 0.26, 0.12]].forEach(([lx, ly, lz]) => {
-      const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), purpleLobeMat);
-      lobe.position.set(lx, ly, lz);
-      group.add(lobe);
-    });
+  // Visible 3-Lobed Purple Polymorphonuclear Nucleus Inside Leukocyte
+  const purpleLobeMat = createFastLitMaterial({
+    color: 0x9333ea,
+    emissive: 0x7e22ce,
+    emissiveIntensity: 1.25,
+    roughness: 0.25,
+  });
+  [
+    [-0.22, 0.26, 0.12],
+    [0, 0.36, 0.16],
+    [0.22, 0.26, 0.12],
+  ].forEach(([lx, ly, lz]) => {
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), purpleLobeMat);
+    lobe.position.set(lx, ly, lz);
+    group.add(lobe);
+  });
 
-    const beretMat = createFastLitMaterial({ color: accentHex, roughness: 0.45 });
-    const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.16, 14), beretMat);
-    beret.position.set(0.06, 0.78, 0);
-    beret.rotation.z = -0.22;
-    group.add(beret);
+  // Tactical Commando Beret & Visor
+  const beretMat = createFastLitMaterial({ color: accentHex, roughness: 0.45 });
+  const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.16, 14), beretMat);
+  beret.position.set(0.06, 0.78, 0);
+  beret.rotation.z = -0.22;
+  group.add(beret);
 
-  } else if (archetypeIdx === 1) {
-    // 2. ERYTHROCYTE BRAWLER (Biconcave Red Blood Cell Disc with Hemoglobin Core)
-    const rbcMat = createFastLitMaterial({
-      color: 0xdc2626,
-      emissive: 0x991b1b,
-      emissiveIntensity: 0.32,
-      roughness: 0.28,
-      metalness: 0.2,
-      transparent: true,
-      opacity: 0.92,
-    });
-    // Biconcave disc body
-    const rbcDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.42, 18), rbcMat);
-    rbcDisc.position.set(0, 0.22, 0);
-    group.add(rbcDisc);
-
-    // Hemoglobin Central Biconcave Indentations (Top and Bottom)
-    const hemoMat = createFastLitMaterial({
-      color: 0x7f1d1d,
-      emissive: 0xef4444,
-      emissiveIntensity: 0.85,
-    });
-    const topIndent = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.22, 0.08, 14), hemoMat);
-    topIndent.position.set(0, 0.43, 0);
-    group.add(topIndent);
-
-    // Tactical Crimson Beret with Golden Crest
-    const beretMat = createFastLitMaterial({ color: 0x991b1b, roughness: 0.4 });
-    const beret = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.52, 0.16, 14), beretMat);
-    beret.position.set(0.06, 0.76, 0);
-    beret.rotation.z = -0.18;
-    group.add(beret);
-
-    const crest = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), createFastLitMaterial({ color: 0xfacc15, metalness: 0.9 }));
-    crest.position.set(0.24, 0.78, 0.36);
-    group.add(crest);
-
-  } else if (archetypeIdx === 2) {
-    // 3. THROMBOCYTE GUARDIAN (Platelet Star with Clotting Pseudopod Spikes)
-    const plateletMat = createFastLitMaterial({
-      color: 0xf59e0b,
-      emissive: 0xd97706,
-      emissiveIntensity: 0.35,
-      roughness: 0.35,
-      metalness: 0.25,
-      transparent: true,
-      opacity: 0.88,
-    });
-    const pSoma = new THREE.Mesh(new THREE.DodecahedronGeometry(0.62, 1), plateletMat);
-    pSoma.position.set(0, 0.22, 0);
-    group.add(pSoma);
-
-    // 6 Radiating Clotting Spikes (Active Hemostasis Pseudopods)
-    const spikeMat = createFastLitMaterial({
-      color: 0xfbbf24,
-      emissive: 0xf59e0b,
-      emissiveIntensity: 0.75,
-    });
-    [
-      [-0.55, 0.52, 0, 0, 0, 0.8],
-      [0.55, 0.52, 0, 0, 0, -0.8],
-      [-0.62, 0.12, 0.32, 0.4, 0, 1.2],
-      [0.62, 0.12, 0.32, 0.4, 0, -1.2],
-      [0, 0.78, -0.32, -0.6, 0, 0],
-      [0, 0.82, 0.22, 0.5, 0, 0],
-    ].forEach(([px, py, pz, rx, ry, rz]) => {
-      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.45, 6), spikeMat);
-      spike.position.set(px, py, pz);
-      spike.rotation.set(rx, ry, rz);
-      group.add(spike);
-    });
-
-  } else if (archetypeIdx === 3) {
-    // 4. GOBLET VANGUARD (Mucus Cell with Secretory Vesicle Dome)
-    const gobletMat = createFastLitMaterial({
-      color: 0x10b981,
-      emissive: 0x059669,
-      emissiveIntensity: 0.28,
-      roughness: 0.18,
-      metalness: 0.1,
-      transparent: true,
-      opacity: 0.78,
-    });
-    const gobletSoma = new THREE.Mesh(new THREE.SphereGeometry(0.64, 16, 16), gobletMat);
-    gobletSoma.position.set(0, 0.22, 0);
-    group.add(gobletSoma);
-
-    // Glowing Mucin Droplets / Secretory Granules on Head Dome
-    const mucinMat = createFastLitMaterial({
-      color: 0x34d399,
-      emissive: 0x10b981,
-      emissiveIntensity: 1.1,
-      roughness: 0.15,
-      transparent: true,
-      opacity: 0.85,
-    });
-    [
-      [-0.24, 0.65, 0.12, 0.16],
-      [0.22, 0.68, 0.08, 0.18],
-      [0, 0.74, 0.24, 0.15],
-      [-0.12, 0.78, -0.14, 0.17],
-      [0.16, 0.72, -0.18, 0.14],
-    ].forEach(([gx, gy, gz, gr]) => {
-      const gran = new THREE.Mesh(new THREE.SphereGeometry(gr, 8, 8), mucinMat);
-      gran.position.set(gx, gy, gz);
-      group.add(gran);
-    });
-
-  } else {
-    // 5. DENDRITIC SCOUT (Neural Antennae / Synaptic Antigen Presenting Cell)
-    const dendriteMat = createFastLitMaterial({
-      color: 0x7c3aed,
-      emissive: 0x6d28d9,
-      emissiveIntensity: 0.32,
-      roughness: 0.25,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.82,
-    });
-    const dSoma = new THREE.Mesh(new THREE.SphereGeometry(0.64, 14, 14), dendriteMat);
-    dSoma.position.set(0, 0.22, 0);
-    group.add(dSoma);
-
-    // Branching Dendritic Antennae with Glowing Synaptic Nodes
-    const branchMat = createFastLitMaterial({ color: 0x6d28d9, roughness: 0.4 });
-    const nodeMat = new THREE.MeshBasicMaterial({ color: 0xe879f9 });
-    [
-      [-0.32, 0.72, 0.14, 0.3, 0, 0.6],
-      [0.32, 0.72, 0.14, 0.3, 0, -0.6],
-      [0, 0.84, -0.22, -0.5, 0, 0],
-      [-0.45, 0.42, -0.25, -0.3, 0.4, 0.9],
-      [0.45, 0.42, -0.25, -0.3, -0.4, -0.9],
-    ].forEach(([bx, by, bz, rx, ry, rz]) => {
-      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.07, 0.44, 6), branchMat);
-      stem.position.set(bx, by, bz);
-      stem.rotation.set(rx, ry, rz);
-      group.add(stem);
-
-      const tipNode = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), nodeMat);
-      tipNode.position.set(bx * 1.35, by + 0.22, bz * 1.35);
-      group.add(tipNode);
-    });
-  }
-
-  // Tactical Visor / Eye HUD
   const visor = new THREE.Mesh(
     new THREE.BoxGeometry(0.58, 0.14, 0.14),
     createFastLitMaterial({ color: 0x09090b, metalness: 0.9, roughness: 0.1 })
@@ -6138,14 +5975,7 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   visor.position.set(0, 0.18, 0.58);
   group.add(visor);
 
-  const visorLens = new THREE.Mesh(
-    new THREE.BoxGeometry(0.52, 0.08, 0.04),
-    new THREE.MeshBasicMaterial({ color: accentHex })
-  );
-  visorLens.position.set(0, 0.18, 0.64);
-  group.add(visorLens);
-
-  // Armored Tactical Vest with Archetype Squad Color Striping
+  // Armored Tactical Vest
   const vest = new THREE.Mesh(
     new THREE.CylinderGeometry(0.64, 0.68, 0.48, 14),
     createFastLitMaterial({ color: 0x1e293b, roughness: 0.55 })
@@ -6184,7 +6014,7 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   rightLeg.add(rBoot);
   group.add(rightLeg);
 
-  // Articulated Arms
+  // Articulated Arms + Assault Rifle + Scope Glint
   const leftArm = new THREE.Group();
   leftArm.position.set(-0.7, 0.02, 0.12);
   const lArmMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 6, 8), limbMat);
@@ -6200,47 +6030,12 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   rArmMesh.rotation.x = 0.65;
   rightArm.add(rArmMesh);
 
-  // --------------------------------------------------------------------------
-  // WEAPONS HOLDER WITH AUTHENTIC FORTNITE 3D MODELS (SCAR, PUMP, SNIPER, DRUM LMG)
-  // Scaled proportionally for third-person player view; muzzle points forward along +Z!
-  // --------------------------------------------------------------------------
-  const weaponsHolder = new THREE.Group();
-  weaponsHolder.position.set(-0.1, -0.16, 0.38);
-  weaponsHolder.scale.set(0.44, 0.44, 0.44);
-  weaponsHolder.rotation.y = Math.PI; // Face weapon barrel forward along +Z
-
-  const scarObj = createFortniteWeaponModel('scar_bio', '#d97706');
-  const pumpObj = createFortniteWeaponModel('pump_shotgun', '#7c3aed');
-  const sniperObj = createFortniteWeaponModel('bolt_sniper', '#0284c7');
-  const drumObj = createFortniteWeaponModel('drum_gun', '#059669');
-
-  weaponsHolder.add(scarObj.group);
-  weaponsHolder.add(pumpObj.group);
-  weaponsHolder.add(sniperObj.group);
-  weaponsHolder.add(drumObj.group);
-
-  scarObj.group.visible = true;
-  pumpObj.group.visible = false;
-  sniperObj.group.visible = false;
-  drumObj.group.visible = false;
-
-  rightArm.add(weaponsHolder);
-
-  let currentWeaponId = 'scar_bio';
-  const setEquippedWeapon = (wId: string) => {
-    const raw = (wId || '').toLowerCase();
-    const isShotgun = raw.includes('shotgun') || raw === 'pump_shotgun';
-    const isSniper = raw.includes('sniper') || raw === 'bolt_sniper';
-    const isDrum = raw.includes('drum') || raw === 'drum_gun';
-    const isScar = !isShotgun && !isSniper && !isDrum;
-
-    scarObj.group.visible = isScar;
-    pumpObj.group.visible = isShotgun;
-    sniperObj.group.visible = isSniper;
-    drumObj.group.visible = isDrum;
-
-    currentWeaponId = isShotgun ? 'pump_shotgun' : isSniper ? 'bolt_sniper' : isDrum ? 'drum_gun' : 'scar_bio';
-  };
+  const rifle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, 0.18, 0.88),
+    createFastLitMaterial({ color: 0x334155, metalness: 0.85, roughness: 0.2 })
+  );
+  rifle.position.set(-0.1, -0.18, 0.44);
+  rightArm.add(rifle);
 
   const scopeGlintMat = new THREE.MeshBasicMaterial({
     color: 0xfef08a,
@@ -6253,7 +6048,7 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
 
   group.add(rightArm);
 
-  // 3D Bio-Stasis Freeze Crystal Cage
+  // 3D Bio-Stasis Freeze Crystal Cage (Visible when opponent student's 1-minute timer expires and they are stunned solving 3 questions!)
   const stasisCage = new THREE.Group();
   const stasisCrystalMat = new THREE.MeshBasicMaterial({
     color: 0x22d3ee,
@@ -6286,7 +6081,7 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
   callsignCanvas.width = 320;
   callsignCanvas.height = 76;
   const callsignTexture = new THREE.CanvasTexture(callsignCanvas);
-  updateStudentOperatorBadge(callsignCanvas, callsignTexture, `OPERATIVE ${slotIdx + 1}`, cellArchetype.shortName, false, false);
+  updateStudentOperatorBadge(callsignCanvas, callsignTexture, `OPERATIVE ${slotIdx + 1}`, 'ONLINE', false, false);
 
   const badgeMat = new THREE.MeshBasicMaterial({
     map: callsignTexture,
@@ -6310,9 +6105,6 @@ export function createMultiplayerStudentOperator(slotIdx: number = 0): {
     callsignBadge,
     callsignCanvas,
     callsignTexture,
-    cellArchetype,
-    setEquippedWeapon,
-    currentWeaponId,
   };
 }
 
