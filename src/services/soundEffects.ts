@@ -1126,6 +1126,17 @@ class SoundEffectsService {
       subOsc.connect(engineGain);
       engineGain.connect(this.masterGain);
 
+      engineOsc.onended = () => {
+        try {
+          engineOsc.disconnect();
+          subOsc.disconnect();
+          lfo.disconnect();
+          lfoGain.disconnect();
+          engineGain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
       engineOsc.start(t);
       subOsc.start(t);
       lfo.start(t);
@@ -1146,6 +1157,14 @@ class SoundEffectsService {
 
       whistleOsc.connect(whistleGain);
       whistleGain.connect(this.masterGain);
+      whistleOsc.onended = () => {
+        try {
+          whistleOsc.disconnect();
+          whistleGain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
       whistleOsc.start(t + 0.45);
       whistleOsc.stop(t + 1.68);
     } catch {
@@ -1172,6 +1191,14 @@ class SoundEffectsService {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
       osc.connect(gain);
       gain.connect(this.masterGain);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
       osc.start(t);
       osc.stop(t + 0.48);
 
@@ -1199,6 +1226,14 @@ class SoundEffectsService {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.075);
       osc.connect(gain);
       gain.connect(this.masterGain);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
       osc.start(t);
       osc.stop(t + 0.08);
     } catch {
@@ -1564,6 +1599,14 @@ class SoundEffectsService {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
       osc.connect(gain);
       gain.connect(this.masterGain);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // ignore
+        }
+      };
       osc.start(t);
       osc.stop(t + 0.085);
 
@@ -1625,6 +1668,18 @@ class SoundEffectsService {
         osc.connect(formant);
         formant.connect(gain);
         gain.connect(this.masterGain);
+
+        osc.onended = () => {
+          try {
+            osc.disconnect();
+            mod.disconnect();
+            modGain.disconnect();
+            formant.disconnect();
+            gain.disconnect();
+          } catch {
+            // ignore
+          }
+        };
 
         osc.start(start);
         mod.start(start);

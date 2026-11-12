@@ -197,6 +197,7 @@ interface ActiveSoldier {
   stunTimer?: number;
   lastLocalDamagedAt?: number;
   localEliminatedUntil?: number;
+  retreatElapsed?: number;
 }
 
 interface ActiveEnemyAirdrop {
@@ -827,6 +828,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
   // Performance-critical direct DOM references (zero React VDOM re-render churn!)
   const liveScoreDomRef = useRef<HTMLSpanElement | null>(null);
   const liveTimerDomRef = useRef<HTMLSpanElement | null>(null);
+  const soloWaveTimerDomRef = useRef<HTMLSpanElement | null>(null);
+  const mpMatchTimerDomRef = useRef<HTMLSpanElement | null>(null);
+  const cachedStudentProfileRef = useRef(loadStudentProfile());
 
   // Teacher / Spectator Classroom Broadcast Mode
   const [showSpectatorBoard, setShowSpectatorBoard] = useState<boolean>(false);
@@ -857,7 +861,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [score, setScore] = useState<number>(0);
   const [kills, setKills] = useState<number>(0);
-  const [comboStreak, setComboStreak] = useState<number>(0);
   const [hitmarkers, setHitmarkers] = useState<HitMarkerInfo[]>([]);
   const [, setKillfeed] = useState<KillfeedEntry[]>([]);
   const [stimCooldown, setStimCooldown] = useState<number>(0);
@@ -875,12 +878,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const handleSwapWeaponRef = useRef<(() => void) | null>(null);
   const handleSelectWeaponRef = useRef<((w: Weapon) => void) | null>(null);
   const [isPlayerInCover, setIsPlayerInCover] = useState<boolean>(false);
-  const [barricadeHps, setBarricadeHps] = useState<number[]>([100, 100, 100]);
   const [activeCoverHp, setActiveCoverHp] = useState<number>(100);
   const [bleriotAlert, setBleriotAlert] = useState<string | null>(null);
   const [enemyAirdropAlert, setEnemyAirdropAlert] = useState<string | null>(null);
   const [hazardAlert, setHazardAlert] = useState<string | null>(null);
   const [bossDefeatedBanner, setBossDefeatedBanner] = useState<boolean>(false);
+  const [isPhase3Retreating, setIsPhase3Retreating] = useState<boolean>(false);
+  const isPhase3RetreatingRef = useRef<boolean>(false);
+  const [retreatDialogueStep, setRetreatDialogueStep] = useState<number>(0);
+  const ensureRetreatStragglersRef = useRef<(() => void) | null>(null);
 
   // First-Time Biology Concept Popup & Automatic Game Pause State (Max 1 popup per phase, shows once ever per concept!)
   const [activeConceptCard, setActiveConceptCard] = useState<BiologyConceptCard | null>(null);
@@ -1581,9 +1587,8 @@ export const CombatView: React.FC<CombatViewProps> = ({
               b.hpBarFill.position.x = 0;
             }
           });
-          setBarricadeHps([100, 100, 100]);
 
-          const prof = loadStudentProfile();
+          const prof = cachedStudentProfileRef.current || loadStudentProfile();
           recordScoreToLeaderboard({
             studentName: prof?.name || 'Operative',
             className: prof?.className || 'Class 7',
@@ -1688,7 +1693,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
     shotsFiredRef.current = 0;
     shotsHitRef.current = 0;
     comboStreakRef.current = 0;
-    setComboStreak(0);
     setMpKillfeed([]);
 
     playerHpRef.current = 100;
@@ -1948,16 +1952,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
         return filtered.length === prev.length ? prev : filtered;
       });
 
-      // Multiplayer 5-Minute (300s) Match Countdown Timer
+      // Multiplayer 5-Minute (300s) Match Countdown Timer (direct DOM update except at <=30s warning threshold)
       if (isMultiplayerDeathmatch) {
         if (mpMatchTimeLeftRef.current <= 1) {
           mpMatchTimeLeftRef.current = 0;
+          if (mpMatchTimerDomRef.current) {
+            mpMatchTimerDomRef.current.textContent = '0:00';
+          }
           setMpMatchTimeLeft(0);
           triggerMultiplayerMatchEndRef.current?.('time_limit');
           return;
         } else {
           mpMatchTimeLeftRef.current -= 1;
-          setMpMatchTimeLeft(mpMatchTimeLeftRef.current);
+          const nextMpSec = mpMatchTimeLeftRef.current;
+          if (mpMatchTimerDomRef.current) {
+            mpMatchTimerDomRef.current.textContent = `${Math.floor(nextMpSec / 60)}:${String(
+              nextMpSec % 60
+            ).padStart(2, '0')}`;
+          }
+          if (nextMpSec <= 30) {
+            setMpMatchTimeLeft(nextMpSec);
+          }
         }
         // Check 10-kill threshold
         if (killsRef.current >= MATCH_KILL_LIMIT) {
@@ -1997,37 +2012,85 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
 
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          if (isMultiplayerDeathmatch) {
-            timeLeftRef.current = 0;
-            // 1-Minute Active Combat Window Reached -> Freeze & Stun Player Until 1 Question Answered!
-            setTimeout(() => {
-              triggerMpStunFreezeStateRef.current?.();
-            }, 0);
-            return 0;
-          }
+      const prevTime = timeLeftRef.current;
+      if (prevTime <= 1) {
+        timeLeftRef.current = 0;
+        if (liveTimerDomRef.current) liveTimerDomRef.current.textContent = '0S';
+        if (soloWaveTimerDomRef.current) soloWaveTimerDomRef.current.textContent = '0:00';
+        setTimeLeft(0);
+        if (isMultiplayerDeathmatch) {
+          // 1-Minute Active Combat Window Reached -> Freeze & Stun Player Until 1 Question Answered!
+          setTimeout(() => {
+            triggerMpStunFreezeStateRef.current?.();
+          }, 0);
+        } else {
           clearInterval(timer);
-          timeLeftRef.current = 0;
-          return 0;
         }
-        const next = prev - 1;
+      } else {
+        const next = prevTime - 1;
         timeLeftRef.current = next;
-        return next;
-      });
+        if (liveTimerDomRef.current) {
+          liveTimerDomRef.current.textContent = `${next}S`;
+        }
+        if (soloWaveTimerDomRef.current) {
+          soloWaveTimerDomRef.current.textContent = `0:${next < 10 ? `0${next}` : next}`;
+        }
+        // Only trigger a React state re-render when entering the <=12s warning window
+        if (next <= 12) {
+          setTimeLeft(next);
+        }
+      }
     }, 1000);
 
     return () => clearInterval(timer);
   }, [isMultiplayerDeathmatch]);
 
-  // Timer complete -> VICTORY! (Solo Mode only; Multiplayer triggers Bio-Stasis Freeze above!)
+  // Timer complete -> VICTORY! (Solo Mode only; Phase 3 plays natural Enemy Panic & Horizon Retreat before showing Victory Modal!)
   useEffect(() => {
     if (!isMultiplayerDeathmatch && timeLeft === 0 && playerHpRef.current > 0 && !phaseCompleteCalledRef.current) {
+      if (phaseNumber >= 3) {
+        if (!isPhase3RetreatingRef.current) {
+          isPhase3RetreatingRef.current = true;
+          setIsPhase3Retreating(true);
+          setRetreatDialogueStep(0);
+          ensureRetreatStragglersRef.current?.();
+          sounds.playRadioChirp();
+        }
+        return;
+      }
       phaseCompleteCalledRef.current = true;
       sounds.playVictory();
       onPhaseComplete(scoreRef.current + 1000, killsRef.current);
     }
-  }, [timeLeft, onPhaseComplete, isMultiplayerDeathmatch]);
+  }, [timeLeft, onPhaseComplete, isMultiplayerDeathmatch, phaseNumber]);
+
+  // Phase 3 Natural Enemy Retreat Sequence progression (Panic -> Turn Around & Run -> Disappear in Horizon -> Victory Score & Stars)
+  useEffect(() => {
+    if (!isPhase3Retreating || isMultiplayerDeathmatch) return;
+
+    const t1 = window.setTimeout(() => {
+      setRetreatDialogueStep(1);
+      sounds.playRadioChirp();
+    }, 1150);
+
+    const t2 = window.setTimeout(() => {
+      setRetreatDialogueStep(2);
+    }, 2500);
+
+    const t3 = window.setTimeout(() => {
+      if (!phaseCompleteCalledRef.current) {
+        phaseCompleteCalledRef.current = true;
+        sounds.playVictory();
+        onPhaseComplete(scoreRef.current + 1000, killsRef.current);
+      }
+    }, 4200);
+
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+    };
+  }, [isPhase3Retreating, isMultiplayerDeathmatch, onPhaseComplete]);
 
   // Cooldown timers (keep React state and synchronous refs strictly synchronized)
   useEffect(() => {
@@ -3000,12 +3063,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
       slot.inUse = true;
       slot.group.visible = true;
       slot.group.rotation.set(0, 0, 0);
+      slot.group.scale.setScalar(slot.type === 'tank' && !isMultiplayerDeathmatch ? 1.18 : 1.0);
       slot.hpBarFill.scale.set(1, 1, 1);
       slot.hpBarFill.position.x = 0;
+      if (slot.parachuteGroup) slot.parachuteGroup.visible = false;
       if (slot.leftLeg) slot.leftLeg.rotation.set(0, 0, 0);
       if (slot.rightLeg) slot.rightLeg.rotation.set(0, 0, 0);
-      if (slot.leftArm) slot.leftArm.rotation.set(0, 0, 0);
-      if (slot.rightArm) slot.rightArm.rotation.set(0, 0, 0);
+      if (slot.leftArm) {
+        slot.leftArm.rotation.set(0, 0, 0);
+      }
+      if (slot.rightArm) {
+        slot.rightArm.rotation.set(0, 0, 0);
+      }
       if (slot.turret) slot.turret.rotation.set(0, 0, 0);
       if (slot.cannon) {
         slot.cannon.position.z = 0;
@@ -3585,7 +3654,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
         cannonRecoil: 0,
         hullRock: 0,
         parachuteGroup: pooledSlot.parachuteGroup,
-        isParachuting: false,
+        isParachuting: Boolean(isParachuteDrop && !isMultiplayerDeathmatch),
         landingY: groundY,
         isStudentOperator: isMultiplayerDeathmatch,
         remotePlayerId: remotePlayer?.playerId,
@@ -3608,6 +3677,56 @@ export const CombatView: React.FC<CombatViewProps> = ({
         }
       }
     }
+
+    ensureRetreatStragglersRef.current = () => {
+      if (isMultiplayerDeathmatch) return;
+      // Clear any mid-air enemy projectiles, boss rockets, or mortar shells so player is 100% safe during victory retreat
+      activeEnemyBulletsRef.current.forEach((b) => {
+        b.mesh.visible = false;
+      });
+      activeEnemyBulletsRef.current.length = 0;
+      activeBossRocketsRef.current.forEach((r) => {
+        r.mesh.visible = false;
+      });
+      activeBossRocketsRef.current.length = 0;
+      activeMortarBombsRef.current.forEach((m) => {
+        m.mesh.visible = false;
+      });
+      activeMortarBombsRef.current.length = 0;
+
+      // Ensure at least a couple of bacteria soldiers and a tank are visible on the field to panic and retreat
+      const currentSoldiers = activeSoldiersRef.current;
+      const hasTank = currentSoldiers.some((s) => s.isTank);
+      const bacteriaCount = currentSoldiers.filter((s) => !s.isTank && !s.isBoss).length;
+
+      if (!hasTank) {
+        spawnSoldierOrTank(-14.5, 'tank', -1.2, false);
+      }
+      if (bacteriaCount < 3) {
+        const needed = 3 - bacteriaCount;
+        const retreatLanes = [-2.2, 0.4, 2.1];
+        for (let i = 0; i < needed; i++) {
+          spawnSoldierOrTank(
+            -11.5 - i * 2.2,
+            i % 2 === 0 ? 'strep' : 'bacillus',
+            retreatLanes[i % retreatLanes.length],
+            false
+          );
+        }
+      }
+
+      // Snap any parachuting units to ground and initialize retreat timers
+      activeSoldiersRef.current.forEach((s) => {
+        if (s.isParachuting) {
+          s.isParachuting = false;
+          s.mesh.position.y = s.landingY ?? (s.isTank ? -0.5 : 0);
+        }
+        if (s.parachuteGroup) {
+          s.parachuteGroup.visible = false;
+        }
+        s.retreatElapsed = 0;
+      });
+    };
 
     // Immediate opening vanguard squad scales with levelIndex & phaseIndex (In Multiplayer, ZERO BOTS — only real connected players!)
     const initialSquadSize = isMultiplayerDeathmatch
@@ -3632,7 +3751,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
     let nextDynamicSpawnAt = performance.now() + getDynamicSpawnDelayMs();
     const spawnInterval = window.setInterval(() => {
-      if (isPausedForConceptRef.current || isGamePausedRef.current) return;
+      if (isPausedForConceptRef.current || isGamePausedRef.current || isPhase3RetreatingRef.current) return;
 
       if (!isMultiplayerDeathmatch) {
         const nowMs = performance.now();
@@ -4702,7 +4821,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             prevTargetHp,
             Math.round(totalDamage),
             localMpPlayerIdRef.current,
-            loadStudentProfile()?.name || 'Operative',
+            cachedStudentProfileRef.current?.name || 'Operative',
             activeWpn.name,
             criticalHit
           );
@@ -4825,11 +4944,10 @@ export const CombatView: React.FC<CombatViewProps> = ({
           scoreRef.current += points;
 
           setKills(killsRef.current);
-          setComboStreak(comboStreakRef.current);
           setScore(scoreRef.current);
 
           if (isMultiplayerDeathmatch) {
-            const prof = loadStudentProfile();
+            const prof = cachedStudentProfileRef.current;
             const myCallsign = prof?.name || 'Operative';
             pushKillfeedEntryRef.current?.({
               id: `${Date.now()}_${Math.random()}`,
@@ -5941,6 +6059,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
               if (type === 'postpone_question') {
                 timeLeftRef.current += 15;
+                if (liveTimerDomRef.current) {
+                  liveTimerDomRef.current.textContent = `${timeLeftRef.current}S`;
+                }
+                if (soloWaveTimerDomRef.current) {
+                  soloWaveTimerDomRef.current.textContent = `0:${
+                    timeLeftRef.current < 10 ? `0${timeLeftRef.current}` : timeLeftRef.current
+                  }`;
+                }
                 setTimeLeft(timeLeftRef.current);
               }
 
@@ -6129,7 +6255,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   prevHpForSync,
                   fragHpDmg,
                   localMpPlayerIdRef.current,
-                  loadStudentProfile()?.name || 'Operative',
+                  cachedStudentProfileRef.current?.name || 'Operative',
                   'Bio-Cluster Frag [G]',
                   true
                 );
@@ -6184,7 +6310,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 setKills(killsRef.current);
                 setScore(scoreRef.current);
                 if (isMultiplayerDeathmatch) {
-                  const prof = loadStudentProfile();
+                  const prof = cachedStudentProfileRef.current;
                   const myCallsign = prof?.name || 'Operative';
                   pushKillfeedEntryRef.current?.({
                     id: `${Date.now()}_${Math.random()}`,
@@ -6550,7 +6676,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
               // Allied Platelet/Cell Clotting Support: Repairs barricade +18% & heals player +8 HP!
               if (bar && bar.hp > 0) {
                 bar.hp = Math.min(bar.maxHp, bar.hp + 18);
-                setBarricadeHps(barricadesRef.current.map((b) => Math.max(0, Math.round(b.hp))));
               }
               playerHpRef.current = Math.min(100, playerHpRef.current + 8);
               setPlayerHp(playerHpRef.current);
@@ -6742,6 +6867,116 @@ export const CombatView: React.FC<CombatViewProps> = ({
               soldier.parachuteGroup.visible = false;
             }
             triggerSandDust(soldier.mesh.position);
+          }
+          continue;
+        }
+
+        // Safeguard: Guarantee parachute is detached and hidden once on the ground
+        if (soldier.parachuteGroup && soldier.parachuteGroup.visible) {
+          soldier.parachuteGroup.visible = false;
+        }
+
+        // PHASE 3 NATURAL VICTORY ENDING: BACTERIA & TANKS LOOK AFRAID, TELL EACH OTHER TO RETREAT, TURN AROUND & RUN INTO THE HORIZON!
+        if (!isMultiplayerDeathmatch && isPhase3RetreatingRef.current) {
+          if (soldier.scopeGlint) {
+            (soldier.scopeGlint.material as THREE.MeshBasicMaterial).opacity = 0;
+          }
+          soldier.retreatElapsed = (soldier.retreatElapsed || 0) + delta;
+
+          if (soldier.retreatElapsed < 1.05) {
+            // Stage 1: Look afraid, tremble, turn toward fellow troops/tanks & signal retreat!
+            const tremble = Math.sin(elapsed * 42 + soldier.id * 3.1);
+            soldier.mesh.position.x += tremble * 0.018;
+            soldier.mesh.rotation.z = tremble * 0.08;
+            const neighborLookYaw =
+              (soldier.id % 2 === 0 ? 0.65 : -0.65) + Math.sin(elapsed * 16 + soldier.id) * 0.25;
+            soldier.mesh.rotation.y = THREE.MathUtils.damp(
+              soldier.mesh.rotation.y,
+              neighborLookYaw,
+              10,
+              delta
+            );
+
+            if (soldier.isTank) {
+              if (soldier.turret) {
+                soldier.turret.rotation.y = Math.sin(elapsed * 16 + soldier.id) * 0.68;
+              }
+              soldier.mesh.position.y = -0.5 + Math.abs(Math.sin(elapsed * 18 + soldier.id)) * 0.04;
+            } else if (!soldier.isBoss) {
+              // Throw both arms up in panic & hop in fear!
+              soldier.mesh.position.y = Math.abs(Math.sin(elapsed * 20 + soldier.id)) * 0.14;
+              if (soldier.leftArm && soldier.rightArm) {
+                soldier.leftArm.rotation.x = -2.55 + Math.sin(elapsed * 28 + soldier.id) * 0.38;
+                soldier.rightArm.rotation.x = -2.55 - Math.sin(elapsed * 28 + soldier.id) * 0.38;
+                soldier.leftArm.rotation.z = 0.42;
+                soldier.rightArm.rotation.z = -0.42;
+              }
+              if (soldier.leftLeg && soldier.rightLeg) {
+                soldier.leftLeg.rotation.x = Math.sin(elapsed * 22 + soldier.id) * 0.35;
+                soldier.rightLeg.rotation.x = -Math.sin(elapsed * 22 + soldier.id) * 0.35;
+              }
+            }
+          } else {
+            // Stage 2: Turn 180 degrees around toward the distant horizon (-Z) and run away!
+            const targetRetreatYaw = Math.PI + Math.sin(elapsed * 11 + soldier.walkOffset) * 0.08;
+            soldier.mesh.rotation.y = THREE.MathUtils.damp(
+              soldier.mesh.rotation.y,
+              targetRetreatYaw,
+              9,
+              delta
+            );
+            soldier.mesh.rotation.x = THREE.MathUtils.damp(soldier.mesh.rotation.x, -0.14, 8, delta);
+            soldier.mesh.rotation.z = Math.sin(elapsed * 20 + soldier.walkOffset) * 0.06;
+
+            const retreatSpeed = soldier.isTank ? 11.2 : soldier.isBoss ? 15.5 : 12.0;
+            soldier.mesh.position.z -= retreatSpeed * delta;
+
+            if (soldier.isTank) {
+              soldier.mesh.position.y = -0.5 + Math.sin(elapsed * 16 + soldier.walkOffset) * 0.03;
+              if (soldier.turret) {
+                soldier.turret.rotation.y = THREE.MathUtils.damp(soldier.turret.rotation.y, 0, 8, delta);
+              }
+              if (Math.random() < 0.25) {
+                triggerSandDust(soldier.mesh.position);
+              }
+            } else if (!soldier.isBoss) {
+              const panicSprint = Math.sin(elapsed * 26 + soldier.walkOffset);
+              soldier.mesh.position.y = Math.abs(panicSprint) * 0.1;
+              if (soldier.leftLeg && soldier.rightLeg) {
+                soldier.leftLeg.rotation.x = panicSprint * 0.95;
+                soldier.rightLeg.rotation.x = -panicSprint * 0.95;
+              }
+              if (soldier.leftArm && soldier.rightArm) {
+                soldier.leftArm.rotation.x = -2.4 + panicSprint * 0.45;
+                soldier.rightArm.rotation.x = -2.4 - panicSprint * 0.45;
+                soldier.leftArm.rotation.z = 0.35;
+                soldier.rightArm.rotation.z = -0.35;
+              }
+            }
+
+            // Smoothly shrink and fade into the distant horizon as they pass z < -30
+            const baseUnitScale = soldier.isTank
+              ? 1.18
+              : soldier.isHelicopter
+              ? 1.28
+              : soldier.isRobot
+              ? 1.32
+              : soldier.isJet
+              ? 1.42
+              : 1.0;
+            if (soldier.mesh.position.z < -30) {
+              const horizonFade = THREE.MathUtils.clamp(
+                (soldier.mesh.position.z - -52) / (-30 - -52),
+                0.04,
+                1.0
+              );
+              soldier.mesh.scale.setScalar(baseUnitScale * horizonFade);
+            }
+
+            if (soldier.mesh.position.z <= -50) {
+              releaseSoldierToPool(soldier);
+              activeSoldiersRef.current.splice(i, 1);
+            }
           }
           continue;
         }
@@ -7394,7 +7629,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setPlayerHp(playerHpRef.current);
           cameraShakeRef.current = 0.55;
           comboStreakRef.current = 0;
-          setComboStreak(0);
           sounds.playQuizWrong();
 
           if (playerHpRef.current <= 0) {
@@ -7421,7 +7655,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
             bar.hpBarFill.scale.x = pct;
             bar.hpBarFill.position.x = 0;
             (bar.hpBarFill.material as THREE.MeshBasicMaterial).color.setHex(0x10b981);
-            setBarricadeHps(barricadesRef.current.map((b) => Math.round((b.hp / b.maxHp) * 100)));
           }
         }
       });
@@ -8266,7 +8499,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 if (!ally.hasCalledAssist) {
                   ally.hasCalledAssist = true;
                   sounds.playRadioChirp();
-                  const pName = (loadStudentProfile()?.name || 'COMMANDER').trim().toUpperCase();
+                  const pName = (cachedStudentProfileRef.current?.name || 'COMMANDER').trim().toUpperCase();
                   const assistMsg = `💜 WBC COMMANDO: "ASSIST US, ${pName}!" (MULTILOBED PURPLE NUCLEUS REVEALED!)`;
                   setCellDistressBanner(assistMsg);
                   setTimeout(() => {
@@ -9010,7 +9243,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
       ))}
 
       {/* Dedicated Tactical Movement Control Zone Anchor (Bottom-Left) */}
-      <div className="fixed bottom-6 left-6 sm:bottom-8 sm:left-8 w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-amber-500/20 bg-slate-950/25 backdrop-blur-[1px] pointer-events-none z-20 flex items-center justify-center opacity-70">
+      <div className="fixed bottom-6 left-6 sm:bottom-8 sm:left-8 w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-amber-500/20 bg-slate-950/35 pointer-events-none z-20 flex items-center justify-center opacity-70">
         <div className="w-10 h-10 rounded-full border border-dashed border-amber-400/30 flex items-center justify-center">
           <span className="text-[8px] sm:text-[9px] font-mono font-black text-amber-400/60 tracking-widest uppercase">MOVE</span>
         </div>
@@ -9225,8 +9458,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   >
                     <Trophy className="w-3 h-3 text-amber-400" />
                     <span>
-                      {kills}/{MATCH_KILL_LIMIT} KILLS • {Math.floor(mpMatchTimeLeft / 60)}:
-                      {String(mpMatchTimeLeft % 60).padStart(2, '0')}
+                      {kills}/{MATCH_KILL_LIMIT} KILLS •{' '}
+                      <span ref={mpMatchTimerDomRef}>
+                        {Math.floor(mpMatchTimeLeft / 60)}:
+                        {String(mpMatchTimeLeft % 60).padStart(2, '0')}
+                      </span>
                     </span>
                   </span>
                   <span className="text-slate-600">|</span>
@@ -9310,13 +9546,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
               </div>
             )}
 
-            {(cellDistressBanner || organRadioComm) && (
+            {(cellDistressBanner || organRadioComm) && !isPhase3Retreating && (
               <div className="bg-sky-950/95 border-2 border-sky-400 rounded-md px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black tracking-wider uppercase text-sky-100 shadow-[0_4px_14px_rgba(56,189,248,0.45)] max-w-full truncate">
                 {cellDistressBanner
                   ? cellDistressBanner
                   : organRadioComm
                   ? `🔵 ${organRadioComm.callsign}: ${organRadioComm.message}`
                   : ''}
+              </div>
+            )}
+
+            {isPhase3Retreating && (
+              <div className="flex flex-col items-center gap-1.5 mt-1 animate-bounce pointer-events-none">
+                <div className="bg-rose-950/95 border-2 border-amber-400 rounded-lg px-3.5 py-1.5 text-[10px] sm:text-xs font-black tracking-wider uppercase text-amber-200 shadow-[0_0_24px_rgba(245,158,11,0.75)] text-center">
+                  {retreatDialogueStep === 0 &&
+                    '😱 BACTERIA & TANKS: "THE IMMUNE DEFENSE HELD! TELL ALL UNITS TO RETREAT!"'}
+                  {retreatDialogueStep === 1 &&
+                    '🏃‍♂️💨 BIO-TANK COMMANDER: "TURN AROUND! FALL BACK TO THE HORIZON — RUN!"'}
+                  {retreatDialogueStep >= 2 &&
+                    '🎖️ ENEMY FORCES ROUTED! DISAPPEARING INTO THE HORIZON... MISSION ACCOMPLISHED!'}
+                </div>
               </div>
             )}
           </div>
@@ -9416,6 +9665,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   ⏱
                 </span>
                 <span
+                  ref={soloWaveTimerDomRef}
                   className={`text-[10px] sm:text-xs font-black tabular-nums ${
                     timeLeft <= 10 ? 'text-rose-400 animate-pulse' : 'text-white'
                   }`}
@@ -9458,12 +9708,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
             {/* TOP-RIGHT STYLIZED SEMI-TRANSPARENT TACTICAL KILL FEED (Multiplayer Matches) */}
             {isMultiplayerDeathmatch && mpKillfeed.length > 0 && (
               <div className="flex flex-col items-end gap-1 mt-1 pointer-events-none max-w-[235px] sm:max-w-[310px] font-mono select-none">
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-t bg-slate-950/60 backdrop-blur-sm border-t border-x border-cyan-500/35 text-[7.5px] sm:text-[8.5px] font-black tracking-[0.18em] uppercase text-cyan-300/90 shadow-sm">
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-t bg-slate-950/90 border-t border-x border-cyan-500/35 text-[7.5px] sm:text-[8.5px] font-black tracking-[0.18em] uppercase text-cyan-300/90 shadow-sm">
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
                   <span>TACTICAL KILL FEED</span>
                 </div>
                 {mpKillfeed.slice(0, 4).map((kf, idx) => {
-                  const localCallsign = (loadStudentProfile()?.name || 'Operative').trim().toUpperCase();
+                  const localCallsign = (cachedStudentProfileRef.current?.name || 'Operative').trim().toUpperCase();
                   const isLocalKiller =
                     kf.killerName.trim().toUpperCase() === localCallsign ||
                     kf.killerName.trim().toUpperCase() === 'YOU';
@@ -9475,12 +9725,12 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   return (
                     <div
                       key={kf.id}
-                      className={`w-full px-2.5 py-1 rounded-l-md backdrop-blur-md border-r-2 border-y border-l transition-all duration-200 shadow-[0_4px_14px_rgba(0,0,0,0.65)] flex flex-col items-end gap-0.5 ${
+                      className={`w-full px-2.5 py-1 rounded-l-md border-r-2 border-y border-l transition-all duration-200 shadow-[0_4px_14px_rgba(0,0,0,0.65)] flex flex-col items-end gap-0.5 ${
                         isLocalKiller
-                          ? 'bg-emerald-950/55 border-r-emerald-400 border-y-emerald-500/30 border-l-emerald-500/20'
+                          ? 'bg-emerald-950/85 border-r-emerald-400 border-y-emerald-500/30 border-l-emerald-500/20'
                           : isLocalVictim
-                          ? 'bg-rose-950/60 border-r-rose-500 border-y-rose-500/35 border-l-rose-500/20'
-                          : 'bg-slate-950/60 border-r-cyan-400 border-y-white/15 border-l-white/10'
+                          ? 'bg-rose-950/85 border-r-rose-500 border-y-rose-500/35 border-l-rose-500/20'
+                          : 'bg-slate-950/85 border-r-cyan-400 border-y-white/15 border-l-white/10'
                       } ${idx === 0 ? 'opacity-100 scale-100' : idx === 1 ? 'opacity-90' : 'opacity-75'}`}
                       style={{
                         clipPath: 'polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px)',
@@ -10046,7 +10296,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
               </div>
               <div>
                 <span className="text-[9px] text-zinc-400 block uppercase">TIME REMAINING</span>
-                <span className="text-sm font-black text-white">{timeLeft}s</span>
+                <span className="text-sm font-black text-white">{timeLeftRef.current}s</span>
               </div>
               <div>
                 <span className="text-[9px] text-zinc-400 block uppercase">SCORE</span>
