@@ -982,8 +982,10 @@ export function subscribeToDeathmatchRoom(
     });
   }
   const processedHitSeqs = new Set<number>();
+  const processedKillfeedSeqs = new Set<number>();
   if (initialLocalPlayer?.lastHitSeq) {
     processedHitSeqs.add(initialLocalPlayer.lastHitSeq);
+    processedKillfeedSeqs.add(initialLocalPlayer.lastHitSeq);
   }
   let overflowTriggered = false;
 
@@ -1258,7 +1260,12 @@ export function subscribeToDeathmatchRoom(
             hitSeq: msg.hitSeq,
           });
         }
-        if (msg.eliminated && onKillfeedEvent) {
+        if (
+          msg.eliminated &&
+          onKillfeedEvent &&
+          (!msg.hitSeq || !processedKillfeedSeqs.has(msg.hitSeq))
+        ) {
+          if (msg.hitSeq) processedKillfeedSeqs.add(msg.hitSeq);
           const victimName = existing?.studentName || 'Operative';
           onKillfeedEvent({
             id: `${msg.hitSeq}_${msg.targetPlayerId}`,
@@ -1293,6 +1300,16 @@ export function subscribeToDeathmatchRoom(
           if (!data || !resolvedId) return;
           data.playerId = resolvedId;
 
+          const existingPlayer = playersMap.get(resolvedId);
+
+          // Seed historical lastHitSeq on initial document load so old kills prior to joining don't replay
+          if (change.type === 'added' && data.lastHitSeq && !existingPlayer) {
+            processedKillfeedSeqs.add(data.lastHitSeq);
+            if (resolvedId === localPlayerId) {
+              processedHitSeqs.add(data.lastHitSeq);
+            }
+          }
+
           // 1. ALWAYS process incoming hits on the local player first, BEFORE any pending-write or mirror-ping filtering!
           if (
             resolvedId === localPlayerId &&
@@ -1314,8 +1331,32 @@ export function subscribeToDeathmatchRoom(
             });
           }
 
+          // 1b. Emit real-time cross-device killfeed event whenever any operative in the room is neutralized!
+          if (
+            data.lastHitSeq &&
+            !processedKillfeedSeqs.has(data.lastHitSeq) &&
+            data.lastHitByName &&
+            onKillfeedEvent
+          ) {
+            const resolvedTargetHp =
+              typeof data.lastHitTargetHp === 'number' ? data.lastHitTargetHp : data.hp;
+            const isElimination = resolvedTargetHp <= 0 || data.status === 'reviving';
+            if (isElimination) {
+              processedKillfeedSeqs.add(data.lastHitSeq);
+              const victimName =
+                data.studentName || existingPlayer?.studentName || 'Operative';
+              onKillfeedEvent({
+                id: `${data.lastHitSeq}_${resolvedId}`,
+                killerName: data.lastHitByName,
+                victimName,
+                weaponName: data.lastHitWeapon || 'SCAR-H Bio-Rifle',
+                isHeadshot: Boolean(data.lastHitHeadshot),
+                timestamp: Date.now(),
+              });
+            }
+          }
+
           // 2. Ignore older mirror snapshots only when no combat state (kills, status, lastHitSeq) changed
-          const existingPlayer = playersMap.get(resolvedId);
           if (
             existingPlayer &&
             typeof existingPlayer.rawRemotePing === 'number' &&

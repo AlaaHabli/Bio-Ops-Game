@@ -132,20 +132,60 @@ export function saveStudentProfile(profile: StudentProfile): void {
   }
 }
 
+function buildStudentBestDocId(studentName: string): string {
+  const normalized = (studentName || 'operative').trim().toLowerCase();
+  const safeSlug = normalized.replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 36) || 'operative';
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = ((hash << 5) + hash) ^ normalized.charCodeAt(i);
+  }
+  const hashHex = (hash >>> 0).toString(36).slice(0, 7);
+  return `best_${safeSlug}_${hashHex}`;
+}
+
 export function mergeLeaderboardLists(...lists: LeaderboardEntry[][]): LeaderboardEntry[] {
   const byId = new Map<string, LeaderboardEntry>();
   for (const list of lists) {
     for (const item of list) {
       if (!item || !item.id) continue;
       const existing = byId.get(item.id);
-      if (!existing || item.score > existing.score) {
+      if (!existing || item.score > existing.score || (item.score === existing.score && item.timestamp > existing.timestamp)) {
         byId.set(item.id, item);
       }
     }
   }
-  return Array.from(byId.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 150);
+
+  const allEntries = Array.from(byId.values()).sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return (b.timestamp || 0) - (a.timestamp || 0);
+  });
+
+  // Always retain the personal best entry for every unique student so no student is ever pushed off by another student's repeated runs
+  const keptIds = new Set<string>();
+  const seenStudents = new Set<string>();
+  const result: LeaderboardEntry[] = [];
+
+  for (const entry of allEntries) {
+    const studentKey = (entry.studentName || '').trim().toLowerCase();
+    if (studentKey && !seenStudents.has(studentKey)) {
+      seenStudents.add(studentKey);
+      keptIds.add(entry.id);
+      result.push(entry);
+    }
+  }
+
+  for (const entry of allEntries) {
+    if (result.length >= 400) break;
+    if (!keptIds.has(entry.id)) {
+      keptIds.add(entry.id);
+      result.push(entry);
+    }
+  }
+
+  return result.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return (b.timestamp || 0) - (a.timestamp || 0);
+  });
 }
 
 export function loadLeaderboard(): LeaderboardEntry[] {
@@ -174,12 +214,15 @@ export function getBestScoresPerStudent(entries: LeaderboardEntry[]): Leaderboar
   for (const entry of entries) {
     const normalizedName = entry.studentName.trim().toLowerCase();
     const existing = bestByStudent.get(normalizedName);
-    if (!existing || entry.score > existing.score) {
+    if (!existing || entry.score > existing.score || (entry.score === existing.score && (entry.timestamp || 0) > (existing.timestamp || 0))) {
       bestByStudent.set(normalizedName, entry);
     }
   }
 
-  return Array.from(bestByStudent.values()).sort((a, b) => b.score - a.score);
+  return Array.from(bestByStudent.values()).sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return (b.timestamp || 0) - (a.timestamp || 0);
+  });
 }
 
 /**
@@ -194,7 +237,7 @@ export function subscribeToLeaderboard(
 
   const path = 'leaderboard';
   try {
-    const q = query(collection(db, path), orderBy('score', 'desc'), limit(100));
+    const q = query(collection(db, path), orderBy('score', 'desc'), limit(500));
 
     const unsubscribe = onSnapshot(
       q,
@@ -257,6 +300,7 @@ export async function recordScoreToLeaderboard(
 
   const cleanStudentName = (entry.studentName || 'Field Operative').trim().slice(0, 64);
   const cleanClassName = (entry.className || 'Science Unit').trim().slice(0, 64);
+  const bestDocId = buildStudentBestDocId(cleanStudentName);
 
   const newEntry: LeaderboardEntry = {
     ...entry,
@@ -290,18 +334,25 @@ export async function recordScoreToLeaderboard(
   };
 
   try {
-    await setDoc(doc(db, 'leaderboard', entryId), cleanDoc);
+    const studentMatches = current.filter(
+      (e) => e.studentName.trim().toLowerCase() === cleanStudentName.toLowerCase()
+    );
+    const existingBest =
+      studentMatches.length > 0
+        ? studentMatches.reduce((max, item) => Math.max(max, item.score), -1)
+        : -1;
 
-    // Also update deterministic Personal Best document in Firestore if this is the student's highest score!
-    const safeSlug = cleanStudentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
-    const bestDocId = `best_${safeSlug}`;
-    const existingBest = current
-      .filter((e) => e.studentName.trim().toLowerCase() === cleanStudentName.toLowerCase())
-      .reduce((max, item) => Math.max(max, item.score), 0);
-
+    // Always write the deterministic Personal Best document if this is a new student or beats/matches their personal best
     if (cleanDoc.score >= existingBest) {
       await setDoc(doc(db, 'leaderboard', bestDocId), cleanDoc);
+      const legacySlug = cleanStudentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
+      if (`best_${legacySlug}` !== bestDocId) {
+        await setDoc(doc(db, 'leaderboard', `best_${legacySlug}`), cleanDoc).catch(() => {});
+      }
     }
+
+    // Record individual mission run history entry
+    await setDoc(doc(db, 'leaderboard', entryId), cleanDoc);
   } catch (error) {
     console.warn('Could not sync score to cloud (saved to local cache):', error);
   }
@@ -327,8 +378,10 @@ export async function deleteLeaderboardEntry(entryId: string, studentName?: stri
   try {
     await deleteDoc(doc(db, 'leaderboard', entryId));
     if (studentName) {
-      const safeSlug = studentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
-      await deleteDoc(doc(db, 'leaderboard', `best_${safeSlug}`)).catch(() => {});
+      const legacySlug = studentName.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 48) || 'operative';
+      const bestDocId = buildStudentBestDocId(studentName);
+      await deleteDoc(doc(db, 'leaderboard', bestDocId)).catch(() => {});
+      await deleteDoc(doc(db, 'leaderboard', `best_${legacySlug}`)).catch(() => {});
     }
     return true;
   } catch (error) {

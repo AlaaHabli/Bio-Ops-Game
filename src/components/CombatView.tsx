@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { LevelConfig, Weapon, HitMarkerInfo, KillfeedEntry, BiologyConceptCard } from '../types/game';
 import { sounds } from '../services/soundEffects';
 import { voipManager, OrganVoipClip } from '../services/voipManager';
@@ -670,6 +671,34 @@ export const CombatView: React.FC<CombatViewProps> = ({
   const [mpOnlinePlayers, setMpOnlinePlayers] = useState<LiveArenaPlayer[]>([]);
   const mpOnlinePlayersRef = useRef<LiveArenaPlayer[]>([]);
   const [mpKillfeed, setMpKillfeed] = useState<ArenaKillfeedEvent[]>([]);
+  const pushKillfeedEntryRef = useRef<((entry: ArenaKillfeedEvent) => void) | null>(null);
+  const pushKillfeedEntry = (entry: ArenaKillfeedEvent) => {
+    const cleanKiller = (entry.killerName || 'Operative').trim();
+    const cleanVictim = (entry.victimName || 'Enemy').trim();
+    const normKiller = cleanKiller.toUpperCase();
+    const normVictim = cleanVictim.toUpperCase();
+    const nowTs = entry.timestamp || Date.now();
+    setMpKillfeed((prev) => {
+      const isDuplicate = prev.some(
+        (existing) =>
+          existing.id === entry.id ||
+          (existing.killerName.trim().toUpperCase() === normKiller &&
+            existing.victimName.trim().toUpperCase() === normVictim &&
+            Math.abs(nowTs - existing.timestamp) < 2400)
+      );
+      if (isDuplicate) return prev;
+      return [
+        {
+          ...entry,
+          killerName: cleanKiller,
+          victimName: cleanVictim,
+          timestamp: nowTs,
+        },
+        ...prev.slice(0, 4),
+      ];
+    });
+  };
+  pushKillfeedEntryRef.current = pushKillfeedEntry;
 
   const [activeRoomCode, setActiveRoomCode] = useState<string>(() =>
     formatIndexedRoomCode(getBaseRoomPrefix(multiplayerRoomCode), 1)
@@ -1385,6 +1414,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     playerHpRef.current = 0;
     setPlayerHp(0);
 
+    if (document.pointerLockElement) {
+      document.exitPointerLock?.();
+    }
     isPointerDownRef.current = false;
     keysDownRef.current = {};
     moveInputRef.current = { x: 0, z: 0 };
@@ -1392,6 +1424,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
     sounds.triggerHaptic([60, 40, 80], 'heavy');
 
     const prof = loadStudentProfile();
+    pushKillfeedEntryRef.current?.({
+      id: `elim_${Date.now()}_${Math.random()}`,
+      killerName: killerName || 'Rival Operative',
+      victimName: prof?.name || 'Operative',
+      weaponName: weaponName || 'Bio-Rifle',
+      timestamp: Date.now(),
+    });
     syncLocalPlayerState(activeRoomCodeRef.current, {
       playerId: localMpPlayerIdRef.current,
       studentName: prof?.name || 'Operative',
@@ -1434,6 +1473,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     setMpFeedback(null);
     setMpQuestionIdx((prev) => (prev + 1) % Math.max(1, level.questions.length));
 
+    if (document.pointerLockElement) {
+      document.exitPointerLock?.();
+    }
     isPointerDownRef.current = false;
     keysDownRef.current = {};
     moveInputRef.current = { x: 0, z: 0 };
@@ -1516,6 +1558,20 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setMpStatus('active');
           setMpKilledByInfo(null);
 
+          // Automatically lock pointer on deploying/reviving into Multiplayer combat
+          if (mountRef.current && document.pointerLockElement !== mountRef.current) {
+            try {
+              const lockPromise = (
+                mountRef.current as HTMLElement & { requestPointerLock?: () => Promise<void> | void }
+              ).requestPointerLock?.();
+              if (lockPromise && typeof (lockPromise as Promise<void>).catch === 'function') {
+                (lockPromise as Promise<void>).catch(() => {});
+              }
+            } catch {
+              // Ignore if browser throttles pointer lock
+            }
+          }
+
           // Repair sandbag bunkers on revive/unfreeze
           barricadesRef.current.forEach((b) => {
             b.hp = b.maxHp;
@@ -1528,6 +1584,17 @@ export const CombatView: React.FC<CombatViewProps> = ({
           setBarricadeHps([100, 100, 100]);
 
           const prof = loadStudentProfile();
+          recordScoreToLeaderboard({
+            studentName: prof?.name || 'Operative',
+            className: prof?.className || 'Class 7',
+            score: scoreRef.current,
+            kills: killsRef.current,
+            levelTitle: `Arena [${activeRoomCodeRef.current}] PvP`,
+            stage: 'Multiplayer',
+            rankTitle: 'Commando',
+            isVictory: killsRef.current > 0,
+          }).catch(() => {});
+
           syncLocalPlayerState(activeRoomCodeRef.current, {
             playerId: localMpPlayerIdRef.current,
             studentName: prof?.name || 'Operative',
@@ -1575,6 +1642,9 @@ export const CombatView: React.FC<CombatViewProps> = ({
     if (!isMultiplayerDeathmatch || mpMatchEndedRef.current) return;
     mpMatchEndedRef.current = true;
     renderedPausedFrameRef.current = false;
+    if (document.pointerLockElement) {
+      document.exitPointerLock?.();
+    }
     isPointerDownRef.current = false;
     keysDownRef.current = {};
     moveInputRef.current = { x: 0, z: 0 };
@@ -1619,6 +1689,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     shotsHitRef.current = 0;
     comboStreakRef.current = 0;
     setComboStreak(0);
+    setMpKillfeed([]);
 
     playerHpRef.current = 100;
     setPlayerHp(100);
@@ -1776,7 +1847,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           }
         },
         (kfEvent) => {
-          setMpKillfeed((prev) => [kfEvent, ...prev.slice(0, 4)]);
+          pushKillfeedEntryRef.current?.(kfEvent);
         },
         (authoritativeLocal) => {
           if (afkKickedRef.current || mpMatchEndedRef.current) return;
@@ -1794,16 +1865,13 @@ export const CombatView: React.FC<CombatViewProps> = ({
           );
         },
         (_kickedPlayerId, kickedName) => {
-          setMpKillfeed((prev) => [
-            {
-              id: `afk_${Date.now()}_${Math.random()}`,
-              killerName: 'SERVER',
-              victimName: (kickedName || 'OPERATIVE').toUpperCase(),
-              weaponName: 'AFK KICK (1M IDLE)',
-              timestamp: Date.now(),
-            },
-            ...prev.slice(0, 4),
-          ]);
+          pushKillfeedEntryRef.current?.({
+            id: `afk_${Date.now()}_${Math.random()}`,
+            killerName: 'COMMAND',
+            victimName: kickedName || 'Operative',
+            weaponName: 'AFK KICK (1M IDLE)',
+            timestamp: Date.now(),
+          });
         },
         (nextMinRoomIndex) => {
           if (isCancelled) return;
@@ -1871,6 +1939,14 @@ export const CombatView: React.FC<CombatViewProps> = ({
     const timer = setInterval(() => {
       if (isPausedForConceptRef.current || isGamePausedRef.current) return;
       if (isMultiplayerDeathmatch && mpMatchEndedRef.current) return;
+
+      // Auto-prune expired tactical killfeed entries older than 9.5 seconds
+      setMpKillfeed((prev) => {
+        if (prev.length === 0) return prev;
+        const nowEpoch = Date.now();
+        const filtered = prev.filter((item) => nowEpoch - item.timestamp < 9500);
+        return filtered.length === prev.length ? prev : filtered;
+      });
 
       // Multiplayer 5-Minute (300s) Match Countdown Timer
       if (isMultiplayerDeathmatch) {
@@ -4754,18 +4830,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
           if (isMultiplayerDeathmatch) {
             const prof = loadStudentProfile();
-            const myCallsign = (prof?.name || 'YOU').toUpperCase();
-            setMpKillfeed((prev) => [
-              {
-                id: `${Date.now()}_${Math.random()}`,
-                killerName: myCallsign,
-                victimName: eliminatedSoldier!.name.toUpperCase(),
-                weaponName: activeWpn.name,
-                isHeadshot: criticalHit,
-                timestamp: Date.now(),
-              },
-              ...prev.slice(0, 4),
-            ]);
+            const myCallsign = prof?.name || 'Operative';
+            pushKillfeedEntryRef.current?.({
+              id: `${Date.now()}_${Math.random()}`,
+              killerName: myCallsign,
+              victimName: eliminatedSoldier!.name,
+              weaponName: activeWpn.name,
+              isHeadshot: criticalHit,
+              timestamp: Date.now(),
+            });
             syncLocalPlayerState(activeRoomCodeRef.current, {
               playerId: localMpPlayerIdRef.current,
               studentName: prof?.name || 'Operative',
@@ -4883,6 +4956,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
     // Cached container rect avoids synchronous layout reflows on every touchmove/mousemove event!
     let cachedRect = container.getBoundingClientRect();
     let mouseEdgeNdcX = 0;
+    let mouseEdgeNdcY = 0;
     let isMouseOverCanvas = false;
 
     // Professional FPS Aiming:
@@ -5004,6 +5078,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
           if (isMultiplayerDeathmatch) {
             const touchSens = isScopedRef.current ? 0.0042 : 0.0078;
             targetCameraYawRef.current -= (touch.clientX - prevX) * touchSens;
+            cameraBaseYawOffsetRef.current = targetCameraYawRef.current + mouseEdgeNdcX * Math.PI;
             targetCameraPitchRef.current = THREE.MathUtils.clamp(
               targetCameraPitchRef.current - (touch.clientY - prevY) * (touchSens * 0.78),
               -0.78,
@@ -5056,17 +5131,71 @@ export const CombatView: React.FC<CombatViewProps> = ({
       e.preventDefault();
     };
 
+    let hasInitializedMousePos = false;
+    let lastOutwardEdgeMoveTime = 0;
+
+    // Official Three.js PointerLockControls for authentic FPS mouse-look when Pointer Lock is active
+    const plcTarget = new THREE.PerspectiveCamera();
+    plcTarget.rotation.order = 'YXZ';
+    plcTarget.rotation.y = targetCameraYawRef.current;
+    plcTarget.rotation.x = targetCameraPitchRef.current;
+    const pointerLockControls = new PointerLockControls(plcTarget, container);
+    pointerLockControls.minPolarAngle = Math.PI * 0.5 - 0.65;
+    pointerLockControls.maxPolarAngle = Math.PI * 0.5 + 0.65;
+    pointerLockControls.pointerSpeed = 0.85;
+
+    const handlePlcChange = () => {
+      if (!isMultiplayerDeathmatch) return;
+      plcTarget.rotation.order = 'YXZ';
+      targetCameraYawRef.current = plcTarget.rotation.y;
+      cameraBaseYawOffsetRef.current = plcTarget.rotation.y;
+      targetCameraPitchRef.current = THREE.MathUtils.clamp(plcTarget.rotation.x, -0.65, 0.65);
+    };
+    pointerLockControls.addEventListener('change', handlePlcChange);
+
+    const tryEngageMpPointerLock = () => {
+      if (
+        isMultiplayerDeathmatch &&
+        mpStatusRef.current === 'active' &&
+        !isGamePausedRef.current &&
+        !mpMatchEndedRef.current &&
+        !isPausedForConceptRef.current &&
+        !pointerLockControls.isLocked &&
+        document.pointerLockElement !== container
+      ) {
+        plcTarget.rotation.order = 'YXZ';
+        plcTarget.rotation.y = targetCameraYawRef.current;
+        plcTarget.rotation.x = targetCameraPitchRef.current;
+        try {
+          const lockPromise = (
+            container as HTMLElement & { requestPointerLock?: () => Promise<void> | void }
+          ).requestPointerLock?.();
+          if (lockPromise && typeof (lockPromise as Promise<void>).catch === 'function') {
+            (lockPromise as Promise<void>).catch(() => {});
+          }
+        } catch {
+          // Ignore if browser throttles pointer lock immediately after Escape
+        }
+      }
+    };
+
     const handleMouseDown = (e: MouseEvent) => {
       if (performance.now() - lastTouchInteractionTime < 1000) return;
+      if (e.target instanceof Element && e.target.closest('button, input, a, select, textarea')) return;
       sounds.unlockAudio();
       if (audioSuspendedRef.current) {
         audioSuspendedRef.current = false;
         setAudioSuspended(false);
       }
-      if (document.pointerLockElement) {
-        document.exitPointerLock?.();
+
+      if (isMultiplayerDeathmatch) {
+        tryEngageMpPointerLock();
+      } else if (document.pointerLockElement) {
+        pointerLockControls.unlock();
       }
+
       lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+      hasInitializedMousePos = true;
       if (e.button === 2) {
         e.preventDefault();
         handleToggleScope();
@@ -5081,10 +5210,26 @@ export const CombatView: React.FC<CombatViewProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Ignore synthetic mousemove events generated after tapping HUD buttons on touchscreen devices,
-      // and ignore cursor movement while hovering over interactive HUD buttons (such as FRAG [G])
+      // Ignore synthetic mousemove events generated after tapping HUD buttons on touchscreen devices
       if (performance.now() - lastTouchInteractionTime < 1000) return;
-      if (e.target instanceof Element && e.target.closest('button, input, a')) return;
+      pointerLockControls.pointerSpeed = isScopedRef.current ? 0.45 : 0.85;
+
+      // When Three.js PointerLockControls is locked, it natively handles camera rotation via its 'change' event!
+      if (isMultiplayerDeathmatch && (pointerLockControls.isLocked || document.pointerLockElement === container)) {
+        lastOutwardEdgeMoveTime = 0;
+        lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+        hasInitializedMousePos = true;
+        updateAimPosition(e.clientX, e.clientY, false);
+        return;
+      }
+
+      if (e.target instanceof Element && e.target.closest('button, input, a, select, textarea')) {
+        isMouseOverCanvas = false;
+        mouseEdgeNdcX = 0;
+        lastOutwardEdgeMoveTime = 0;
+        lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+        return;
+      }
 
       if (cachedRect.width === 0 || cachedRect.height === 0) {
         cachedRect = container.getBoundingClientRect();
@@ -5093,28 +5238,69 @@ export const CombatView: React.FC<CombatViewProps> = ({
       const h = cachedRect.height || window.innerHeight;
       isMouseOverCanvas = true;
 
-      // Normalized mouse position across the viewport (-1 = left extremity, 0 = center, +1 = right extremity)
       const normX = THREE.MathUtils.clamp(((e.clientX - cachedRect.left) / w) * 2 - 1, -1, 1);
       const normY = THREE.MathUtils.clamp(-((e.clientY - cachedRect.top) / h) * 2 + 1, -1, 1);
       mouseEdgeNdcX = normX;
+      mouseEdgeNdcY = normY;
 
       if (isMultiplayerDeathmatch) {
-        // Controlled 1:1 cursor-to-FOV camera mapping centered on cameraBaseYawOffsetRef:
-        // The crosshair remains locked at the center (50%, 50%) while the camera FOV smoothly follows cursor position
-        // without any edge auto-spinning or wrap-around jumps when aiming right, left, or below!
-        targetCameraYawRef.current = cameraBaseYawOffsetRef.current - normX * Math.PI;
-        targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.44, -0.62, 0.62);
+        // 100% Uniform Linear Fallback (when Pointer Lock is not active, e.g., inside a sandboxed iframe):
+        // Constant 1:1 sensitivity in both directions — ZERO latch/stuck delay and ZERO sudden pull/acceleration!
+        const dx =
+          typeof e.movementX === 'number' && e.movementX !== 0
+            ? e.movementX
+            : hasInitializedMousePos && lastMouseClientPosRef.current
+            ? e.clientX - lastMouseClientPosRef.current.x
+            : 0;
+        const dy =
+          typeof e.movementY === 'number' && e.movementY !== 0
+            ? e.movementY
+            : hasInitializedMousePos && lastMouseClientPosRef.current
+            ? e.clientY - lastMouseClientPosRef.current.y
+            : 0;
+
+        lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+        hasInitializedMousePos = true;
+
+        if (Math.abs(dx) > 300 || Math.abs(dy) > 300) {
+          return;
+        }
+
+        const baseSens = isScopedRef.current ? 0.0028 : 0.0054;
+        targetCameraYawRef.current -= dx * baseSens;
+        cameraBaseYawOffsetRef.current = targetCameraYawRef.current;
+        targetCameraPitchRef.current = THREE.MathUtils.clamp(
+          targetCameraPitchRef.current - dy * (baseSens * 0.75),
+          -0.65,
+          0.65
+        );
+        plcTarget.rotation.order = 'YXZ';
+        plcTarget.rotation.y = targetCameraYawRef.current;
+        plcTarget.rotation.x = targetCameraPitchRef.current;
+
+        // If cursor is at the extreme 8% border (|normX| > 0.90) and user is actively pushing outward (dx * normX >= 0),
+        // allow a smooth, constant-speed 260ms continuation so they can continue rotating past 360°;
+        // the instant they move 1px in the opposite direction (dx * normX < 0), cancel immediately so it never feels stuck!
+        if (Math.abs(normX) > 0.90 && normY > -0.72 && dx * normX >= 0) {
+          lastOutwardEdgeMoveTime = performance.now();
+        } else if (dx * normX < 0 || Math.abs(normX) <= 0.90) {
+          lastOutwardEdgeMoveTime = 0;
+        }
       } else {
         targetCameraYawRef.current = -normX * Math.PI;
         targetCameraPitchRef.current = THREE.MathUtils.clamp(normY * 0.24, -0.55, 0.55);
+        lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
+        hasInitializedMousePos = true;
       }
 
-      lastMouseClientPosRef.current = { x: e.clientX, y: e.clientY };
       updateAimPosition(e.clientX, e.clientY, false);
     };
 
     const handleMouseLeave = () => {
       isMouseOverCanvas = false;
+      mouseEdgeNdcX = 0;
+      lastOutwardEdgeMoveTime = 0;
+      hasInitializedMousePos = false;
     };
 
     const handleMouseUp = (e: MouseEvent) => {
@@ -5138,10 +5324,21 @@ export const CombatView: React.FC<CombatViewProps> = ({
 
       if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
+        if (document.pointerLockElement) {
+          document.exitPointerLock?.();
+        }
         sounds.unlockAudio();
         sounds.triggerHaptic(14, 'medium');
         setIsGamePaused((prev) => !prev);
-      } else if (e.key === '1') {
+        return;
+      }
+
+      // Automatically engage Pointer Lock on any active combat/movement keypress in Multiplayer
+      if (isMultiplayerDeathmatch) {
+        tryEngageMpPointerLock();
+      }
+
+      if (e.key === '1') {
         const list = availableWeapons && availableWeapons.length > 0 ? availableWeapons : INITIAL_WEAPONS;
         if (list[0]) handleSelectWeapon(list[0]);
       } else if (e.key === '2') {
@@ -5436,11 +5633,27 @@ export const CombatView: React.FC<CombatViewProps> = ({
         aimPosRef.current.x = 0;
         aimPosRef.current.y = 0;
 
-        // Smooth, controlled camera FOV rotation following targetCameraYawRef & targetCameraPitchRef (zero auto-spin!)
+        // When Pointer Lock is not active and the user actively pushes the mouse into the outer 8% border (|normX| > 0.90),
+        // continue rotating at a steady, even speed for 260ms after mouse movement stops (zero infinite spin, zero pull!).
+        if (
+          !pointerLockControls.isLocked &&
+          document.pointerLockElement !== container &&
+          isMouseOverCanvas &&
+          Math.abs(mouseEdgeNdcX) > 0.90 &&
+          mouseEdgeNdcY > -0.72 &&
+          nowTime - lastOutwardEdgeMoveTime < 260
+        ) {
+          const steadySpeed = isScopedRef.current ? 0.85 : 1.55;
+          targetCameraYawRef.current -= Math.sign(mouseEdgeNdcX) * steadySpeed * delta;
+          cameraBaseYawOffsetRef.current = targetCameraYawRef.current;
+          plcTarget.rotation.y = targetCameraYawRef.current;
+        }
+
+        // Smooth, controlled camera FOV rotation following targetCameraYawRef & targetCameraPitchRef
         cameraYawRef.current = THREE.MathUtils.damp(
           cameraYawRef.current,
           targetCameraYawRef.current,
-          16,
+          20,
           delta
         );
         cameraPitchRef.current = THREE.MathUtils.damp(
@@ -5972,18 +6185,15 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 setScore(scoreRef.current);
                 if (isMultiplayerDeathmatch) {
                   const prof = loadStudentProfile();
-                  const myCallsign = (prof?.name || 'YOU').toUpperCase();
-                  setMpKillfeed((prev) => [
-                    {
-                      id: `${Date.now()}_${Math.random()}`,
-                      killerName: myCallsign,
-                      victimName: s.name.toUpperCase(),
-                      weaponName: 'Bio-Cluster Frag [G]',
-                      isHeadshot: false,
-                      timestamp: Date.now(),
-                    },
-                    ...prev.slice(0, 4),
-                  ]);
+                  const myCallsign = prof?.name || 'Operative';
+                  pushKillfeedEntryRef.current?.({
+                    id: `${Date.now()}_${Math.random()}`,
+                    killerName: myCallsign,
+                    victimName: s.name,
+                    weaponName: 'Bio-Cluster Frag [G]',
+                    isHeadshot: false,
+                    timestamp: Date.now(),
+                  });
                   pushLocalMpStateNowRef.current?.();
                   if (killsRef.current >= MATCH_KILL_LIMIT) {
                     triggerMultiplayerMatchEndRef.current?.('kill_limit');
@@ -8554,6 +8764,11 @@ export const CombatView: React.FC<CombatViewProps> = ({
       if (holdShootTimerRef.current) {
         clearTimeout(holdShootTimerRef.current);
       }
+      if (document.pointerLockElement) {
+        document.exitPointerLock?.();
+      }
+      pointerLockControls.removeEventListener('change', handlePlcChange);
+      pointerLockControls.dispose();
       cancelAnimationFrame(animationFrameId);
       clearInterval(spawnInterval);
       window.removeEventListener('resize', handleResize);
@@ -8877,6 +9092,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
               onClick={() => {
                 sounds.unlockAudio();
                 sounds.triggerHaptic(16, 'medium');
+                if (scoreRef.current > 0 || killsRef.current > 0) {
+                  const prof = loadStudentProfile();
+                  recordScoreToLeaderboard({
+                    studentName: prof?.name || 'Operative',
+                    className: prof?.className || 'Science Unit',
+                    score: scoreRef.current,
+                    kills: killsRef.current,
+                    levelTitle: isMultiplayerDeathmatch ? `Arena [${activeRoomCode}] PvP` : level.title,
+                    stage: isMultiplayerDeathmatch ? 'Multiplayer' : level.stage,
+                    isVictory: killsRef.current > 0,
+                  }).catch(() => {});
+                }
                 if (onExitToMenu) {
                   onExitToMenu();
                 } else {
@@ -9030,23 +9257,6 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 <div className="px-2.5 py-0.5 rounded bg-cyan-950/85 border border-cyan-400/50 text-[8px] sm:text-[9px] font-mono font-bold text-cyan-200 text-center shadow-md">
                   🫁 DESTRUCTIBLE BIO-COVER ACTIVE • <span className="text-amber-300 font-black">[CTRL] CROUCH</span> BEHIND ALVEOLAR SEPTA & CARTILAGE • <span className="text-emerald-300 font-black">[SHIFT] SPRINT</span>
                 </div>
-
-                {/* Live PvP Elimination Feed */}
-                {mpKillfeed.length > 0 && (
-                  <div className="flex flex-col items-center gap-0.5 w-full max-w-xs pointer-events-none">
-                    {mpKillfeed.slice(0, 2).map((kf) => (
-                      <div
-                        key={kf.id}
-                        className="px-2 py-0.5 rounded bg-slate-950/85 border border-rose-500/50 text-[8px] sm:text-[9px] font-mono font-bold text-white flex items-center gap-1.5 shadow-sm truncate max-w-full"
-                      >
-                        <span className="text-cyan-300 font-black">{kf.killerName}</span>
-                        <span className="text-rose-400">[{kf.weaponName}]</span>
-                        {kf.isHeadshot && <span className="text-yellow-300">🎯</span>}
-                        <span className="text-amber-300 font-black">{kf.victimName}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             )}
 
@@ -9111,7 +9321,7 @@ export const CombatView: React.FC<CombatViewProps> = ({
             )}
           </div>
 
-          {/* TOP-RIGHT: FORTNITE SQUARE MINIMAP + 4 TELEMETRY ICON BADGES BELOW */}
+          {/* TOP-RIGHT: FORTNITE SQUARE MINIMAP + 4 TELEMETRY ICON BADGES + TACTICAL KILL FEED BELOW */}
           <div className="flex flex-col items-end gap-1 pointer-events-auto shrink-0">
             {/* Square Fortnite Minimap with Anatomical Terrain & Sector Title */}
             <div
@@ -9244,6 +9454,73 @@ export const CombatView: React.FC<CombatViewProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* TOP-RIGHT STYLIZED SEMI-TRANSPARENT TACTICAL KILL FEED (Multiplayer Matches) */}
+            {isMultiplayerDeathmatch && mpKillfeed.length > 0 && (
+              <div className="flex flex-col items-end gap-1 mt-1 pointer-events-none max-w-[235px] sm:max-w-[310px] font-mono select-none">
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-t bg-slate-950/60 backdrop-blur-sm border-t border-x border-cyan-500/35 text-[7.5px] sm:text-[8.5px] font-black tracking-[0.18em] uppercase text-cyan-300/90 shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                  <span>TACTICAL KILL FEED</span>
+                </div>
+                {mpKillfeed.slice(0, 4).map((kf, idx) => {
+                  const localCallsign = (loadStudentProfile()?.name || 'Operative').trim().toUpperCase();
+                  const isLocalKiller =
+                    kf.killerName.trim().toUpperCase() === localCallsign ||
+                    kf.killerName.trim().toUpperCase() === 'YOU';
+                  const isLocalVictim =
+                    kf.victimName.trim().toUpperCase() === localCallsign ||
+                    kf.victimName.trim().toUpperCase() === 'YOU';
+                  const isSystemKick = kf.killerName.trim().toUpperCase() === 'COMMAND';
+
+                  return (
+                    <div
+                      key={kf.id}
+                      className={`w-full px-2.5 py-1 rounded-l-md backdrop-blur-md border-r-2 border-y border-l transition-all duration-200 shadow-[0_4px_14px_rgba(0,0,0,0.65)] flex flex-col items-end gap-0.5 ${
+                        isLocalKiller
+                          ? 'bg-emerald-950/55 border-r-emerald-400 border-y-emerald-500/30 border-l-emerald-500/20'
+                          : isLocalVictim
+                          ? 'bg-rose-950/60 border-r-rose-500 border-y-rose-500/35 border-l-rose-500/20'
+                          : 'bg-slate-950/60 border-r-cyan-400 border-y-white/15 border-l-white/10'
+                      } ${idx === 0 ? 'opacity-100 scale-100' : idx === 1 ? 'opacity-90' : 'opacity-75'}`}
+                      style={{
+                        clipPath: 'polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px)',
+                      }}
+                    >
+                      <div className="flex flex-wrap items-center justify-end gap-1 text-[9px] sm:text-[10.5px] leading-tight text-right">
+                        <span
+                          className={`font-black tracking-wide truncate max-w-[95px] sm:max-w-[125px] ${
+                            isLocalKiller ? 'text-emerald-300' : 'text-cyan-300'
+                          }`}
+                        >
+                          [{kf.killerName}]
+                        </span>
+                        <span className="text-[8.5px] sm:text-[9.5px] font-semibold italic text-slate-300/95 px-0.5">
+                          {isSystemKick ? 'disconnected' : 'neutralized'}
+                        </span>
+                        <span
+                          className={`font-black tracking-wide truncate max-w-[95px] sm:max-w-[125px] ${
+                            isLocalVictim ? 'text-rose-300' : 'text-amber-300'
+                          }`}
+                        >
+                          [{kf.victimName}]
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-end gap-1 text-[7.5px] sm:text-[8.5px] text-slate-400 leading-none">
+                        <Crosshair className="w-2.5 h-2.5 text-rose-400/90 shrink-0" />
+                        <span className="text-slate-300 font-bold uppercase tracking-wider truncate max-w-[140px]">
+                          {kf.weaponName}
+                        </span>
+                        {kf.isHeadshot && (
+                          <span className="px-1 py-0.2 rounded bg-rose-500/30 border border-yellow-300/70 text-yellow-200 font-black uppercase tracking-wider">
+                            🎯 HEADSHOT
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -9852,6 +10129,18 @@ export const CombatView: React.FC<CombatViewProps> = ({
                   sounds.unlockAudio();
                   sounds.triggerHaptic(15, 'heavy');
                   setIsGamePaused(false);
+                  if (scoreRef.current > 0 || killsRef.current > 0) {
+                    const prof = loadStudentProfile();
+                    recordScoreToLeaderboard({
+                      studentName: prof?.name || 'Operative',
+                      className: prof?.className || 'Science Unit',
+                      score: scoreRef.current,
+                      kills: killsRef.current,
+                      levelTitle: isMultiplayerDeathmatch ? `Arena [${activeRoomCode}] PvP` : level.title,
+                      stage: isMultiplayerDeathmatch ? 'Multiplayer' : level.stage,
+                      isVictory: killsRef.current > 0,
+                    }).catch(() => {});
+                  }
                   if (onExitToMenu) {
                     onExitToMenu();
                   } else {

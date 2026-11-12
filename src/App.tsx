@@ -12,6 +12,7 @@ import {
   loadStudentProfile,
   saveStudentProfile,
   loadLeaderboard,
+  mergeLeaderboardLists,
   subscribeToLeaderboard,
   recordScoreToLeaderboard,
   resetLeaderboardToDefaults,
@@ -88,6 +89,23 @@ export default function App() {
     setPlayerStats(updatedStats);
     savePlayerStats(updatedStats);
     setIsProfileModalOpen(false);
+
+    // Immediately register student on the leaderboard so every student who joins appears even before finishing all 3 phases
+    const existingBest = leaderboardEntries
+      .filter((e) => e.studentName.trim().toLowerCase() === profile.name.trim().toLowerCase())
+      .reduce((max, item) => Math.max(max, item.score), 0);
+
+    recordScoreToLeaderboard({
+      studentName: profile.name,
+      className: profile.className,
+      levelTitle: selectedLevel.title,
+      stage: selectedLevel.stage,
+      score: Math.max(existingBest, 100),
+      kills: updatedStats.totalKills || 0,
+      isVictory: false,
+    }).then((saved) => {
+      setLeaderboardEntries((prev) => mergeLeaderboardLists([saved], prev, loadLeaderboard()));
+    });
   };
 
   // Sync sound settings
@@ -152,6 +170,24 @@ export default function App() {
   // Called when student gets 3 correct answers in current quiz phase
   const handleDeployCombat = () => {
     sounds.unlockAudio();
+    const quizPhaseBonus = 300;
+    const updatedScore = accumulatedScore + quizPhaseBonus;
+    setAccumulatedScore(updatedScore);
+
+    // Record student's Quiz Phase completion to the leaderboard immediately so they appear even if they don't finish all 3 phases!
+    const currentProf = studentProfile || loadStudentProfile() || { name: 'Field Operative', className: 'Science Unit' };
+    recordScoreToLeaderboard({
+      studentName: currentProf.name,
+      className: currentProf.className,
+      levelTitle: selectedLevel.title,
+      stage: selectedLevel.stage,
+      score: updatedScore,
+      kills: accumulatedKills,
+      isVictory: false,
+    }).then((saved) => {
+      setLeaderboardEntries((prev) => mergeLeaderboardLists([saved], prev, loadLeaderboard()));
+    });
+
     setGameState('COMBAT');
   };
 
@@ -172,8 +208,9 @@ export default function App() {
       score: newScore,
       kills: newKills,
       isVictory: phaseNumber >= 3,
+    }).then((saved) => {
+      setLeaderboardEntries((prev) => mergeLeaderboardLists([saved], prev, loadLeaderboard()));
     });
-    setLeaderboardEntries(loadLeaderboard());
 
     if (phaseNumber < 3) {
       // Advance to next quiz phase (e.g. Phase 2 or Phase 3)
@@ -210,21 +247,20 @@ export default function App() {
   };
 
   const handlePhaseDefeat = (earnedScore: number = 0, earnedKills: number = 0) => {
-    const finalScore = accumulatedScore + earnedScore;
+    const finalScore = Math.max(100, accumulatedScore + earnedScore);
     const finalKills = accumulatedKills + earnedKills;
-    if (finalScore > 0) {
-      const currentProf = studentProfile || loadStudentProfile() || { name: 'Field Operative', className: 'Science Unit' };
-      recordScoreToLeaderboard({
-        studentName: currentProf.name,
-        className: currentProf.className,
-        levelTitle: selectedLevel.title,
-        stage: selectedLevel.stage,
-        score: finalScore,
-        kills: finalKills,
-        isVictory: false,
-      });
-      setLeaderboardEntries(loadLeaderboard());
-    }
+    const currentProf = studentProfile || loadStudentProfile() || { name: 'Field Operative', className: 'Science Unit' };
+    recordScoreToLeaderboard({
+      studentName: currentProf.name,
+      className: currentProf.className,
+      levelTitle: selectedLevel.title,
+      stage: selectedLevel.stage,
+      score: finalScore,
+      kills: finalKills,
+      isVictory: false,
+    }).then((saved) => {
+      setLeaderboardEntries((prev) => mergeLeaderboardLists([saved], prev, loadLeaderboard()));
+    });
     setGameState('DEFEAT');
   };
 
@@ -263,7 +299,7 @@ export default function App() {
           onToggleSound={handleToggleSound}
           onToggleAutoAim={handleToggleAutoAim}
           onOpenLeaderboard={() => {
-            setLeaderboardEntries(loadLeaderboard());
+            setLeaderboardEntries((prev) => mergeLeaderboardLists(prev, loadLeaderboard()));
             setIsLeaderboardOpen(true);
           }}
           onOpenProfile={() => setIsProfileModalOpen(true)}
@@ -364,7 +400,7 @@ export default function App() {
           stars={accumulatedScore > 3500 ? 3 : accumulatedScore > 2000 ? 2 : 1}
           studentProfile={studentProfile}
           onOpenLeaderboard={() => {
-            setLeaderboardEntries(loadLeaderboard());
+            setLeaderboardEntries((prev) => mergeLeaderboardLists(prev, loadLeaderboard()));
             setIsLeaderboardOpen(true);
           }}
           onNextLevel={handleNextLevel}
